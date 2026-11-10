@@ -1,0 +1,42 @@
+== 1. Illustrative revenue pools (software-only, heat-season billing) ==
+UAE construction change 2019->2022: -15.5%
+Abu Dhabi construction share of Abu Dhabi private-sector workforce (2019): 30.4%
+UAE construction share of UAE private-sector workforce (2022): 25.3%
+  Abu Dhabi construction (2019)    n=  420,654  $1.5 -> US$3.8M | $3.0 -> US$7.6M | $6.0 -> US$15.1M
+  UAE construction (2022)          n=1,386,498  $1.5 -> US$12.5M | $3.0 -> US$25.0M | $6.0 -> US$49.9M
+  (each cell = workers x price x 6 months; 100% penetration, i.e. an upper bound)
+
+== 2. Messaging cost per worker per heat season ==
+  messages/worker/season = 3 x 26 x 6 = 468
+  WhatsApp utility @ $0.0157/msg (UNVERIFIED rate): US$7.35
+  SMS, Latin script, 1 segment @ $0.1176: US$55.04
+  SMS, non-Latin script, 2 segments: US$110.07
+  SMS/WhatsApp cost ratio (Latin): 7.5x ; (non-Latin): 15.0x
+
+== 3. Expected heat-illness clinic cases in a 200-worker pilot ==
+  baseline (2008)         : expected cases 0.59 (pro-rata 10 wk) to 3.06 (all annual cases in window); P(0 cases | upper) = 0.05
+  post-programme (2009)   : expected cases 0.04 (pro-rata 10 wk) to 0.23 (all annual cases in window); P(0 cases | upper) = 0.79
+  -> clinic-confirmed heat illness is too rare in n=200 to be a powered endpoint; use process/feasibility outcomes.
+
+== 4. Precision of feasibility proportions (e.g., rest-prescription adherence) ==
+  worker-shifts in a 10-week, 200-worker pilot (6 shifts/wk): 12,000
+  n=  100 prescriptions, DEFF=1: 95% CI half-width <= +/-9.8 percentage points
+  n=  100 prescriptions, DEFF=2: 95% CI half-width <= +/-13.9 percentage points
+  n=  300 prescriptions, DEFF=1: 95% CI half-width <= +/-5.7 percentage points
+  n=  300 prescriptions, DEFF=2: 95% CI half-width <= +/-8.0 percentage points
+  n= 1000 prescriptions, DEFF=1: 95% CI half-width <= +/-3.1 percentage points
+  n= 1000 prescriptions, DEFF=2: 95% CI half-width <= +/-4.4 percentage points
+
+== 5. UN DESA International Migrant Stock 2024: destination UAE, top origins ==
+  total mid-2024 = 8,157,000
+   1. India                    3,248,545   39.8%
+   2. Bangladesh               1,024,949   12.6%
+   3. Pakistan                   932,356   11.4%
+   4. Egypt                      841,883   10.3%
+   5. Philippines                528,527    6.5%
+   6. Indonesia                  298,351    3.7%
+   7. Yemen                      192,423    2.4%
+   8. Jordan                     158,125    1.9%
+   9. Sudan                      124,677    1.5%
+  10. Sri Lanka                  112,759    1.4%
+  (Nepal: 26,097 - likely undercount vs Nepal DoFE permit flows; see markdown)

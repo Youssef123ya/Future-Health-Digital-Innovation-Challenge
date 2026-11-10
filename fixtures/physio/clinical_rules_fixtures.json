@@ -1,0 +1,819 @@
+{
+ "_meta": {
+  "generated_by": "clinical_rules.py",
+  "levels": {
+   "0": "T0_continue_with_precautions",
+   "1": "T1_rest_cool_notify_supervisor",
+   "2": "T2_first_aider_now",
+   "3": "T3_emergency_998_now"
+  },
+  "constants": {
+   "HOURLY_CAP_L": 1.4195294189999998,
+   "DAILY_CAP_L": 11.356235351999999,
+   "CUP_L": 0.2365882365,
+   "REMINDER_DEFAULT_L": 0.25,
+   "REMINDER_INTERVAL_MIN": 20
+  }
+ },
+ "items": {
+  "B_CONFUSED": {
+   "who": "buddy",
+   "level_if_yes": "T3_emergency_998_now",
+   "basis": [
+    "NIOSH_ILL",
+    "OSHA_FA",
+    "TBMED_T5-1",
+    "TBMED_4-6"
+   ]
+  },
+  "B_SPEECH_GAIT": {
+   "who": "buddy",
+   "level_if_yes": "T3_emergency_998_now",
+   "basis": [
+    "NIOSH_ILL",
+    "TBMED_4-4",
+    "OSHA_FA"
+   ]
+  },
+  "B_UNRESPONSIVE": {
+   "who": "buddy",
+   "level_if_yes": "T3_emergency_998_now",
+   "basis": [
+    "NIOSH_ILL",
+    "TBMED_T5-1"
+   ]
+  },
+  "S_CHEST": {
+   "who": "self",
+   "level_if_yes": "T3_emergency_998_now",
+   "basis": [
+    "TBMED_T5-3",
+    "IOC2021",
+    "ENG_general_emergency"
+   ]
+  },
+  "S_VOMIT_REPEAT": {
+   "who": "self",
+   "level_if_yes": "T3_emergency_998_now",
+   "basis": [
+    "TBMED_T5-1"
+   ]
+  },
+  "S_FAINTED": {
+   "who": "self",
+   "level_if_yes": "T2_first_aider_now",
+   "basis": [
+    "NIOSH_ILL",
+    "TBMED_4-3c"
+   ]
+  },
+  "S_DIZZY": {
+   "who": "self",
+   "level_if_yes": "T2_first_aider_now",
+   "basis": [
+    "NIOSH_ILL",
+    "TBMED_T5-1"
+   ]
+  },
+  "S_HEADACHE": {
+   "who": "self",
+   "level_if_yes": "T2_first_aider_now",
+   "basis": [
+    "NIOSH_ILL",
+    "TBMED_T5-1"
+   ]
+  },
+  "S_NAUSEA": {
+   "who": "self",
+   "level_if_yes": "T2_first_aider_now",
+   "basis": [
+    "NIOSH_ILL",
+    "TBMED_T5-1"
+   ]
+  },
+  "S_WEAK": {
+   "who": "self",
+   "level_if_yes": "T2_first_aider_now",
+   "basis": [
+    "NIOSH_ILL",
+    "TBMED_T5-1"
+   ]
+  },
+  "S_URINE_BROWN": {
+   "who": "self",
+   "level_if_yes": "T2_first_aider_now",
+   "basis": [
+    "NIOSH_ILL_rhabdo",
+    "TBMED_5-4c"
+   ]
+  },
+  "S_OVERDRINK_SX": {
+   "who": "self",
+   "level_if_yes": "T2_first_aider_now",
+   "basis": [
+    "TBMED_5-4b",
+    "TBMED_3-7h"
+   ]
+  },
+  "S_CRAMPS": {
+   "who": "self",
+   "level_if_yes": "T1_rest_cool_notify_supervisor",
+   "basis": [
+    "NIOSH_ILL",
+    "SPSA_CoP33"
+   ]
+  },
+  "S_RASH": {
+   "who": "self",
+   "level_if_yes": "T1_rest_cool_notify_supervisor",
+   "basis": [
+    "NIOSH_ILL",
+    "TBMED_4-3e"
+   ]
+  },
+  "S_URINE_DARK": {
+   "who": "self",
+   "level_if_yes": "T1_rest_cool_notify_supervisor",
+   "basis": [
+    "McKenzie2015",
+    "NIOSH_AppB"
+   ]
+  },
+  "S_THIRST": {
+   "who": "self",
+   "level_if_yes": "T0_continue_with_precautions",
+   "basis": [
+    "ENG_advice_only"
+   ]
+  }
+ },
+ "triage_vectors": [
+  {
+   "name": "no_symptoms",
+   "input": {
+    "answers": {
+     "B_CONFUSED": false,
+     "B_SPEECH_GAIT": false,
+     "B_UNRESPONSIVE": false,
+     "S_CHEST": false,
+     "S_VOMIT_REPEAT": false,
+     "S_FAINTED": false,
+     "S_DIZZY": false,
+     "S_HEADACHE": false,
+     "S_NAUSEA": false,
+     "S_WEAK": false,
+     "S_URINE_BROWN": false,
+     "S_OVERDRINK_SX": false,
+     "S_CRAMPS": false,
+     "S_RASH": false,
+     "S_URINE_DARK": false,
+     "S_THIRST": false
+    }
+   },
+   "expected": {
+    "level": "T0_continue_with_precautions",
+    "actions": [
+     "CONTINUE_WITH_PRECAUTIONS"
+    ]
+   }
+  },
+  {
+   "name": "thirst_only",
+   "input": {
+    "answers": {
+     "S_THIRST": true
+    }
+   },
+   "expected": {
+    "level": "T0_continue_with_precautions",
+    "actions": [
+     "CONTINUE_WITH_PRECAUTIONS"
+    ]
+   }
+  },
+  {
+   "name": "rash_only",
+   "input": {
+    "answers": {
+     "S_RASH": true
+    }
+   },
+   "expected": {
+    "level": "T1_rest_cool_notify_supervisor",
+    "actions": [
+     "DRINK_WATER_PLUS_SNACK_OR_ELECTROLYTE",
+     "NOTIFY_SUPERVISOR",
+     "RECHECK_15_30_MIN",
+     "REST_SHADE_COOL",
+     "STOP_STRENUOUS_WORK"
+    ]
+   }
+  },
+  {
+   "name": "cramps_only",
+   "input": {
+    "answers": {
+     "S_CRAMPS": true
+    }
+   },
+   "expected": {
+    "level": "T1_rest_cool_notify_supervisor",
+    "actions": [
+     "DRINK_WATER_PLUS_SNACK_OR_ELECTROLYTE",
+     "NOTIFY_SUPERVISOR",
+     "RECHECK_15_30_MIN",
+     "REST_SHADE_COOL",
+     "STOP_STRENUOUS_WORK"
+    ]
+   }
+  },
+  {
+   "name": "cramps_60min",
+   "input": {
+    "answers": {
+     "S_CRAMPS": true
+    },
+    "cramps_minutes": 60
+   },
+   "expected": {
+    "level": "T2_first_aider_now",
+    "actions": [
+     "COOL_AND_REHYDRATE_IF_ALERT",
+     "FIRST_AIDER_NOW",
+     "MEDICAL_EVALUATION_SAME_DAY",
+     "NO_RETURN_TO_HOT_WORK_TODAY",
+     "RECHECK_15_30_MIN",
+     "STAY_WITH_WORKER",
+     "STOP_WORK"
+    ]
+   }
+  },
+  {
+   "name": "cramps_heart_disease",
+   "input": {
+    "answers": {
+     "S_CRAMPS": true
+    },
+    "profile": {
+     "heart_disease": true
+    }
+   },
+   "expected": {
+    "level": "T2_first_aider_now",
+    "actions": [
+     "COOL_AND_REHYDRATE_IF_ALERT",
+     "FIRST_AIDER_NOW",
+     "MEDICAL_EVALUATION_SAME_DAY",
+     "NO_RETURN_TO_HOT_WORK_TODAY",
+     "RECHECK_15_30_MIN",
+     "STAY_WITH_WORKER",
+     "STOP_WORK"
+    ]
+   }
+  },
+  {
+   "name": "headache_dizzy",
+   "input": {
+    "answers": {
+     "S_HEADACHE": true,
+     "S_DIZZY": true
+    }
+   },
+   "expected": {
+    "level": "T2_first_aider_now",
+    "actions": [
+     "COOL_AND_REHYDRATE_IF_ALERT",
+     "FIRST_AIDER_NOW",
+     "MEDICAL_EVALUATION_SAME_DAY",
+     "NO_RETURN_TO_HOT_WORK_TODAY",
+     "RECHECK_15_30_MIN",
+     "STAY_WITH_WORKER",
+     "STOP_WORK"
+    ]
+   }
+  },
+  {
+   "name": "fainted_now_alert",
+   "input": {
+    "answers": {
+     "S_FAINTED": true
+    }
+   },
+   "expected": {
+    "level": "T2_first_aider_now",
+    "actions": [
+     "COOL_AND_REHYDRATE_IF_ALERT",
+     "FIRST_AIDER_NOW",
+     "MEDICAL_EVALUATION_SAME_DAY",
+     "NO_RETURN_TO_HOT_WORK_TODAY",
+     "RECHECK_15_30_MIN",
+     "STAY_WITH_WORKER",
+     "STOP_WORK"
+    ]
+   }
+  },
+  {
+   "name": "fainted_and_confused",
+   "input": {
+    "answers": {
+     "S_FAINTED": true,
+     "B_CONFUSED": true
+    }
+   },
+   "expected": {
+    "level": "T3_emergency_998_now",
+    "actions": [
+     "ALERT_SUPERVISOR_AND_FIRST_AIDER",
+     "CALL_998",
+     "START_COOLING_NOW",
+     "STAY_WITH_WORKER"
+    ]
+   }
+  },
+  {
+   "name": "buddy_slurred_speech",
+   "input": {
+    "answers": {
+     "B_SPEECH_GAIT": true
+    }
+   },
+   "expected": {
+    "level": "T3_emergency_998_now",
+    "actions": [
+     "ALERT_SUPERVISOR_AND_FIRST_AIDER",
+     "CALL_998",
+     "START_COOLING_NOW",
+     "STAY_WITH_WORKER"
+    ]
+   }
+  },
+  {
+   "name": "repeated_vomiting",
+   "input": {
+    "answers": {
+     "S_VOMIT_REPEAT": true
+    }
+   },
+   "expected": {
+    "level": "T3_emergency_998_now",
+    "actions": [
+     "ALERT_SUPERVISOR_AND_FIRST_AIDER",
+     "CALL_998",
+     "START_COOLING_NOW",
+     "STAY_WITH_WORKER"
+    ]
+   }
+  },
+  {
+   "name": "brown_urine",
+   "input": {
+    "answers": {
+     "S_URINE_BROWN": true
+    }
+   },
+   "expected": {
+    "level": "T2_first_aider_now",
+    "actions": [
+     "COOL_AND_REHYDRATE_IF_ALERT",
+     "FIRST_AIDER_NOW",
+     "MEDICAL_EVALUATION_SAME_DAY",
+     "MEDICAL_FACILITY_SAME_SHIFT_check_CK",
+     "NO_RETURN_TO_HOT_WORK_TODAY",
+     "RECHECK_15_30_MIN",
+     "STAY_WITH_WORKER",
+     "STOP_WORK"
+    ]
+   }
+  },
+  {
+   "name": "overdrink_symptoms",
+   "input": {
+    "answers": {
+     "S_OVERDRINK_SX": true
+    }
+   },
+   "expected": {
+    "level": "T2_first_aider_now",
+    "actions": [
+     "COOL_AND_REHYDRATE_IF_ALERT",
+     "FIRST_AIDER_NOW",
+     "MEDICAL_EVALUATION_SAME_DAY",
+     "NO_RETURN_TO_HOT_WORK_TODAY",
+     "RECHECK_15_30_MIN",
+     "STAY_WITH_WORKER",
+     "STOP_PLAIN_WATER_suspect_hyponatremia",
+     "STOP_WORK"
+    ]
+   }
+  },
+  {
+   "name": "overdrink_plus_confusion",
+   "input": {
+    "answers": {
+     "S_OVERDRINK_SX": true,
+     "B_CONFUSED": true
+    }
+   },
+   "expected": {
+    "level": "T3_emergency_998_now",
+    "actions": [
+     "ALERT_SUPERVISOR_AND_FIRST_AIDER",
+     "CALL_998",
+     "START_COOLING_NOW",
+     "STAY_WITH_WORKER",
+     "STOP_PLAIN_WATER_suspect_hyponatremia"
+    ]
+   }
+  },
+  {
+   "name": "chest_pain",
+   "input": {
+    "answers": {
+     "S_CHEST": true
+    }
+   },
+   "expected": {
+    "level": "T3_emergency_998_now",
+    "actions": [
+     "ALERT_SUPERVISOR_AND_FIRST_AIDER",
+     "CALL_998",
+     "START_COOLING_NOW",
+     "STAY_WITH_WORKER"
+    ]
+   }
+  },
+  {
+   "name": "heat_exhaustion_not_improving_30",
+   "input": {
+    "answers": {
+     "S_HEADACHE": true,
+     "S_WEAK": true
+    },
+    "minutes_since_first_symptom": 30,
+    "improving": false
+   },
+   "expected": {
+    "level": "T3_emergency_998_now",
+    "actions": [
+     "ALERT_SUPERVISOR_AND_FIRST_AIDER",
+     "CALL_998",
+     "START_COOLING_NOW",
+     "STAY_WITH_WORKER"
+    ]
+   }
+  },
+  {
+   "name": "heat_exhaustion_improving_30",
+   "input": {
+    "answers": {
+     "S_HEADACHE": true,
+     "S_WEAK": true
+    },
+    "minutes_since_first_symptom": 30,
+    "improving": true
+   },
+   "expected": {
+    "level": "T2_first_aider_now",
+    "actions": [
+     "COOL_AND_REHYDRATE_IF_ALERT",
+     "FIRST_AIDER_NOW",
+     "MEDICAL_EVALUATION_SAME_DAY",
+     "NO_RETURN_TO_HOT_WORK_TODAY",
+     "RECHECK_15_30_MIN",
+     "STAY_WITH_WORKER",
+     "STOP_WORK"
+    ]
+   }
+  },
+  {
+   "name": "cramps_worsening",
+   "input": {
+    "answers": {
+     "S_CRAMPS": true
+    },
+    "worsening": true
+   },
+   "expected": {
+    "level": "T3_emergency_998_now",
+    "actions": [
+     "ALERT_SUPERVISOR_AND_FIRST_AIDER",
+     "CALL_998",
+     "START_COOLING_NOW",
+     "STAY_WITH_WORKER"
+    ]
+   }
+  }
+ ],
+ "urine_vectors": [
+  {
+   "shade": 1,
+   "brown_or_red": false,
+   "expected": {
+    "code": "U_OK",
+    "triage_floor": "T0_continue_with_precautions",
+    "basis": [
+     "NIOSH_AppB",
+     "Armstrong1994"
+    ]
+   }
+  },
+  {
+   "shade": 2,
+   "brown_or_red": false,
+   "expected": {
+    "code": "U_OK",
+    "triage_floor": "T0_continue_with_precautions",
+    "basis": [
+     "NIOSH_AppB",
+     "Armstrong1994"
+    ]
+   }
+  },
+  {
+   "shade": 3,
+   "brown_or_red": false,
+   "expected": {
+    "code": "U_OK",
+    "triage_floor": "T0_continue_with_precautions",
+    "basis": [
+     "NIOSH_AppB",
+     "Armstrong1994"
+    ]
+   }
+  },
+  {
+   "shade": 4,
+   "brown_or_red": false,
+   "expected": {
+    "code": "U_DRINK_MORE",
+    "triage_floor": "T0_continue_with_precautions",
+    "basis": [
+     "Kavouras2016_threshold_ge4",
+     "Armstrong2010_ref_values"
+    ]
+   }
+  },
+  {
+   "shade": 5,
+   "brown_or_red": false,
+   "expected": {
+    "code": "U_DEHYDRATED",
+    "triage_floor": "T0_continue_with_precautions",
+    "basis": [
+     "McKenzie2015_ge5"
+    ],
+    "escalate_if_persists": "T1_rest_cool_notify_supervisor"
+   }
+  },
+  {
+   "shade": 6,
+   "brown_or_red": false,
+   "expected": {
+    "code": "U_DEHYDRATED",
+    "triage_floor": "T0_continue_with_precautions",
+    "basis": [
+     "McKenzie2015_ge5"
+    ],
+    "escalate_if_persists": "T1_rest_cool_notify_supervisor"
+   }
+  },
+  {
+   "shade": 7,
+   "brown_or_red": false,
+   "expected": {
+    "code": "U_VERY_DARK",
+    "triage_floor": "T1_rest_cool_notify_supervisor",
+    "basis": [
+     "McKenzie2015_ge5",
+     "Armstrong1998"
+    ]
+   }
+  },
+  {
+   "shade": 8,
+   "brown_or_red": false,
+   "expected": {
+    "code": "U_VERY_DARK",
+    "triage_floor": "T1_rest_cool_notify_supervisor",
+    "basis": [
+     "McKenzie2015_ge5",
+     "Armstrong1998"
+    ]
+   }
+  },
+  {
+   "shade": null,
+   "brown_or_red": true,
+   "expected": {
+    "code": "U_BROWN_RED",
+    "triage_floor": "T2_first_aider_now",
+    "basis": [
+     "NIOSH_ILL_rhabdo",
+     "TBMED_5-4c",
+     "NIOSH_AppB_TableB-1"
+    ]
+   }
+  }
+ ],
+ "fluid_vectors": [
+  {
+   "rolling_60min_L": 0.75,
+   "today_L": 5.0,
+   "fasting_now": false,
+   "expected": {
+    "hourly_cap_L": 1.4195,
+    "daily_cap_L": 11.356,
+    "flags": [],
+    "send_drink_reminders": true
+   }
+  },
+  {
+   "rolling_60min_L": 1.5,
+   "today_L": 6.0,
+   "fasting_now": false,
+   "expected": {
+    "hourly_cap_L": 1.4195,
+    "daily_cap_L": 11.356,
+    "flags": [
+     "OVER_HOURLY_CAP"
+    ],
+    "send_drink_reminders": false
+   }
+  },
+  {
+   "rolling_60min_L": 0.5,
+   "today_L": 11.5,
+   "fasting_now": false,
+   "expected": {
+    "hourly_cap_L": 1.4195,
+    "daily_cap_L": 11.356,
+    "flags": [
+     "OVER_DAILY_CAP"
+    ],
+    "send_drink_reminders": true
+   }
+  },
+  {
+   "rolling_60min_L": 0.0,
+   "today_L": 1.0,
+   "fasting_now": true,
+   "expected": {
+    "hourly_cap_L": 1.4195,
+    "daily_cap_L": 11.356,
+    "flags": [],
+    "send_drink_reminders": false
+   }
+  }
+ ],
+ "physio_escalation_vectors": [
+  {
+   "input": {
+    "ectemp": 37.6,
+    "psi": 3.0,
+    "hr_sustained_5min": 120,
+    "age": 35,
+    "channel_valid": true,
+    "conservative_mode": false
+   },
+   "expected": {
+    "floor": null,
+    "reasons": []
+   }
+  },
+  {
+   "input": {
+    "ectemp": 38.1,
+    "psi": 4.5,
+    "hr_sustained_5min": 130,
+    "age": 35,
+    "channel_valid": true,
+    "conservative_mode": false
+   },
+   "expected": {
+    "floor": null,
+    "reasons": [
+     "ECTEMP_GE_38.0_advisory_prompt_checkin",
+     "PSI_MODERATE_advisory"
+    ]
+   }
+  },
+  {
+   "input": {
+    "ectemp": 38.45,
+    "psi": 6.4,
+    "hr_sustained_5min": 150,
+    "age": 35,
+    "channel_valid": true,
+    "conservative_mode": false
+   },
+   "expected": {
+    "floor": "T1_rest_cool_notify_supervisor",
+    "reasons": [
+     "ECTEMP_GE_38.4",
+     "PSI_HIGH",
+     "HR_SUSTAINED_GT_180_MINUS_AGE"
+    ]
+   }
+  },
+  {
+   "input": {
+    "ectemp": 38.1,
+    "psi": 5.0,
+    "hr_sustained_5min": 130,
+    "age": 35,
+    "channel_valid": true,
+    "conservative_mode": true
+   },
+   "expected": {
+    "floor": "T1_rest_cool_notify_supervisor",
+    "reasons": [
+     "ECTEMP_GE_38.0",
+     "PSI_MODERATE_advisory"
+    ]
+   }
+  },
+  {
+   "input": {
+    "ectemp": 39.05,
+    "psi": 8.6,
+    "hr_sustained_5min": 165,
+    "age": 35,
+    "channel_valid": true,
+    "conservative_mode": false
+   },
+   "expected": {
+    "floor": "T2_first_aider_now",
+    "reasons": [
+     "ECTEMP_GE_39.0",
+     "PSI_VERY_HIGH",
+     "HR_SUSTAINED_GT_180_MINUS_AGE"
+    ]
+   }
+  },
+  {
+   "input": {
+    "ectemp": 39.5,
+    "psi": 9.5,
+    "hr_sustained_5min": 170,
+    "age": 35,
+    "channel_valid": false,
+    "conservative_mode": false
+   },
+   "expected": {
+    "floor": null,
+    "reasons": [
+     "PHYSIO_INVALID_ignored"
+    ]
+   }
+  },
+  {
+   "input": {
+    "ectemp": 37.9,
+    "psi": 5.5,
+    "hr_sustained_5min": 150,
+    "age": 40,
+    "channel_valid": true,
+    "conservative_mode": false
+   },
+   "expected": {
+    "floor": "T1_rest_cool_notify_supervisor",
+    "reasons": [
+     "PSI_MODERATE_advisory",
+     "HR_SUSTAINED_GT_180_MINUS_AGE"
+    ]
+   }
+  }
+ ],
+ "fusion_vectors": [
+  {
+   "env": 2,
+   "physio": null,
+   "symptom": null,
+   "expected": 2
+  },
+  {
+   "env": 0,
+   "physio": 1,
+   "symptom": null,
+   "expected": 1
+  },
+  {
+   "env": 1,
+   "physio": null,
+   "symptom": 3,
+   "expected": 3
+  },
+  {
+   "env": 2,
+   "physio": 0,
+   "symptom": 0,
+   "expected": 2
+  },
+  {
+   "env": 0,
+   "physio": null,
+   "symptom": 0,
+   "expected": 0
+  }
+ ]
+}

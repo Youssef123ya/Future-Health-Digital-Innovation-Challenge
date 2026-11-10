@@ -1,0 +1,4367 @@
+{
+ "meta": {
+  "title": "Oracle vectors: Liljegren et al. (2008) outdoor WBGT (thermofeel 2.3.0 implementation)",
+  "generator": "scripts/oracles/wbgt_liljegren_oracle.py",
+  "spec": "docs/research/wbgt_liljegren.md",
+  "generated_utc": "2026-11-09T03:49:35Z",
+  "versions": {
+   "python": "3.12.10",
+   "numpy": "2.5.4",
+   "thermofeel": "2.3.0",
+   "pvlib": "0.16.1"
+  },
+  "units": {
+   "temperature": "degC unless key ends _K",
+   "rh": "percent",
+   "pressure": "hPa",
+   "wind": "m/s",
+   "irradiance": "W/m2",
+   "fdir": "fraction of GHI that is direct beam",
+   "cos_zenith": "dimensionless",
+   "time": "UTC ISO-8601"
+  },
+  "conventions": {
+   "wbgt_outdoor": "0.7*Tnwb + 0.2*Tg + 0.1*Ta",
+   "wbgt_indoor_shade": "0.7*Tnwb + 0.3*Tg",
+   "averaging": "radiation is the mean over (t_end-60min, t_end]; solar geometry evaluated at t_end-30min",
+   "zenith": "NOAA apparent (refraction-corrected) zenith, as wbgt.c adds refraction",
+   "fdir": "Liljegren: S*=min(GHI/TOA,0.85); GHI_used=S*TOA; fdir=clamp(exp(3-1.34S*-1.65/S*),0,0.9); TOA=1367*cz/R^2, 0 if cz<0.00873",
+   "wind": "u10'=max(u10,0.62); urban power law u2=max(u10'*(2/10)^p,0.13); p from Pasquill class (LSRDT)",
+   "rh_from_td": "RH=100*esat(Td)/esat(Ta), Liljegren esat, clamped to [1,100]",
+   "nulls": "null = not applicable or not converged"
+  },
+  "tolerances": {
+   "exact_port_degC": 1e-06,
+   "alternative_solver_degC": 0.03,
+   "cos_zenith_vs_noaa_port": 1e-09,
+   "cos_zenith_vs_spa": 0.0005,
+   "wind_ms": 1e-09
+  },
+  "acceptance": {
+   "thermofeel_vs_c_transliteration_degC": 1e-09,
+   "api_vs_components_degC": 1e-09,
+   "wind_tf_vs_c_ms": 1e-12,
+   "noaa_vs_spa_zenith_deg": 0.03,
+   "noaa_vs_spa_cos_zenith": 0.0005,
+   "lemke_S0_point_degC": 0.1,
+   "lemke_rms_degC": 0.15,
+   "lemke_max_degC": 0.25,
+   "bom_brisbane_degC": 0.5
+  },
+  "failures": []
+ },
+ "constants": {
+  "STEFANB_W_m2K4": 5.6696e-08,
+  "Cp_J_kgK": 1003.5,
+  "M_AIR_g_mol": 28.97,
+  "M_H2O_g_mol": 18.015,
+  "R_GAS_J_kmolK": 8314.34,
+  "R_AIR_J_kgK": 286.998274076631,
+  "Pr": 0.736650093046073,
+  "RATIO_Cp_Mair_over_Mh2o": 1613.7327227310575,
+  "EMIS_GLOBE": 0.95,
+  "ALB_GLOBE": 0.05,
+  "D_GLOBE_m": 0.0508,
+  "EMIS_WICK": 0.95,
+  "ALB_WICK": 0.4,
+  "D_WICK_m": 0.007,
+  "L_WICK_m": 0.0254,
+  "EMIS_SFC": 0.999,
+  "ALB_SFC": 0.45,
+  "SOLAR_CONST_W_m2": 1367.0,
+  "CZA_MIN": 0.00873,
+  "NORMSOLAR_MAX": 0.85,
+  "MIN_SPEED_ms": 0.13,
+  "CONVERGENCE_K": 0.02,
+  "MAX_ITER_thermofeel": 500,
+  "MAX_ITER_original_C": 50,
+  "DAMPING_new_weight": 0.1,
+  "MIN_WIND_10M_KNMI_ms": 0.62,
+  "URBAN_EXP_by_class_1to6": [
+   0.15,
+   0.15,
+   0.2,
+   0.25,
+   0.3,
+   0.3
+  ],
+  "RURAL_EXP_by_class_1to6_original_C_only": [
+   0.07,
+   0.07,
+   0.1,
+   0.15,
+   0.35,
+   0.55
+  ],
+  "LSRDT_table_rows_wind_cols_radiation": [
+   [
+    1,
+    1,
+    2,
+    4,
+    0,
+    5,
+    6,
+    0
+   ],
+   [
+    1,
+    2,
+    3,
+    4,
+    0,
+    5,
+    6,
+    0
+   ],
+   [
+    2,
+    2,
+    3,
+    4,
+    0,
+    4,
+    4,
+    0
+   ],
+   [
+    3,
+    3,
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   [
+    3,
+    4,
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  ]
+ },
+ "property_functions": [
+  {
+   "T_K": 283.15,
+   "P_hPa": 1013.25,
+   "esat_hPa": 12.3250850733,
+   "viscosity_kg_ms": 1.76601317825e-05,
+   "thermal_cond_W_mK": 0.0240574764207,
+   "diffusivity_m2_s": 2.29480275329e-05,
+   "evap_J_kg": 2336200.0,
+   "emis_atm_rh30": 0.693232864657,
+   "emis_atm_rh70": 0.782527887548,
+   "dew_point_K_of_half_esat": 273.208212095,
+   "h_sphere_u0p13": 6.48845827663,
+   "h_sphere_u1": 16.3159832689,
+   "h_sphere_u4": 31.6848217967,
+   "h_cylinder_u0p13": 10.2606346994,
+   "h_cylinder_u1": 34.8986168453,
+   "h_cylinder_u4": 80.1759675238,
+   "max_rel_diff_vs_c_transliteration": 1.44125320745e-16
+  },
+  {
+   "T_K": 283.15,
+   "P_hPa": 980.0,
+   "esat_hPa": 12.3250850733,
+   "viscosity_kg_ms": 1.76601317825e-05,
+   "thermal_cond_W_mK": 0.0240574764207,
+   "diffusivity_m2_s": 2.37266213242e-05,
+   "evap_J_kg": 2336200.0,
+   "emis_atm_rh30": 0.693232864657,
+   "emis_atm_rh70": 0.782527887548,
+   "dew_point_K_of_half_esat": 273.208212095,
+   "h_sphere_u0p13": 6.39678024276,
+   "h_sphere_u1": 16.061714152,
+   "h_sphere_u4": 31.176283563,
+   "h_cylinder_u0p13": 10.0572652428,
+   "h_cylinder_u1": 34.2069137537,
+   "h_cylinder_u4": 78.5868511168,
+   "max_rel_diff_vs_c_transliteration": 1.44125320745e-16
+  },
+  {
+   "T_K": 293.15,
+   "P_hPa": 1013.25,
+   "esat_hPa": 23.4663160274,
+   "viscosity_kg_ms": 1.81210314662e-05,
+   "thermal_cond_W_mK": 0.0246853360205,
+   "diffusivity_m2_s": 2.48843625696e-05,
+   "evap_J_kg": 2359900.0,
+   "emis_atm_rh30": 0.760098380104,
+   "emis_atm_rh70": 0.858006320871,
+   "dew_point_K_of_half_esat": 282.417099886,
+   "h_sphere_u0p13": 6.48845155229,
+   "h_sphere_u1": 16.2721256576,
+   "h_sphere_u4": 31.5723876924,
+   "h_cylinder_u0p13": 10.153267219,
+   "h_cylinder_u1": 34.5334370422,
+   "h_cylinder_u4": 79.3370046455,
+   "max_rel_diff_vs_c_transliteration": 0.0
+  },
+  {
+   "T_K": 293.15,
+   "P_hPa": 980.0,
+   "esat_hPa": 23.4663160274,
+   "viscosity_kg_ms": 1.81210314662e-05,
+   "thermal_cond_W_mK": 0.0246853360205,
+   "diffusivity_m2_s": 2.57286534425e-05,
+   "evap_J_kg": 2359900.0,
+   "emis_atm_rh30": 0.760098380104,
+   "emis_atm_rh70": 0.858006320871,
+   "dew_point_K_of_half_esat": 282.417099886,
+   "h_sphere_u0p13": 6.39718259019,
+   "h_sphere_u1": 16.0189911017,
+   "h_sphere_u4": 31.0661185805,
+   "h_cylinder_u0p13": 9.95202582433,
+   "h_cylinder_u1": 33.8489719451,
+   "h_cylinder_u4": 77.7645167833,
+   "max_rel_diff_vs_c_transliteration": 0.0
+  },
+  {
+   "T_K": 303.15,
+   "P_hPa": 1013.25,
+   "esat_hPa": 42.6048337558,
+   "viscosity_kg_ms": 1.85844638032e-05,
+   "thermal_cond_W_mK": 0.0253166457216,
+   "diffusivity_m2_s": 2.69108534818e-05,
+   "evap_J_kg": 2383600.0,
+   "emis_atm_rh30": 0.827768323804,
+   "emis_atm_rh70": 0.9343928005,
+   "dew_point_K_of_half_esat": 291.597008288,
+   "h_sphere_u0p13": 6.49048573965,
+   "h_sphere_u1": 16.233687621,
+   "h_sphere_u4": 31.4706569065,
+   "h_cylinder_u0p13": 10.0519902866,
+   "h_cylinder_u1": 34.1889724975,
+   "h_cylinder_u4": 78.5456329338,
+   "max_rel_diff_vs_c_transliteration": 0.0
+  },
+  {
+   "T_K": 303.15,
+   "P_hPa": 980.0,
+   "esat_hPa": 42.6048337558,
+   "viscosity_kg_ms": 1.85844638032e-05,
+   "thermal_cond_W_mK": 0.0253166457216,
+   "diffusivity_m2_s": 2.78239002964e-05,
+   "evap_J_kg": 2383600.0,
+   "emis_atm_rh30": 0.827768323804,
+   "emis_atm_rh70": 0.9343928005,
+   "dew_point_K_of_half_esat": 291.597008288,
+   "h_sphere_u0p13": 6.3995943308,
+   "h_sphere_u1": 15.9816002094,
+   "h_sphere_u4": 30.9664820833,
+   "h_cylinder_u0p13": 9.85275623701,
+   "h_cylinder_u1": 33.5113348111,
+   "h_cylinder_u4": 76.9888303426,
+   "max_rel_diff_vs_c_transliteration": 0.0
+  },
+  {
+   "T_K": 313.15,
+   "P_hPa": 1013.25,
+   "esat_hPa": 74.1371196994,
+   "viscosity_kg_ms": 1.90507574011e-05,
+   "thermal_cond_W_mK": 0.0259518531694,
+   "diffusivity_m2_s": 2.90285161347e-05,
+   "evap_J_kg": 2407300.0,
+   "emis_atm_rh30": 0.896006768852,
+   "emis_atm_rh70": 1.01142100989,
+   "dew_point_K_of_half_esat": 300.74807388,
+   "h_sphere_u0p13": 6.49445561561,
+   "h_sphere_u1": 16.2003460667,
+   "h_sphere_u4": 31.3789656307,
+   "h_cylinder_u0p13": 9.9563473293,
+   "h_cylinder_u1": 33.8636703093,
+   "h_cylinder_u4": 77.7982847569,
+   "max_rel_diff_vs_c_transliteration": 1.91683393863e-16
+  },
+  {
+   "T_K": 313.15,
+   "P_hPa": 980.0,
+   "esat_hPa": 74.1371196994,
+   "viscosity_kg_ms": 1.90507574011e-05,
+   "thermal_cond_W_mK": 0.0259518531694,
+   "diffusivity_m2_s": 3.00134122178e-05,
+   "evap_J_kg": 2407300.0,
+   "emis_atm_rh30": 0.896006768852,
+   "emis_atm_rh70": 1.01142100989,
+   "dew_point_K_of_half_esat": 300.74807388,
+   "h_sphere_u0p13": 6.4039122739,
+   "h_sphere_u1": 15.9492240197,
+   "h_sphere_u4": 30.8767215366,
+   "h_cylinder_u0p13": 9.75900895742,
+   "h_cylinder_u1": 33.1924802289,
+   "h_cylinder_u4": 76.2562948743,
+   "max_rel_diff_vs_c_transliteration": 1.91683393863e-16
+  },
+  {
+   "T_K": 323.15,
+   "P_hPa": 1013.25,
+   "esat_hPa": 124.187060759,
+   "viscosity_kg_ms": 1.95202312097e-05,
+   "thermal_cond_W_mK": 0.0265913928523,
+   "diffusivity_m2_s": 3.12383443069e-05,
+   "evap_J_kg": 2431000.0,
+   "emis_atm_rh30": 0.964604096441,
+   "emis_atm_rh70": 1.08885432932,
+   "dew_point_K_of_half_esat": 309.870432382,
+   "h_sphere_u0p13": 6.50026858461,
+   "h_sphere_u1": 16.1718138437,
+   "h_sphere_u4": 31.296722457,
+   "h_cylinder_u0p13": 9.86593106053,
+   "h_cylinder_u1": 33.5561452085,
+   "h_cylinder_u4": 77.0917776021,
+   "max_rel_diff_vs_c_transliteration": 0.0
+  },
+  {
+   "T_K": 323.15,
+   "P_hPa": 980.0,
+   "esat_hPa": 124.187060759,
+   "viscosity_kg_ms": 1.95202312097e-05,
+   "thermal_cond_W_mK": 0.0265913928523,
+   "diffusivity_m2_s": 3.2298216703e-05,
+   "evap_J_kg": 2431000.0,
+   "emis_atm_rh30": 0.964604096441,
+   "emis_atm_rh70": 1.08885432932,
+   "dew_point_K_of_half_esat": 309.870432382,
+   "h_sphere_u0p13": 6.4100456389,
+   "h_sphere_u1": 15.9215804153,
+   "h_sphere_u4": 30.7962556001,
+   "h_cylinder_u0p13": 9.67038477149,
+   "h_cylinder_u1": 32.8910503857,
+   "h_cylinder_u4": 75.5637909444,
+   "max_rel_diff_vs_c_transliteration": 0.0
+  }
+ ],
+ "core_cases": [
+  {
+   "id": "inland_noon_extreme",
+   "desc": "46 C / 13 % / 2 m wind 1.0 / strong sun",
+   "inputs": {
+    "ta_c": 46.2,
+    "rh_pct": 13.0,
+    "p_hpa": 983.7,
+    "u2_ms": 1.0,
+    "ghi_wm2": 916.0,
+    "fdir_supplied": 0.73,
+    "cos_zenith": 0.997
+   },
+   "preprocessing": {
+    "fdir_used": 0.73,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 13.32669112,
+    "tdew_c": 11.172322904,
+    "emis_atm": 0.832727943
+   },
+   "outputs": {
+    "tg_c": 64.258433745,
+    "tnwb_c": 25.9348568,
+    "tpsy_c": 22.261477768,
+    "wbgt_outdoor_c": 35.626086509,
+    "wbgt_indoor_formula_c": 37.431929884
+   },
+   "iterations": {
+    "tg": 25,
+    "tnwb": 15,
+    "tpsy": 18
+   },
+   "max_abs_diff_vs_c_transliteration_c": 5.684341886080802e-14
+  },
+  {
+   "id": "humid_coastal_morning",
+   "desc": "35 C / 70 % / 1.5 m/s / morning sun",
+   "inputs": {
+    "ta_c": 35.0,
+    "rh_pct": 70.0,
+    "p_hpa": 997.0,
+    "u2_ms": 1.5,
+    "ghi_wm2": 300.0,
+    "fdir_supplied": 0.3,
+    "cos_zenith": 0.45
+   },
+   "preprocessing": {
+    "fdir_used": 0.3,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 39.538911313,
+    "tdew_c": 28.706008818,
+    "emis_atm": 0.972842148
+   },
+   "outputs": {
+    "tg_c": 42.872291694,
+    "tnwb_c": 31.096947494,
+    "tpsy_c": 29.940668474,
+    "wbgt_outdoor_c": 33.842321585,
+    "wbgt_indoor_formula_c": 34.629550754
+   },
+   "iterations": {
+    "tg": 17,
+    "tnwb": 9,
+    "tpsy": 9
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "night_humid",
+   "desc": "33 C / 60 % / no sun",
+   "inputs": {
+    "ta_c": 33.0,
+    "rh_pct": 60.0,
+    "p_hpa": 996.0,
+    "u2_ms": 1.5,
+    "ghi_wm2": 0.0,
+    "fdir_supplied": 0.0,
+    "cos_zenith": -0.4
+   },
+   "preprocessing": {
+    "fdir_used": 0.0,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 30.312881003,
+    "tdew_c": 24.200652209,
+    "emis_atm": 0.936570634
+   },
+   "outputs": {
+    "tg_c": 32.391256214,
+    "tnwb_c": 26.376532696,
+    "tpsy_c": 26.246152115,
+    "wbgt_outdoor_c": 28.24182413,
+    "wbgt_indoor_formula_c": 28.180949751
+   },
+   "iterations": {
+    "tg": 10,
+    "tnwb": 11,
+    "tpsy": 12
+   },
+   "max_abs_diff_vs_c_transliteration_c": 2.2737367544323206e-13
+  },
+  {
+   "id": "calm_floor_0p13",
+   "desc": "2 m wind at Liljegren floor 0.13 m/s",
+   "inputs": {
+    "ta_c": 40.0,
+    "rh_pct": 30.0,
+    "p_hpa": 1000.0,
+    "u2_ms": 0.13,
+    "ghi_wm2": 800.0,
+    "fdir_supplied": 0.65,
+    "cos_zenith": 0.9
+   },
+   "preprocessing": {
+    "fdir_used": 0.65,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 22.24113591,
+    "tdew_c": 19.136944259,
+    "emis_atm": 0.896006769
+   },
+   "outputs": {
+    "tg_c": 69.421705739,
+    "tnwb_c": 33.782269527,
+    "tpsy_c": 24.649491706,
+    "wbgt_outdoor_c": 41.531929816,
+    "wbgt_indoor_formula_c": 44.47410039
+   },
+   "iterations": {
+    "tg": 43,
+    "tnwb": 9,
+    "tpsy": 15
+   },
+   "max_abs_diff_vs_c_transliteration_c": 5.684341886080802e-14
+  },
+  {
+   "id": "below_floor_0p05",
+   "desc": "0.05 m/s -> treated as 0.13 inside Re",
+   "inputs": {
+    "ta_c": 40.0,
+    "rh_pct": 30.0,
+    "p_hpa": 1000.0,
+    "u2_ms": 0.05,
+    "ghi_wm2": 800.0,
+    "fdir_supplied": 0.65,
+    "cos_zenith": 0.9
+   },
+   "preprocessing": {
+    "fdir_used": 0.65,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 22.24113591,
+    "tdew_c": 19.136944259,
+    "emis_atm": 0.896006769
+   },
+   "outputs": {
+    "tg_c": 69.421705739,
+    "tnwb_c": 33.782269527,
+    "tpsy_c": 24.649491706,
+    "wbgt_outdoor_c": 41.531929816,
+    "wbgt_indoor_formula_c": 44.47410039
+   },
+   "iterations": {
+    "tg": 43,
+    "tnwb": 9,
+    "tpsy": 15
+   },
+   "max_abs_diff_vs_c_transliteration_c": 5.684341886080802e-14
+  },
+  {
+   "id": "low_wind_0p5",
+   "desc": "0.5 m/s",
+   "inputs": {
+    "ta_c": 44.0,
+    "rh_pct": 20.0,
+    "p_hpa": 995.0,
+    "u2_ms": 0.5,
+    "ghi_wm2": 850.0,
+    "fdir_supplied": 0.69,
+    "cos_zenith": 0.97
+   },
+   "preprocessing": {
+    "fdir_used": 0.69,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 18.304961391,
+    "tdew_c": 16.049546099,
+    "emis_atm": 0.871395245
+   },
+   "outputs": {
+    "tg_c": 65.578759015,
+    "tnwb_c": 28.876564215,
+    "tpsy_c": 23.940454716,
+    "wbgt_outdoor_c": 37.729346753,
+    "wbgt_indoor_formula_c": 39.887222655
+   },
+   "iterations": {
+    "tg": 31,
+    "tnwb": 13,
+    "tpsy": 16
+   },
+   "max_abs_diff_vs_c_transliteration_c": 5.684341886080802e-14
+  },
+  {
+   "id": "strong_wind_6",
+   "desc": "6 m/s at 2 m",
+   "inputs": {
+    "ta_c": 40.0,
+    "rh_pct": 35.0,
+    "p_hpa": 998.0,
+    "u2_ms": 6.0,
+    "ghi_wm2": 700.0,
+    "fdir_supplied": 0.62,
+    "cos_zenith": 0.85
+   },
+   "preprocessing": {
+    "fdir_used": 0.62,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 25.947991895,
+    "tdew_c": 21.63353469,
+    "emis_atm": 0.915977238
+   },
+   "outputs": {
+    "tg_c": 48.391574901,
+    "tnwb_c": 27.16500047,
+    "tpsy_c": 26.109285264,
+    "wbgt_outdoor_c": 32.693815309,
+    "wbgt_indoor_formula_c": 33.532972799
+   },
+   "iterations": {
+    "tg": 10,
+    "tnwb": 13,
+    "tpsy": 13
+   },
+   "max_abs_diff_vs_c_transliteration_c": 1.7053025658242404e-13
+  },
+  {
+   "id": "winter_noon",
+   "desc": "25 C / 50 % / winter noon",
+   "inputs": {
+    "ta_c": 25.0,
+    "rh_pct": 50.0,
+    "p_hpa": 1018.0,
+    "u2_ms": 2.5,
+    "ghi_wm2": 650.0,
+    "fdir_supplied": 0.6,
+    "cos_zenith": 0.67
+   },
+   "preprocessing": {
+    "fdir_used": 0.6,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 15.898513344,
+    "tdew_c": 13.860667954,
+    "emis_atm": 0.854007779
+   },
+   "outputs": {
+    "tg_c": 36.850376323,
+    "tnwb_c": 19.958817032,
+    "tpsy_c": 17.721001403,
+    "wbgt_outdoor_c": 23.841247187,
+    "wbgt_indoor_formula_c": 25.026284819
+   },
+   "iterations": {
+    "tg": 14,
+    "tnwb": 18,
+    "tpsy": 19
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "dust_low_ghi_diffuse",
+   "desc": "dusty: GHI 350, fdir 0.15",
+   "inputs": {
+    "ta_c": 42.0,
+    "rh_pct": 30.0,
+    "p_hpa": 996.0,
+    "u2_ms": 4.0,
+    "ghi_wm2": 350.0,
+    "fdir_supplied": 0.15,
+    "cos_zenith": 0.95
+   },
+   "preprocessing": {
+    "fdir_used": 0.15,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 24.730442484,
+    "tdew_c": 20.8500513,
+    "emis_atm": 0.909703791
+   },
+   "outputs": {
+    "tg_c": 47.407412039,
+    "tnwb_c": 27.066855799,
+    "tpsy_c": 26.063693569,
+    "wbgt_outdoor_c": 32.628281467,
+    "wbgt_indoor_formula_c": 33.169022671
+   },
+   "iterations": {
+    "tg": 11,
+    "tnwb": 13,
+    "tpsy": 14
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "overcast_fdir0",
+   "desc": "overcast, all diffuse",
+   "inputs": {
+    "ta_c": 34.0,
+    "rh_pct": 65.0,
+    "p_hpa": 1000.0,
+    "u2_ms": 2.0,
+    "ghi_wm2": 200.0,
+    "fdir_supplied": 0.0,
+    "cos_zenith": 0.8
+   },
+   "preprocessing": {
+    "fdir_used": 0.0,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 34.729839324,
+    "tdew_c": 26.488115385,
+    "emis_atm": 0.95496695
+   },
+   "outputs": {
+    "tg_c": 38.42292757,
+    "tnwb_c": 28.892866863,
+    "tpsy_c": 28.09199605,
+    "wbgt_outdoor_c": 31.309592318,
+    "wbgt_indoor_formula_c": 31.751885075
+   },
+   "iterations": {
+    "tg": 13,
+    "tnwb": 10,
+    "tpsy": 11
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "low_sun_direct",
+   "desc": "low sun cos z 0.15, fdir 0.09",
+   "inputs": {
+    "ta_c": 34.5,
+    "rh_pct": 70.0,
+    "p_hpa": 994.4,
+    "u2_ms": 2.0,
+    "ghi_wm2": 64.0,
+    "fdir_supplied": 0.09,
+    "cos_zenith": 0.15
+   },
+   "preprocessing": {
+    "fdir_used": 0.09,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 38.457228948,
+    "tdew_c": 28.228535808,
+    "emis_atm": 0.968990896
+   },
+   "outputs": {
+    "tg_c": 36.006381852,
+    "tnwb_c": 29.794036324,
+    "tpsy_c": 29.483756657,
+    "wbgt_outdoor_c": 31.507101797,
+    "wbgt_indoor_formula_c": 31.657739982
+   },
+   "iterations": {
+    "tg": 11,
+    "tnwb": 9,
+    "tpsy": 9
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "max_fdir_overhead",
+   "desc": "fdir 0.9 at cos z 1.0",
+   "inputs": {
+    "ta_c": 45.0,
+    "rh_pct": 15.0,
+    "p_hpa": 990.0,
+    "u2_ms": 1.0,
+    "ghi_wm2": 1000.0,
+    "fdir_supplied": 0.9,
+    "cos_zenith": 1.0
+   },
+   "preprocessing": {
+    "fdir_used": 0.9,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 14.457922436,
+    "tdew_c": 12.406503255,
+    "emis_atm": 0.842486571
+   },
+   "outputs": {
+    "tg_c": 63.324143785,
+    "tnwb_c": 25.662933048,
+    "tpsy_c": 22.508741973,
+    "wbgt_outdoor_c": 35.12888189,
+    "wbgt_indoor_formula_c": 36.961296269
+   },
+   "iterations": {
+    "tg": 25,
+    "tnwb": 15,
+    "tpsy": 17
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "very_dry_rh1",
+   "desc": "RH 1 % (lower clamp used by Zill)",
+   "inputs": {
+    "ta_c": 48.0,
+    "rh_pct": 1.0,
+    "p_hpa": 985.0,
+    "u2_ms": 2.0,
+    "ghi_wm2": 870.0,
+    "fdir_supplied": 0.7,
+    "cos_zenith": 0.95
+   },
+   "preprocessing": {
+    "fdir_used": 0.7,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 1.123333506,
+    "tdew_c": -21.310347633,
+    "emis_atm": 0.58464278
+   },
+   "outputs": {
+    "tg_c": 59.576939461,
+    "tnwb_c": 19.795210262,
+    "tpsy_c": 16.757332714,
+    "wbgt_outdoor_c": 30.572035076,
+    "wbgt_indoor_formula_c": 31.729729022
+   },
+   "iterations": {
+    "tg": 18,
+    "tnwb": 24,
+    "tpsy": 27
+   },
+   "max_abs_diff_vs_c_transliteration_c": 1.1368683772161603e-13
+  },
+  {
+   "id": "saturated_rh100",
+   "desc": "RH 100 %",
+   "inputs": {
+    "ta_c": 30.0,
+    "rh_pct": 100.0,
+    "p_hpa": 1005.0,
+    "u2_ms": 1.0,
+    "ghi_wm2": 500.0,
+    "fdir_supplied": 0.5,
+    "cos_zenith": 0.8
+   },
+   "preprocessing": {
+    "fdir_used": 0.5,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 42.604833756,
+    "tdew_c": 30.0,
+    "emis_atm": 0.983287377
+   },
+   "outputs": {
+    "tg_c": 43.126562613,
+    "tnwb_c": 31.768326685,
+    "tpsy_c": 30.0,
+    "wbgt_outdoor_c": 33.863141202,
+    "wbgt_indoor_formula_c": 35.175797463
+   },
+   "iterations": {
+    "tg": 21,
+    "tnwb": 9,
+    "tpsy": 1
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "hot_humid_extreme",
+   "desc": "40 C / 60 % / 1 m/s / 800 W",
+   "inputs": {
+    "ta_c": 40.0,
+    "rh_pct": 60.0,
+    "p_hpa": 1000.0,
+    "u2_ms": 1.0,
+    "ghi_wm2": 800.0,
+    "fdir_supplied": 0.68,
+    "cos_zenith": 0.9
+   },
+   "preprocessing": {
+    "fdir_used": 0.68,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 44.48227182,
+    "tdew_c": 30.752845327,
+    "emis_atm": 0.989369641
+   },
+   "outputs": {
+    "tg_c": 58.597925579,
+    "tnwb_c": 34.685655056,
+    "tpsy_c": 32.392218444,
+    "wbgt_outdoor_c": 39.999543655,
+    "wbgt_indoor_formula_c": 41.859336213
+   },
+   "iterations": {
+    "tg": 24,
+    "tnwb": 8,
+    "tpsy": 8
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "high_altitude_like_P950",
+   "desc": "P 950 hPa sensitivity",
+   "inputs": {
+    "ta_c": 38.0,
+    "rh_pct": 20.0,
+    "p_hpa": 950.0,
+    "u2_ms": 2.0,
+    "ghi_wm2": 900.0,
+    "fdir_supplied": 0.7,
+    "cos_zenith": 0.95
+   },
+   "preprocessing": {
+    "fdir_used": 0.7,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 13.314661768,
+    "tdew_c": 11.158710546,
+    "emis_atm": 0.832620414
+   },
+   "outputs": {
+    "tg_c": 53.159711693,
+    "tnwb_c": 22.703414054,
+    "tpsy_c": 19.949115011,
+    "wbgt_outdoor_c": 30.324332176,
+    "wbgt_indoor_formula_c": 31.840303346
+   },
+   "iterations": {
+    "tg": 18,
+    "tnwb": 16,
+    "tpsy": 18
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "cool_night",
+   "desc": "18 C / 75 % / night",
+   "inputs": {
+    "ta_c": 18.0,
+    "rh_pct": 75.0,
+    "p_hpa": 1018.0,
+    "u2_ms": 1.0,
+    "ghi_wm2": 0.0,
+    "fdir_supplied": 0.0,
+    "cos_zenith": -0.6
+   },
+   "preprocessing": {
+    "fdir_used": 0.0,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 15.534703878,
+    "tdew_c": 13.504725132,
+    "emis_atm": 0.85118541
+   },
+   "outputs": {
+    "tg_c": 16.645825715,
+    "tnwb_c": 15.032015243,
+    "tpsy_c": 15.169509239,
+    "wbgt_outdoor_c": 15.651575813,
+    "wbgt_indoor_formula_c": 15.516158384
+   },
+   "iterations": {
+    "tg": 12,
+    "tnwb": 17,
+    "tpsy": 18
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "lemke_fig1_S0",
+   "desc": "Lemke & Kjellstrom 2012 Fig.1 S=0 point (geometry-free)",
+   "inputs": {
+    "ta_c": 30.0,
+    "rh_pct": 55.0,
+    "p_hpa": 1013.25,
+    "u2_ms": 1.0,
+    "ghi_wm2": 0.0,
+    "fdir_supplied": 0.0,
+    "cos_zenith": 1.0
+   },
+   "preprocessing": {
+    "fdir_used": 0.0,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 23.432658566,
+    "tdew_c": 19.976823918,
+    "emis_atm": 0.90271847
+   },
+   "outputs": {
+    "tg_c": 28.983486973,
+    "tnwb_c": 22.893605382,
+    "tpsy_c": 22.748754788,
+    "wbgt_outdoor_c": 24.822221162,
+    "wbgt_indoor_formula_c": 24.72056986
+   },
+   "iterations": {
+    "tg": 13,
+    "tnwb": 14,
+    "tpsy": 15
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "cza_below_min_guard",
+   "desc": "cos z 0.005 < CZA_MIN: fdir forced to 0 (GHI kept as diffuse)",
+   "inputs": {
+    "ta_c": 33.0,
+    "rh_pct": 60.0,
+    "p_hpa": 995.0,
+    "u2_ms": 2.0,
+    "ghi_wm2": 15.0,
+    "fdir_supplied": 0.5,
+    "cos_zenith": 0.005
+   },
+   "preprocessing": {
+    "fdir_used": 0.0,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 30.312881003,
+    "tdew_c": 24.200652209,
+    "emis_atm": 0.936570634
+   },
+   "outputs": {
+    "tg_c": 32.812645704,
+    "tnwb_c": 26.405788716,
+    "tpsy_c": 26.244529201,
+    "wbgt_outdoor_c": 28.346581242,
+    "wbgt_indoor_formula_c": 28.327845812
+   },
+   "iterations": {
+    "tg": 7,
+    "tnwb": 12,
+    "tpsy": 12
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  },
+  {
+   "id": "fdir_above_0p9_clamped",
+   "desc": "fdir 1.0 supplied -> clamped to 0.9",
+   "inputs": {
+    "ta_c": 45.0,
+    "rh_pct": 15.0,
+    "p_hpa": 990.0,
+    "u2_ms": 1.0,
+    "ghi_wm2": 1000.0,
+    "fdir_supplied": 1.0,
+    "cos_zenith": 1.0
+   },
+   "preprocessing": {
+    "fdir_used": 0.9,
+    "note": "fdir clamped to [0,0.9]; set to 0 when cos_zenith < CZA_MIN"
+   },
+   "intermediates": {
+    "eair_hPa": 14.457922436,
+    "tdew_c": 12.406503255,
+    "emis_atm": 0.842486571
+   },
+   "outputs": {
+    "tg_c": 63.324143785,
+    "tnwb_c": 25.662933048,
+    "tpsy_c": 22.508741973,
+    "wbgt_outdoor_c": 35.12888189,
+    "wbgt_indoor_formula_c": 36.961296269
+   },
+   "iterations": {
+    "tg": 25,
+    "tnwb": 15,
+    "tpsy": 17
+   },
+   "max_abs_diff_vs_c_transliteration_c": 0.0
+  }
+ ],
+ "iteration_traces": {
+  "inland_noon_extreme": {
+   "globe_first3": [
+    {
+     "iter": 1,
+     "prev_K": 319.35,
+     "tref_K": 319.35,
+     "h_W_m2K": 15.959634267,
+     "new_K": 367.79800608
+    },
+    {
+     "iter": 2,
+     "prev_K": 324.194800608,
+     "tref_K": 321.772400304,
+     "h_W_m2K": 15.953183609,
+     "new_K": 360.365323563
+    },
+    {
+     "iter": 3,
+     "prev_K": 327.811852904,
+     "tref_K": 323.580926452,
+     "h_W_m2K": 15.948540776,
+     "new_K": 354.504616148
+    }
+   ],
+   "globe_last": [
+    {
+     "iter": 25,
+     "prev_K": 337.393470471,
+     "tref_K": 328.371735235,
+     "h_W_m2K": 15.936945922,
+     "new_K": 337.408433745
+    }
+   ],
+   "globe_iterations": 25,
+   "wetbulb_first3": [
+    {
+     "iter": 1,
+     "prev_K": 284.322322904,
+     "tref_K": 301.836161452,
+     "h_W_m2K": 33.630546254,
+     "fatm_W_m2": 604.57891021,
+     "ewick_hPa": 13.32669112,
+     "schmidt": 0.594470456,
+     "new_K": 337.327076722
+    },
+    {
+     "iter": 2,
+     "prev_K": 289.622798286,
+     "tref_K": 304.486399143,
+     "h_W_m2K": 33.543424428,
+     "fatm_W_m2": 577.588530443,
+     "ewick_hPa": 18.805506316,
+     "schmidt": 0.591485641,
+     "new_K": 327.072644483
+    },
+    {
+     "iter": 3,
+     "prev_K": 293.367782906,
+     "tref_K": 306.358891453,
+     "h_W_m2K": 33.482659653,
+     "fatm_W_m2": 557.603785798,
+     "ewick_hPa": 23.784666336,
+     "schmidt": 0.5894101,
+     "new_K": 317.712723935
+    }
+   ],
+   "wetbulb_last": [
+    {
+     "iter": 15,
+     "prev_K": 299.071622892,
+     "tref_K": 309.210811446,
+     "h_W_m2K": 33.391344981,
+     "fatm_W_m2": 525.660070236,
+     "ewick_hPa": 33.586673459,
+     "schmidt": 0.586300815,
+     "new_K": 299.0848568
+    }
+   ],
+   "wetbulb_iterations": 15
+  },
+  "night_humid": {
+   "globe_first3": [
+    {
+     "iter": 1,
+     "prev_K": 306.15,
+     "tref_K": 306.15,
+     "h_W_m2K": 19.484203762,
+     "new_K": 303.65401018
+    },
+    {
+     "iter": 2,
+     "prev_K": 305.900401018,
+     "tref_K": 306.025200509,
+     "h_W_m2K": 19.484791178,
+     "new_K": 304.457061034
+    },
+    {
+     "iter": 3,
+     "prev_K": 305.75606702,
+     "tref_K": 305.95303351,
+     "h_W_m2K": 19.485131289,
+     "new_K": 304.918573624
+    }
+   ],
+   "globe_last": [
+    {
+     "iter": 10,
+     "prev_K": 305.560295218,
+     "tref_K": 305.855147609,
+     "h_W_m2K": 19.485593112,
+     "new_K": 305.541256214
+    }
+   ],
+   "globe_iterations": 10,
+   "wetbulb_first3": [
+    {
+     "iter": 1,
+     "prev_K": 297.350652209,
+     "tref_K": 301.750326105,
+     "h_W_m2K": 43.217874124,
+     "fatm_W_m2": 36.855244244,
+     "ewick_hPa": 30.312881003,
+     "schmidt": 0.594568065,
+     "new_K": 307.002777815
+    },
+    {
+     "iter": 2,
+     "prev_K": 298.31586477,
+     "tref_K": 302.232932385,
+     "h_W_m2K": 43.197351524,
+     "fatm_W_m2": 31.361357522,
+     "ewick_hPa": 32.112820049,
+     "schmidt": 0.594020031,
+     "new_K": 303.767330096
+    },
+    {
+     "iter": 3,
+     "prev_K": 298.861011302,
+     "tref_K": 302.505505651,
+     "h_W_m2K": 43.185785543,
+     "fatm_W_m2": 28.234784378,
+     "ewick_hPa": 33.170124786,
+     "schmidt": 0.59371133,
+     "new_K": 301.860859354
+    }
+   ],
+   "wetbulb_last": [
+    {
+     "iter": 11,
+     "prev_K": 299.506563417,
+     "tref_K": 302.828281709,
+     "h_W_m2K": 43.172112667,
+     "fatm_W_m2": 24.510164155,
+     "ewick_hPa": 34.461385894,
+     "schmidt": 0.59334654,
+     "new_K": 299.526532696
+    }
+   ],
+   "wetbulb_iterations": 11
+  }
+ },
+ "wind_cases": [
+  {
+   "u10_ms": 0.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": -0.3,
+   "daytime": false,
+   "stability_class": 5,
+   "exponent_urban": 0.3,
+   "u2_urban_no_floor_ms": 0.13,
+   "u10_after_knmi_floor_ms": 0.62,
+   "u2_thermofeel_api_ms": 0.382560995,
+   "u2_rural_original_C_dT_lt0_ms": 0.13,
+   "u2_rural_original_C_dT_ge0_ms": 0.13
+  },
+  {
+   "u10_ms": 0.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 0.13,
+   "u10_after_knmi_floor_ms": 0.62,
+   "u2_thermofeel_api_ms": 0.414618989,
+   "u2_rural_original_C_dT_lt0_ms": 0.13,
+   "u2_rural_original_C_dT_ge0_ms": 0.13
+  },
+  {
+   "u10_ms": 0.0,
+   "ghi_wm2": 175.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 2,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 0.13,
+   "u10_after_knmi_floor_ms": 0.62,
+   "u2_thermofeel_api_ms": 0.487019319,
+   "u2_rural_original_C_dT_lt0_ms": 0.13,
+   "u2_rural_original_C_dT_ge0_ms": 0.13
+  },
+  {
+   "u10_ms": 0.0,
+   "ghi_wm2": 675.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 1,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 0.13,
+   "u10_after_knmi_floor_ms": 0.62,
+   "u2_thermofeel_api_ms": 0.487019319,
+   "u2_rural_original_C_dT_lt0_ms": 0.13,
+   "u2_rural_original_C_dT_ge0_ms": 0.13
+  },
+  {
+   "u10_ms": 0.0,
+   "ghi_wm2": 925.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 1,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 0.13,
+   "u10_after_knmi_floor_ms": 0.62,
+   "u2_thermofeel_api_ms": 0.487019319,
+   "u2_rural_original_C_dT_lt0_ms": 0.13,
+   "u2_rural_original_C_dT_ge0_ms": 0.13
+  },
+  {
+   "u10_ms": 0.62,
+   "ghi_wm2": 0.0,
+   "cos_zenith": -0.3,
+   "daytime": false,
+   "stability_class": 5,
+   "exponent_urban": 0.3,
+   "u2_urban_no_floor_ms": 0.382560995,
+   "u10_after_knmi_floor_ms": 0.62,
+   "u2_thermofeel_api_ms": 0.382560995,
+   "u2_rural_original_C_dT_lt0_ms": 0.352981698,
+   "u2_rural_original_C_dT_ge0_ms": 0.255833956
+  },
+  {
+   "u10_ms": 0.62,
+   "ghi_wm2": 0.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 0.414618989,
+   "u10_after_knmi_floor_ms": 0.62,
+   "u2_thermofeel_api_ms": 0.414618989,
+   "u2_rural_original_C_dT_lt0_ms": 0.487019319,
+   "u2_rural_original_C_dT_ge0_ms": 0.487019319
+  },
+  {
+   "u10_ms": 0.62,
+   "ghi_wm2": 175.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 2,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 0.487019319,
+   "u10_after_knmi_floor_ms": 0.62,
+   "u2_thermofeel_api_ms": 0.487019319,
+   "u2_rural_original_C_dT_lt0_ms": 0.553941355,
+   "u2_rural_original_C_dT_ge0_ms": 0.553941355
+  },
+  {
+   "u10_ms": 0.62,
+   "ghi_wm2": 675.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 1,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 0.487019319,
+   "u10_after_knmi_floor_ms": 0.62,
+   "u2_thermofeel_api_ms": 0.487019319,
+   "u2_rural_original_C_dT_lt0_ms": 0.553941355,
+   "u2_rural_original_C_dT_ge0_ms": 0.553941355
+  },
+  {
+   "u10_ms": 0.62,
+   "ghi_wm2": 925.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 1,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 0.487019319,
+   "u10_after_knmi_floor_ms": 0.62,
+   "u2_thermofeel_api_ms": 0.487019319,
+   "u2_rural_original_C_dT_lt0_ms": 0.553941355,
+   "u2_rural_original_C_dT_ge0_ms": 0.553941355
+  },
+  {
+   "u10_ms": 1.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": -0.3,
+   "daytime": false,
+   "stability_class": 5,
+   "exponent_urban": 0.3,
+   "u2_urban_no_floor_ms": 0.617033863,
+   "u10_after_knmi_floor_ms": 1.0,
+   "u2_thermofeel_api_ms": 0.617033863,
+   "u2_rural_original_C_dT_lt0_ms": 0.569325319,
+   "u2_rural_original_C_dT_ge0_ms": 0.412635414
+  },
+  {
+   "u10_ms": 1.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 0.668740305,
+   "u10_after_knmi_floor_ms": 1.0,
+   "u2_thermofeel_api_ms": 0.668740305,
+   "u2_rural_original_C_dT_lt0_ms": 0.78551503,
+   "u2_rural_original_C_dT_ge0_ms": 0.78551503
+  },
+  {
+   "u10_ms": 1.0,
+   "ghi_wm2": 175.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 2,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 0.78551503,
+   "u10_after_knmi_floor_ms": 1.0,
+   "u2_thermofeel_api_ms": 0.78551503,
+   "u2_rural_original_C_dT_lt0_ms": 0.893453799,
+   "u2_rural_original_C_dT_ge0_ms": 0.893453799
+  },
+  {
+   "u10_ms": 1.0,
+   "ghi_wm2": 675.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 1,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 0.78551503,
+   "u10_after_knmi_floor_ms": 1.0,
+   "u2_thermofeel_api_ms": 0.78551503,
+   "u2_rural_original_C_dT_lt0_ms": 0.893453799,
+   "u2_rural_original_C_dT_ge0_ms": 0.893453799
+  },
+  {
+   "u10_ms": 1.0,
+   "ghi_wm2": 925.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 1,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 0.78551503,
+   "u10_after_knmi_floor_ms": 1.0,
+   "u2_thermofeel_api_ms": 0.78551503,
+   "u2_rural_original_C_dT_lt0_ms": 0.893453799,
+   "u2_rural_original_C_dT_ge0_ms": 0.893453799
+  },
+  {
+   "u10_ms": 2.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": -0.3,
+   "daytime": false,
+   "stability_class": 5,
+   "exponent_urban": 0.3,
+   "u2_urban_no_floor_ms": 1.234067725,
+   "u10_after_knmi_floor_ms": 2.0,
+   "u2_thermofeel_api_ms": 1.234067725,
+   "u2_rural_original_C_dT_lt0_ms": 1.138650639,
+   "u2_rural_original_C_dT_ge0_ms": 0.825270827
+  },
+  {
+   "u10_ms": 2.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 1.33748061,
+   "u10_after_knmi_floor_ms": 2.0,
+   "u2_thermofeel_api_ms": 1.33748061,
+   "u2_rural_original_C_dT_lt0_ms": 1.57103006,
+   "u2_rural_original_C_dT_ge0_ms": 1.57103006
+  },
+  {
+   "u10_ms": 2.0,
+   "ghi_wm2": 175.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 3,
+   "exponent_urban": 0.2,
+   "u2_urban_no_floor_ms": 1.449559327,
+   "u10_after_knmi_floor_ms": 2.0,
+   "u2_thermofeel_api_ms": 1.449559327,
+   "u2_rural_original_C_dT_lt0_ms": 1.702679845,
+   "u2_rural_original_C_dT_ge0_ms": 1.702679845
+  },
+  {
+   "u10_ms": 2.0,
+   "ghi_wm2": 675.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 2,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 1.57103006,
+   "u10_after_knmi_floor_ms": 2.0,
+   "u2_thermofeel_api_ms": 1.57103006,
+   "u2_rural_original_C_dT_lt0_ms": 1.786907598,
+   "u2_rural_original_C_dT_ge0_ms": 1.786907598
+  },
+  {
+   "u10_ms": 2.0,
+   "ghi_wm2": 925.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 1,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 1.57103006,
+   "u10_after_knmi_floor_ms": 2.0,
+   "u2_thermofeel_api_ms": 1.57103006,
+   "u2_rural_original_C_dT_lt0_ms": 1.786907598,
+   "u2_rural_original_C_dT_ge0_ms": 1.786907598
+  },
+  {
+   "u10_ms": 2.5,
+   "ghi_wm2": 0.0,
+   "cos_zenith": -0.3,
+   "daytime": false,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 1.671850762,
+   "u10_after_knmi_floor_ms": 2.5,
+   "u2_thermofeel_api_ms": 1.671850762,
+   "u2_rural_original_C_dT_lt0_ms": 1.963787576,
+   "u2_rural_original_C_dT_ge0_ms": 1.963787576
+  },
+  {
+   "u10_ms": 2.5,
+   "ghi_wm2": 0.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 1.671850762,
+   "u10_after_knmi_floor_ms": 2.5,
+   "u2_thermofeel_api_ms": 1.671850762,
+   "u2_rural_original_C_dT_lt0_ms": 1.963787576,
+   "u2_rural_original_C_dT_ge0_ms": 1.963787576
+  },
+  {
+   "u10_ms": 2.5,
+   "ghi_wm2": 175.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 3,
+   "exponent_urban": 0.2,
+   "u2_urban_no_floor_ms": 1.811949159,
+   "u10_after_knmi_floor_ms": 2.5,
+   "u2_thermofeel_api_ms": 1.811949159,
+   "u2_rural_original_C_dT_lt0_ms": 2.128349806,
+   "u2_rural_original_C_dT_ge0_ms": 2.128349806
+  },
+  {
+   "u10_ms": 2.5,
+   "ghi_wm2": 675.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 2,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 1.963787576,
+   "u10_after_knmi_floor_ms": 2.5,
+   "u2_thermofeel_api_ms": 1.963787576,
+   "u2_rural_original_C_dT_lt0_ms": 2.233634497,
+   "u2_rural_original_C_dT_ge0_ms": 2.233634497
+  },
+  {
+   "u10_ms": 2.5,
+   "ghi_wm2": 925.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 1,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 1.963787576,
+   "u10_after_knmi_floor_ms": 2.5,
+   "u2_thermofeel_api_ms": 1.963787576,
+   "u2_rural_original_C_dT_lt0_ms": 2.233634497,
+   "u2_rural_original_C_dT_ge0_ms": 2.233634497
+  },
+  {
+   "u10_ms": 3.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": -0.3,
+   "daytime": false,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 2.006220915,
+   "u10_after_knmi_floor_ms": 3.0,
+   "u2_thermofeel_api_ms": 2.006220915,
+   "u2_rural_original_C_dT_lt0_ms": 2.356545091,
+   "u2_rural_original_C_dT_ge0_ms": 2.356545091
+  },
+  {
+   "u10_ms": 3.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 2.006220915,
+   "u10_after_knmi_floor_ms": 3.0,
+   "u2_thermofeel_api_ms": 2.006220915,
+   "u2_rural_original_C_dT_lt0_ms": 2.356545091,
+   "u2_rural_original_C_dT_ge0_ms": 2.356545091
+  },
+  {
+   "u10_ms": 3.0,
+   "ghi_wm2": 175.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 3,
+   "exponent_urban": 0.2,
+   "u2_urban_no_floor_ms": 2.174338991,
+   "u10_after_knmi_floor_ms": 3.0,
+   "u2_thermofeel_api_ms": 2.174338991,
+   "u2_rural_original_C_dT_lt0_ms": 2.554019768,
+   "u2_rural_original_C_dT_ge0_ms": 2.554019768
+  },
+  {
+   "u10_ms": 3.0,
+   "ghi_wm2": 675.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 2,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 2.356545091,
+   "u10_after_knmi_floor_ms": 3.0,
+   "u2_thermofeel_api_ms": 2.356545091,
+   "u2_rural_original_C_dT_lt0_ms": 2.680361396,
+   "u2_rural_original_C_dT_ge0_ms": 2.680361396
+  },
+  {
+   "u10_ms": 3.0,
+   "ghi_wm2": 925.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 2,
+   "exponent_urban": 0.15,
+   "u2_urban_no_floor_ms": 2.356545091,
+   "u10_after_knmi_floor_ms": 3.0,
+   "u2_thermofeel_api_ms": 2.356545091,
+   "u2_rural_original_C_dT_lt0_ms": 2.680361396,
+   "u2_rural_original_C_dT_ge0_ms": 2.680361396
+  },
+  {
+   "u10_ms": 5.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": -0.3,
+   "daytime": false,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 3.343701525,
+   "u10_after_knmi_floor_ms": 5.0,
+   "u2_thermofeel_api_ms": 3.343701525,
+   "u2_rural_original_C_dT_lt0_ms": 3.927575151,
+   "u2_rural_original_C_dT_ge0_ms": 3.927575151
+  },
+  {
+   "u10_ms": 5.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 3.343701525,
+   "u10_after_knmi_floor_ms": 5.0,
+   "u2_thermofeel_api_ms": 3.343701525,
+   "u2_rural_original_C_dT_lt0_ms": 3.927575151,
+   "u2_rural_original_C_dT_ge0_ms": 3.927575151
+  },
+  {
+   "u10_ms": 5.0,
+   "ghi_wm2": 175.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 3.343701525,
+   "u10_after_knmi_floor_ms": 5.0,
+   "u2_thermofeel_api_ms": 3.343701525,
+   "u2_rural_original_C_dT_lt0_ms": 3.927575151,
+   "u2_rural_original_C_dT_ge0_ms": 3.927575151
+  },
+  {
+   "u10_ms": 5.0,
+   "ghi_wm2": 675.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 3,
+   "exponent_urban": 0.2,
+   "u2_urban_no_floor_ms": 3.623898318,
+   "u10_after_knmi_floor_ms": 5.0,
+   "u2_thermofeel_api_ms": 3.623898318,
+   "u2_rural_original_C_dT_lt0_ms": 4.256699613,
+   "u2_rural_original_C_dT_ge0_ms": 4.256699613
+  },
+  {
+   "u10_ms": 5.0,
+   "ghi_wm2": 925.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 3,
+   "exponent_urban": 0.2,
+   "u2_urban_no_floor_ms": 3.623898318,
+   "u10_after_knmi_floor_ms": 5.0,
+   "u2_thermofeel_api_ms": 3.623898318,
+   "u2_rural_original_C_dT_lt0_ms": 4.256699613,
+   "u2_rural_original_C_dT_ge0_ms": 4.256699613
+  },
+  {
+   "u10_ms": 6.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": -0.3,
+   "daytime": false,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 4.01244183,
+   "u10_after_knmi_floor_ms": 6.0,
+   "u2_thermofeel_api_ms": 4.01244183,
+   "u2_rural_original_C_dT_lt0_ms": 4.713090181,
+   "u2_rural_original_C_dT_ge0_ms": 4.713090181
+  },
+  {
+   "u10_ms": 6.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 4.01244183,
+   "u10_after_knmi_floor_ms": 6.0,
+   "u2_thermofeel_api_ms": 4.01244183,
+   "u2_rural_original_C_dT_lt0_ms": 4.713090181,
+   "u2_rural_original_C_dT_ge0_ms": 4.713090181
+  },
+  {
+   "u10_ms": 6.0,
+   "ghi_wm2": 175.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 4.01244183,
+   "u10_after_knmi_floor_ms": 6.0,
+   "u2_thermofeel_api_ms": 4.01244183,
+   "u2_rural_original_C_dT_lt0_ms": 4.713090181,
+   "u2_rural_original_C_dT_ge0_ms": 4.713090181
+  },
+  {
+   "u10_ms": 6.0,
+   "ghi_wm2": 675.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 4.01244183,
+   "u10_after_knmi_floor_ms": 6.0,
+   "u2_thermofeel_api_ms": 4.01244183,
+   "u2_rural_original_C_dT_lt0_ms": 4.713090181,
+   "u2_rural_original_C_dT_ge0_ms": 4.713090181
+  },
+  {
+   "u10_ms": 6.0,
+   "ghi_wm2": 925.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 3,
+   "exponent_urban": 0.2,
+   "u2_urban_no_floor_ms": 4.348677982,
+   "u10_after_knmi_floor_ms": 6.0,
+   "u2_thermofeel_api_ms": 4.348677982,
+   "u2_rural_original_C_dT_lt0_ms": 5.108039535,
+   "u2_rural_original_C_dT_ge0_ms": 5.108039535
+  },
+  {
+   "u10_ms": 12.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": -0.3,
+   "daytime": false,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 8.02488366,
+   "u10_after_knmi_floor_ms": 12.0,
+   "u2_thermofeel_api_ms": 8.02488366,
+   "u2_rural_original_C_dT_lt0_ms": 9.426180363,
+   "u2_rural_original_C_dT_ge0_ms": 9.426180363
+  },
+  {
+   "u10_ms": 12.0,
+   "ghi_wm2": 0.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 8.02488366,
+   "u10_after_knmi_floor_ms": 12.0,
+   "u2_thermofeel_api_ms": 8.02488366,
+   "u2_rural_original_C_dT_lt0_ms": 9.426180363,
+   "u2_rural_original_C_dT_ge0_ms": 9.426180363
+  },
+  {
+   "u10_ms": 12.0,
+   "ghi_wm2": 175.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 8.02488366,
+   "u10_after_knmi_floor_ms": 12.0,
+   "u2_thermofeel_api_ms": 8.02488366,
+   "u2_rural_original_C_dT_lt0_ms": 9.426180363,
+   "u2_rural_original_C_dT_ge0_ms": 9.426180363
+  },
+  {
+   "u10_ms": 12.0,
+   "ghi_wm2": 675.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 4,
+   "exponent_urban": 0.25,
+   "u2_urban_no_floor_ms": 8.02488366,
+   "u10_after_knmi_floor_ms": 12.0,
+   "u2_thermofeel_api_ms": 8.02488366,
+   "u2_rural_original_C_dT_lt0_ms": 9.426180363,
+   "u2_rural_original_C_dT_ge0_ms": 9.426180363
+  },
+  {
+   "u10_ms": 12.0,
+   "ghi_wm2": 925.0,
+   "cos_zenith": 0.5,
+   "daytime": true,
+   "stability_class": 3,
+   "exponent_urban": 0.2,
+   "u2_urban_no_floor_ms": 8.697355964,
+   "u10_after_knmi_floor_ms": 12.0,
+   "u2_thermofeel_api_ms": 8.697355964,
+   "u2_rural_original_C_dT_lt0_ms": 10.21607907,
+   "u2_rural_original_C_dT_ge0_ms": 10.21607907
+  }
+ ],
+ "fdir_cases": [
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 0.0,
+   "clearness_kt": 0.0,
+   "ghi_used_wm2": 0.0,
+   "fdir": 0.0
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 20.0,
+   "clearness_kt": 0.02,
+   "ghi_used_wm2": 20.0,
+   "fdir": 0.0
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 50.0,
+   "clearness_kt": 0.05,
+   "ghi_used_wm2": 50.0,
+   "fdir": 0.0
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 100.0,
+   "clearness_kt": 0.1,
+   "ghi_used_wm2": 100.0,
+   "fdir": 1.199e-06
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 200.0,
+   "clearness_kt": 0.2,
+   "ghi_used_wm2": 200.0,
+   "fdir": 0.004013868
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 300.0,
+   "clearness_kt": 0.3,
+   "ghi_used_wm2": 300.0,
+   "fdir": 0.054913284
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 400.0,
+   "clearness_kt": 0.4,
+   "ghi_used_wm2": 400.0,
+   "fdir": 0.189948936
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 500.0,
+   "clearness_kt": 0.5,
+   "ghi_used_wm2": 500.0,
+   "fdir": 0.379083038
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 600.0,
+   "clearness_kt": 0.6,
+   "ghi_used_wm2": 600.0,
+   "fdir": 0.574646621
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 700.0,
+   "clearness_kt": 0.7,
+   "ghi_used_wm2": 700.0,
+   "fdir": 0.744425233
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 800.0,
+   "clearness_kt": 0.8,
+   "ghi_used_wm2": 800.0,
+   "fdir": 0.874152879
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 825.0999999999999,
+   "clearness_kt": 0.8251,
+   "ghi_used_wm2": 825.1,
+   "fdir": 0.89997202
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 850.0,
+   "clearness_kt": 0.85,
+   "ghi_used_wm2": 850.0,
+   "fdir": 0.9
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 900.0,
+   "clearness_kt": 0.9,
+   "ghi_used_wm2": 850.0,
+   "fdir": 0.9
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 1000.0,
+   "clearness_kt": 1.0,
+   "ghi_used_wm2": 850.0,
+   "fdir": 0.9
+  },
+  {
+   "toa_wm2": 1000.0,
+   "ghi_wm2": 1200.0,
+   "clearness_kt": 1.2,
+   "ghi_used_wm2": 850.0,
+   "fdir": 0.9
+  },
+  {
+   "toa_wm2": 0.0,
+   "ghi_wm2": 20.0,
+   "clearness_kt": null,
+   "ghi_used_wm2": 20.0,
+   "fdir": 0.0,
+   "note": "sun below CZA_MIN: TOA=0 -> fdir 0, GHI unchanged (treated as diffuse)"
+  }
+ ],
+ "solar_cases": [
+  {
+   "site": "abu_dhabi_city",
+   "lat": 24.4539,
+   "lon": 54.3773,
+   "time_utc": "2025-06-21T08:20Z",
+   "julian_day": 2460847.847222,
+   "noaa": {
+    "declination_deg": 23.438318834,
+    "eot_min": -1.841387352,
+    "hour_angle_deg": -1.083046913,
+    "zenith_deg": 1.418138193,
+    "refraction_deg": 0.0,
+    "apparent_zenith_deg": 1.418138193,
+    "cos_zenith": 0.999693705,
+    "cos_apparent_zenith": 0.999693705,
+    "earth_sun_au": 1.016247
+   },
+   "pvlib_spa": {
+    "zenith_deg": 1.415507949,
+    "apparent_zenith_deg": 1.415126011
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 1.420336571,
+    "earth_sun_au": 1.016258078
+   },
+   "diff_noaa_minus_spa_zenith_deg": 0.002630244
+  },
+  {
+   "site": "abu_dhabi_city",
+   "lat": 24.4539,
+   "lon": 54.3773,
+   "time_utc": "2025-07-15T08:30Z",
+   "julian_day": 2460871.854167,
+   "noaa": {
+    "declination_deg": 21.457487079,
+    "eot_min": -6.023286217,
+    "hour_angle_deg": 0.37147839,
+    "zenith_deg": 3.015867075,
+    "refraction_deg": 0.0,
+    "apparent_zenith_deg": 3.015867075,
+    "cos_zenith": 0.998615003,
+    "cos_apparent_zenith": 0.998615003,
+    "earth_sun_au": 1.016449558
+   },
+   "pvlib_spa": {
+    "zenith_deg": 3.015920446,
+    "apparent_zenith_deg": 3.015070295
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 3.017742967,
+    "earth_sun_au": 1.016460733
+   },
+   "diff_noaa_minus_spa_zenith_deg": -5.3371e-05
+  },
+  {
+   "site": "abu_dhabi_city",
+   "lat": 24.4539,
+   "lon": 54.3773,
+   "time_utc": "2025-12-21T08:30Z",
+   "julian_day": 2461030.854167,
+   "noaa": {
+    "declination_deg": -23.438068108,
+    "eot_min": 1.87280286,
+    "hour_angle_deg": 2.345500659,
+    "zenith_deg": 47.945984025,
+    "refraction_deg": 0.017863659,
+    "apparent_zenith_deg": 47.928120365,
+    "cos_zenith": 0.669830914,
+    "cos_apparent_zenith": 0.670062382,
+    "earth_sun_au": 0.983760078
+   },
+   "pvlib_spa": {
+    "zenith_deg": 47.947896449,
+    "apparent_zenith_deg": 47.929459911
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 47.925378649,
+    "earth_sun_au": 0.983746873
+   },
+   "diff_noaa_minus_spa_zenith_deg": -0.001912424
+  },
+  {
+   "site": "abu_dhabi_city",
+   "lat": 24.4539,
+   "lon": 54.3773,
+   "time_utc": "2025-03-20T03:00Z",
+   "julian_day": 2460754.625,
+   "noaa": {
+    "declination_deg": -0.096347274,
+    "eot_min": -7.472983968,
+    "hour_angle_deg": -82.490945992,
+    "zenith_deg": 83.208097554,
+    "refraction_deg": 0.124994804,
+    "apparent_zenith_deg": 83.08310275,
+    "cos_zenith": 0.118263632,
+    "cos_apparent_zenith": 0.12042961,
+    "earth_sun_au": 0.995810062
+   },
+   "pvlib_spa": {
+    "zenith_deg": 83.211392318,
+    "apparent_zenith_deg": 83.086693195
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 83.090442441,
+    "earth_sun_au": 0.995804989
+   },
+   "diff_noaa_minus_spa_zenith_deg": -0.003294765
+  },
+  {
+   "site": "abu_dhabi_city",
+   "lat": 24.4539,
+   "lon": 54.3773,
+   "time_utc": "2025-07-15T01:45Z",
+   "julian_day": 2460871.572917,
+   "noaa": {
+    "declination_deg": 21.502272925,
+    "eot_min": -5.995094285,
+    "hour_angle_deg": -100.871473627,
+    "zenith_deg": 90.458720541,
+    "refraction_deg": 0.554370259,
+    "apparent_zenith_deg": 89.904350282,
+    "cos_zenith": -0.008006098,
+    "cos_apparent_zenith": 0.001669402,
+    "earth_sun_au": 1.016463056
+   },
+   "pvlib_spa": {
+    "zenith_deg": 90.459698435,
+    "apparent_zenith_deg": 89.912814264
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 89.786381501,
+    "earth_sun_au": 1.016474227
+   },
+   "diff_noaa_minus_spa_zenith_deg": -0.000977894
+  },
+  {
+   "site": "abu_dhabi_city",
+   "lat": 24.4539,
+   "lon": 54.3773,
+   "time_utc": "2025-07-15T14:30Z",
+   "julian_day": 2460872.104167,
+   "noaa": {
+    "declination_deg": 21.417273557,
+    "eot_min": -6.047782261,
+    "hour_angle_deg": 90.365354379,
+    "zenith_deg": 81.61887149,
+    "refraction_deg": 0.103805945,
+    "apparent_zenith_deg": 81.515065545,
+    "cos_zenith": 0.145757184,
+    "cos_apparent_zenith": 0.147549351,
+    "earth_sun_au": 1.016437247
+   },
+   "pvlib_spa": {
+    "zenith_deg": 81.62258472,
+    "apparent_zenith_deg": 81.518435528
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 81.517630351,
+    "earth_sun_au": 1.016448425
+   },
+   "diff_noaa_minus_spa_zenith_deg": -0.00371323
+  },
+  {
+   "site": "abu_dhabi_city",
+   "lat": 24.4539,
+   "lon": 54.3773,
+   "time_utc": "2025-09-23T20:00Z",
+   "julian_day": 2460942.333333,
+   "noaa": {
+    "declination_deg": -0.415409579,
+    "eot_min": 7.81529363,
+    "hour_angle_deg": 176.331123463,
+    "zenith_deg": 155.700439811,
+    "refraction_deg": 0.002605202,
+    "apparent_zenith_deg": 155.697834609,
+    "cos_zenith": -0.911406435,
+    "cos_apparent_zenith": -0.911387724,
+    "earth_sun_au": 1.003299859
+   },
+   "pvlib_spa": {
+    "zenith_deg": 155.703236875,
+    "apparent_zenith_deg": 155.703236875
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 155.700279469,
+    "earth_sun_au": 1.003303728
+   },
+   "diff_noaa_minus_spa_zenith_deg": -0.002797064
+  },
+  {
+   "site": "al_ain",
+   "lat": 24.2075,
+   "lon": 55.7447,
+   "time_utc": "2025-01-15T05:00Z",
+   "julian_day": 2460690.708333,
+   "noaa": {
+    "declination_deg": -21.077390671,
+    "eot_min": -9.391821385,
+    "hour_angle_deg": -51.60325529,
+    "zenith_deg": 67.596683302,
+    "refraction_deg": 0.038873897,
+    "apparent_zenith_deg": 67.557809405,
+    "cos_zenith": 0.381123895,
+    "cos_apparent_zenith": 0.381751076,
+    "earth_sun_au": 0.983651996
+   },
+   "pvlib_spa": {
+    "zenith_deg": 67.597228759,
+    "apparent_zenith_deg": 67.557317028
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 67.556132227,
+    "earth_sun_au": 0.983639047
+   },
+   "diff_noaa_minus_spa_zenith_deg": -0.000545458
+  },
+  {
+   "site": "liwa",
+   "lat": 23.13,
+   "lon": 53.77,
+   "time_utc": "2025-08-01T10:00Z",
+   "julian_day": 2460888.916667,
+   "noaa": {
+    "declination_deg": 17.89560047,
+    "eot_min": -6.35008156,
+    "hour_angle_deg": 22.182479554,
+    "zenith_deg": 21.399576059,
+    "refraction_deg": 0.006323454,
+    "apparent_zenith_deg": 21.393252606,
+    "cos_zenith": 0.931058516,
+    "cos_apparent_zenith": 0.931098779,
+    "earth_sun_au": 1.014948488
+   },
+   "pvlib_spa": {
+    "zenith_deg": 21.39822517,
+    "apparent_zenith_deg": 21.391705242
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 21.394824517,
+    "earth_sun_au": 1.014959883
+   },
+   "diff_noaa_minus_spa_zenith_deg": 0.001350889
+  },
+  {
+   "site": "sydney_check",
+   "lat": -33.8688,
+   "lon": 151.2093,
+   "time_utc": "2025-01-15T02:00Z",
+   "julian_day": 2460690.583333,
+   "noaa": {
+    "declination_deg": -21.100528128,
+    "eot_min": -9.347771559,
+    "hour_angle_deg": -1.127642834,
+    "zenith_deg": 12.807106614,
+    "refraction_deg": 0.003668542,
+    "apparent_zenith_deg": 12.803438072,
+    "cos_zenith": 0.975121867,
+    "cos_apparent_zenith": 0.975136058,
+    "earth_sun_au": 0.98364461
+   },
+   "pvlib_spa": {
+    "zenith_deg": 12.807217246,
+    "apparent_zenith_deg": 12.803446039
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 12.806323356,
+    "earth_sun_au": 0.983631661
+   },
+   "diff_noaa_minus_spa_zenith_deg": -0.000110632
+  },
+  {
+   "site": "phoenix_check",
+   "lat": 33.4484,
+   "lon": -112.074,
+   "time_utc": "2025-07-15T19:00Z",
+   "julian_day": 2460872.291667,
+   "noaa": {
+    "declination_deg": 21.386864549,
+    "eot_min": -6.065804216,
+    "hour_angle_deg": -8.59045111,
+    "zenith_deg": 14.255418566,
+    "refraction_deg": 0.004100062,
+    "apparent_zenith_deg": 14.251318505,
+    "cos_zenith": 0.969207626,
+    "cos_apparent_zenith": 0.969225245,
+    "earth_sun_au": 1.01642782
+   },
+   "pvlib_spa": {
+    "zenith_deg": 14.254962225,
+    "apparent_zenith_deg": 14.250744177
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 14.253638551,
+    "earth_sun_au": 1.016439002
+   },
+   "diff_noaa_minus_spa_zenith_deg": 0.000456341
+  },
+  {
+   "site": "tromso_check",
+   "lat": 69.6492,
+   "lon": 18.9553,
+   "time_utc": "2025-06-21T10:00Z",
+   "julian_day": 2460847.916667,
+   "noaa": {
+    "declination_deg": 23.438187533,
+    "eot_min": -1.85648264,
+    "hour_angle_deg": -11.508820716,
+    "zenith_deg": 46.71804112,
+    "refraction_deg": 0.017113733,
+    "apparent_zenith_deg": 46.700927387,
+    "cos_zenith": 0.68558916,
+    "cos_apparent_zenith": 0.685806573,
+    "earth_sun_au": 1.016251524
+   },
+   "pvlib_spa": {
+    "zenith_deg": 46.719522603,
+    "apparent_zenith_deg": 46.701858589
+   },
+   "larson_original_C": {
+    "apparent_zenith_deg": 46.704410952,
+    "earth_sun_au": 1.016262602
+   },
+   "diff_noaa_minus_spa_zenith_deg": -0.001481482
+  }
+ ],
+ "full_cases": [
+  {
+   "id": "inland_summer_noon_extreme",
+   "desc": "Open-Meteo snapshot 13:00 GST: 46.2 C, ~13 % RH, strong sun",
+   "site": "madinat_zayed",
+   "inputs": {
+    "lat": 23.6833,
+    "lon": 53.7,
+    "time_end_utc": "2025-07-15T09:00Z",
+    "avg_minutes": 60,
+    "ta_c": 46.2,
+    "rh_pct": null,
+    "td_c": 11.5,
+    "p_hpa": 983.7,
+    "u10_ms": 1.38,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 916.0,
+    "direct_wm2": 633.0,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 13.285303539,
+    "time_eval_utc": "2025-07-15T08:30Z",
+    "julian_day": 2460871.854167,
+    "zenith_deg": 2.243652539,
+    "apparent_zenith_deg": 2.243652539,
+    "cos_zenith": 0.999233379,
+    "earth_sun_au": 1.016449558,
+    "toa_wm2": 1322.098416834,
+    "clearness_before_cap": 0.692837983,
+    "ghi_used_wm2": 916.0,
+    "fdir": 0.733511463,
+    "u10_after_floor_ms": 1.38,
+    "daytime": true,
+    "stability_class": 1,
+    "wind_exponent": 0.15,
+    "u2_ms": 1.084010742,
+    "cos_zenith_sunlit_mean_info": 0.996803656,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 63.797670157,
+    "tnwb_c": 25.852069222,
+    "tpsy_c": 22.396448955,
+    "wbgt_c": 35.475982487
+   },
+   "iterations": {
+    "tg": 24,
+    "tnwb": 15,
+    "tpsy": 17
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 44.21402684,
+    "tnwb_c": 23.095952751,
+    "wbgt_outdoor_formula_c": 29.629972294,
+    "wbgt_indoor_formula_c": 29.431374978
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 13.477227658,
+    "wbgt_c": 35.43195047,
+    "delta_vs_liljegren_c": -0.044032017
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.999231971,
+    "fdir": 0.733536401,
+    "u2_ms": 1.084010742,
+    "wbgt_c": 35.475903414,
+    "status": 0,
+    "delta_vs_primary_c": -7.9073e-05
+   },
+   "sensitivity_fdir_openmeteo": {
+    "fdir_openmeteo_direct_over_ghi": 0.691048035,
+    "wbgt_c": 35.646116367,
+    "delta_vs_primary_c": 0.17013388,
+    "note": "sensitivity only: Open-Meteo direct_radiation/shortwave_radiation, no normsolar cap"
+   },
+   "checks": {
+    "api_vs_components_c": 0.0,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "inland_noon_low_wind_0p5",
+   "desc": "same as above with 10 m wind 0.5 m/s (below KNMI floor 0.62)",
+   "site": "madinat_zayed",
+   "inputs": {
+    "lat": 23.6833,
+    "lon": 53.7,
+    "time_end_utc": "2025-07-15T09:00Z",
+    "avg_minutes": 60,
+    "ta_c": 46.2,
+    "rh_pct": null,
+    "td_c": 11.5,
+    "p_hpa": 983.7,
+    "u10_ms": 0.5,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 916.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 13.285303539,
+    "time_eval_utc": "2025-07-15T08:30Z",
+    "julian_day": 2460871.854167,
+    "zenith_deg": 2.243652539,
+    "apparent_zenith_deg": 2.243652539,
+    "cos_zenith": 0.999233379,
+    "earth_sun_au": 1.016449558,
+    "toa_wm2": 1322.098416834,
+    "clearness_before_cap": 0.692837983,
+    "ghi_used_wm2": 916.0,
+    "fdir": 0.733511463,
+    "u10_after_floor_ms": 0.62,
+    "daytime": true,
+    "stability_class": 1,
+    "wind_exponent": 0.15,
+    "u2_ms": 0.487019319,
+    "cos_zenith_sunlit_mean_info": 0.996803656,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 68.324931887,
+    "tnwb_c": 27.649957592,
+    "tpsy_c": 22.396448955,
+    "wbgt_c": 37.639956691
+   },
+   "iterations": {
+    "tg": 31,
+    "tnwb": 14,
+    "tpsy": 17
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 43.664699862,
+    "tnwb_c": 23.488233277,
+    "wbgt_outdoor_formula_c": 29.794703266,
+    "wbgt_indoor_formula_c": 29.541173252
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 13.477227658,
+    "wbgt_c": 35.43195047,
+    "delta_vs_liljegren_c": -2.208006222
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.999231971,
+    "fdir": 0.733536401,
+    "u2_ms": 0.392757515,
+    "wbgt_c": 38.309977746,
+    "status": 0,
+    "delta_vs_primary_c": 0.670021054
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 2.1316282072803006e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "humid_coastal_morning",
+   "desc": "08:00 GST humid coastal morning 35 C / 70 %",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-08-10T04:00Z",
+    "avg_minutes": 60,
+    "ta_c": 35.0,
+    "rh_pct": 70.0,
+    "td_c": null,
+    "p_hpa": 997.0,
+    "u10_ms": 2.5,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 300.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 70.0,
+    "time_eval_utc": "2025-08-10T03:30Z",
+    "julian_day": 2460897.645833,
+    "zenith_deg": 69.789317922,
+    "apparent_zenith_deg": 69.74586512,
+    "cos_zenith": 0.346184763,
+    "earth_sun_au": 1.013687242,
+    "toa_wm2": 460.541214889,
+    "clearness_before_cap": 0.651407497,
+    "ghi_used_wm2": 300.0,
+    "fdir": 0.66640164,
+    "u10_after_floor_ms": 2.5,
+    "daytime": true,
+    "stability_class": 3,
+    "wind_exponent": 0.2,
+    "u2_ms": 1.811949159,
+    "cos_zenith_sunlit_mean_info": 0.345545611,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 43.694482493,
+    "tnwb_c": 30.991356927,
+    "tpsy_c": 29.940668474,
+    "wbgt_c": 33.932846348
+   },
+   "iterations": {
+    "tg": 16,
+    "tnwb": 9,
+    "tpsy": 9
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 34.737763035,
+    "tnwb_c": 30.031788534,
+    "wbgt_outdoor_formula_c": 31.469804581,
+    "wbgt_indoor_formula_c": 31.443580884
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 39.211555406,
+    "wbgt_c": 39.195141275,
+    "delta_vs_liljegren_c": 5.262294927
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.346190865,
+    "fdir": 0.666406781,
+    "u2_ms": 1.811949159,
+    "wbgt_c": 33.932825818,
+    "status": 0,
+    "delta_vs_primary_c": -2.053e-05
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 2.842170943040401e-14,
+    "c_transliteration_max_abs_c": 5.684341886080802e-14,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "night_humid_no_sun",
+   "desc": "midnight GST 33 C / 60 %, no sun",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-07-15T20:00Z",
+    "avg_minutes": 60,
+    "ta_c": 33.0,
+    "rh_pct": 60.0,
+    "td_c": null,
+    "p_hpa": 996.3,
+    "u10_ms": 2.26,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 0.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 60.0,
+    "time_eval_utc": "2025-07-15T19:30Z",
+    "julian_day": 2460872.3125,
+    "zenith_deg": 132.003699046,
+    "apparent_zenith_deg": 131.997291644,
+    "cos_zenith": -0.669095477,
+    "earth_sun_au": 1.016426762,
+    "toa_wm2": 0.0,
+    "clearness_before_cap": null,
+    "ghi_used_wm2": 0.0,
+    "fdir": 0.0,
+    "u10_after_floor_ms": 2.26,
+    "daytime": false,
+    "stability_class": 5,
+    "wind_exponent": 0.3,
+    "u2_ms": 1.39449653,
+    "cos_zenith_sunlit_mean_info": 0.0,
+    "sunlit_fraction_info": 0.0
+   },
+   "outputs": {
+    "tg_c": 32.380007629,
+    "tnwb_c": 26.382294373,
+    "tpsy_c": 26.246638882,
+    "wbgt_c": 28.243607587
+   },
+   "iterations": {
+    "tg": 11,
+    "tnwb": 11,
+    "tpsy": 12
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 32.380007629,
+    "tnwb_c": 26.382294373,
+    "wbgt_outdoor_formula_c": 28.243607587,
+    "wbgt_indoor_formula_c": 28.18160835
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 30.072226126,
+    "wbgt_c": 34.469384868,
+    "delta_vs_liljegren_c": 6.225777281
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": -0.669212477,
+    "fdir": 0.0,
+    "u2_ms": 1.39449653,
+    "wbgt_c": 28.243607587,
+    "status": 0,
+    "delta_vs_primary_c": -0.0
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 1.7763568394002505e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "coastal_strong_wind_6",
+   "desc": "14:00 GST shamal 6 m/s",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-06-10T10:00Z",
+    "avg_minutes": 60,
+    "ta_c": 40.0,
+    "rh_pct": 35.0,
+    "td_c": null,
+    "p_hpa": 995.0,
+    "u10_ms": 6.0,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 700.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 35.0,
+    "time_eval_utc": "2025-06-10T09:30Z",
+    "julian_day": 2460836.895833,
+    "zenith_deg": 15.614341718,
+    "apparent_zenith_deg": 15.609831728,
+    "cos_zenith": 0.963116407,
+    "earth_sun_au": 1.015256916,
+    "toa_wm2": 1277.307265738,
+    "clearness_before_cap": 0.548027886,
+    "ghi_used_wm2": 700.0,
+    "fdir": 0.474661641,
+    "u10_after_floor_ms": 6.0,
+    "daytime": true,
+    "stability_class": 4,
+    "wind_exponent": 0.25,
+    "u2_ms": 4.01244183,
+    "cos_zenith_sunlit_mean_info": 0.960833565,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 50.112638559,
+    "tnwb_c": 27.502449513,
+    "tpsy_c": 26.099478424,
+    "wbgt_c": 33.274242371
+   },
+   "iterations": {
+    "tg": 12,
+    "tnwb": 13,
+    "tpsy": 13
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 39.400551293,
+    "tnwb_c": 26.275484529,
+    "wbgt_outdoor_formula_c": 30.272949429,
+    "wbgt_indoor_formula_c": 30.213004558
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 25.709549647,
+    "wbgt_c": 36.723853011,
+    "delta_vs_liljegren_c": 3.449610641
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.963113795,
+    "fdir": 0.474688229,
+    "u2_ms": 4.01244183,
+    "wbgt_c": 33.274203869,
+    "status": 0,
+    "delta_vs_primary_c": -3.8502e-05
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 1.4210854715202004e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "winter_noon",
+   "desc": "13:00 GST winter 25 C",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-01-15T09:00Z",
+    "avg_minutes": 60,
+    "ta_c": 25.0,
+    "rh_pct": 50.0,
+    "td_c": null,
+    "p_hpa": 1018.0,
+    "u10_ms": 3.5,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 650.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 50.0,
+    "time_eval_utc": "2025-01-15T08:30Z",
+    "julian_day": 2460690.854167,
+    "zenith_deg": 45.506593311,
+    "apparent_zenith_deg": 45.490186955,
+    "cos_zenith": 0.701031412,
+    "earth_sun_au": 0.983660712,
+    "toa_wm2": 990.410741563,
+    "clearness_before_cap": 0.656293367,
+    "ghi_used_wm2": 650.0,
+    "fdir": 0.674655772,
+    "u10_after_floor_ms": 3.5,
+    "daytime": true,
+    "stability_class": 3,
+    "wind_exponent": 0.2,
+    "u2_ms": 2.536728823,
+    "cos_zenith_sunlit_mean_info": 0.698611387,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 36.381145559,
+    "tnwb_c": 19.815653183,
+    "tpsy_c": 17.721001403,
+    "wbgt_c": 23.64718634
+   },
+   "iterations": {
+    "tg": 14,
+    "tnwb": 18,
+    "tpsy": 19
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 23.984905758,
+    "tnwb_c": 17.76890157,
+    "wbgt_outdoor_formula_c": 19.735212251,
+    "wbgt_indoor_formula_c": 19.633702826
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 15.79148126,
+    "wbgt_c": 24.321052135,
+    "delta_vs_liljegren_c": 0.673865795
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.701064119,
+    "fdir": 0.67457528,
+    "u2_ms": 2.536728823,
+    "wbgt_c": 23.647232086,
+    "status": 0,
+    "delta_vs_primary_c": 4.5746e-05
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 0.0,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "dust_overcast_low_ghi",
+   "desc": "13:00 GST dust event, GHI 350 (clear-sky ~900)",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-07-20T09:00Z",
+    "avg_minutes": 60,
+    "ta_c": 42.0,
+    "rh_pct": 30.0,
+    "td_c": null,
+    "p_hpa": 995.0,
+    "u10_ms": 7.0,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 350.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 30.0,
+    "time_eval_utc": "2025-07-20T08:30Z",
+    "julian_day": 2460876.854167,
+    "zenith_deg": 3.879944476,
+    "apparent_zenith_deg": 3.879944476,
+    "cos_zenith": 0.997708025,
+    "earth_sun_au": 1.016147663,
+    "toa_wm2": 1320.864703799,
+    "clearness_before_cap": 0.264977934,
+    "ghi_used_wm2": 350.0,
+    "fdir": 0.02781989,
+    "u10_after_floor_ms": 7.0,
+    "daytime": true,
+    "stability_class": 4,
+    "wind_exponent": 0.25,
+    "u2_ms": 4.681182135,
+    "cos_zenith_sunlit_mean_info": 0.995279245,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 47.31918495,
+    "tnwb_c": 27.031263595,
+    "tpsy_c": 26.067089968,
+    "wbgt_c": 32.585721506
+   },
+   "iterations": {
+    "tg": 10,
+    "tnwb": 13,
+    "tpsy": 13
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 41.385882424,
+    "tnwb_c": 26.255859673,
+    "wbgt_outdoor_formula_c": 30.856278256,
+    "wbgt_indoor_formula_c": 30.794866498
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 24.493647934,
+    "wbgt_c": 37.380003638,
+    "delta_vs_liljegren_c": 4.794282132
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.997706288,
+    "fdir": 0.027823794,
+    "u2_ms": 4.681182135,
+    "wbgt_c": 32.585718639,
+    "status": 0,
+    "delta_vs_primary_c": -2.867e-06
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 0.0,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "dust_haze_moderate",
+   "desc": "12:00 GST haze, GHI 600",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-07-20T08:00Z",
+    "avg_minutes": 60,
+    "ta_c": 44.0,
+    "rh_pct": 25.0,
+    "td_c": null,
+    "p_hpa": 995.0,
+    "u10_ms": 4.0,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 600.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 25.0,
+    "time_eval_utc": "2025-07-20T07:30Z",
+    "julian_day": 2460876.8125,
+    "zenith_deg": 14.130302484,
+    "apparent_zenith_deg": 14.126239911,
+    "cos_zenith": 0.969760345,
+    "earth_sun_au": 1.01615066,
+    "toa_wm2": 1283.857221507,
+    "clearness_before_cap": 0.467341687,
+    "ghi_used_wm2": 600.0,
+    "fdir": 0.314476722,
+    "u10_after_floor_ms": 4.0,
+    "daytime": true,
+    "stability_class": 3,
+    "wind_exponent": 0.2,
+    "u2_ms": 2.899118655,
+    "cos_zenith_sunlit_mean_info": 0.967411257,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 54.140150177,
+    "tnwb_c": 27.521342765,
+    "tpsy_c": 25.782207155,
+    "wbgt_c": 34.492969971
+   },
+   "iterations": {
+    "tg": 15,
+    "tnwb": 13,
+    "tpsy": 14
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 43.160217006,
+    "tnwb_c": 26.075206516,
+    "wbgt_outdoor_formula_c": 31.284687963,
+    "wbgt_indoor_formula_c": 31.200709663
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 22.653023586,
+    "wbgt_c": 37.790638269,
+    "delta_vs_liljegren_c": 3.297668298
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.969758286,
+    "fdir": 0.314498895,
+    "u2_ms": 2.899118655,
+    "wbgt_c": 34.492937082,
+    "status": 0,
+    "delta_vs_primary_c": -3.2888e-05
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 1.4210854715202004e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "sunrise_hour",
+   "desc": "06:00 GST, sun rose during the hour (mid-hour sun below horizon)",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-07-15T02:00Z",
+    "avg_minutes": 60,
+    "ta_c": 32.4,
+    "rh_pct": null,
+    "td_c": 26.7,
+    "p_hpa": 995.6,
+    "u10_ms": 1.86,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 2.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 71.998136797,
+    "time_eval_utc": "2025-07-15T01:30Z",
+    "julian_day": 2460871.5625,
+    "zenith_deg": 93.55721472,
+    "apparent_zenith_deg": 93.464397222,
+    "cos_zenith": -0.060428301,
+    "earth_sun_au": 1.016463549,
+    "toa_wm2": 0.0,
+    "clearness_before_cap": null,
+    "ghi_used_wm2": 2.0,
+    "fdir": 0.0,
+    "u10_after_floor_ms": 1.86,
+    "daytime": false,
+    "stability_class": 5,
+    "wind_exponent": 0.3,
+    "u2_ms": 1.147682985,
+    "cos_zenith_sunlit_mean_info": 0.024141311,
+    "sunlit_fraction_info": 0.266666667
+   },
+   "outputs": {
+    "tg_c": 31.998075405,
+    "tnwb_c": 28.017926273,
+    "tpsy_c": 27.920252983,
+    "wbgt_c": 29.252163472
+   },
+   "iterations": {
+    "tg": 10,
+    "tnwb": 10,
+    "tpsy": 10
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 31.943114678,
+    "tnwb_c": 28.008017965,
+    "wbgt_outdoor_formula_c": 29.234235511,
+    "wbgt_indoor_formula_c": 29.188546979
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 34.890371087,
+    "wbgt_c": 36.022715837,
+    "delta_vs_liljegren_c": 6.770552365
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": -0.062066114,
+    "fdir": 0.0,
+    "u2_ms": 1.147682985,
+    "wbgt_c": 29.252163472,
+    "status": 0,
+    "delta_vs_primary_c": 0.0
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 3.552713678800501e-15,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "low_sun_evening",
+   "desc": "19:00 GST low sun",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-07-15T15:00Z",
+    "avg_minutes": 60,
+    "ta_c": 34.5,
+    "rh_pct": null,
+    "td_c": 28.3,
+    "p_hpa": 994.4,
+    "u10_ms": 4.91,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 64.0,
+    "direct_wm2": 13.0,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 70.291661911,
+    "time_eval_utc": "2025-07-15T14:30Z",
+    "julian_day": 2460872.104167,
+    "zenith_deg": 81.61887149,
+    "apparent_zenith_deg": 81.515065545,
+    "cos_zenith": 0.147549351,
+    "earth_sun_au": 1.016437247,
+    "toa_wm2": 195.229155502,
+    "clearness_before_cap": 0.327819889,
+    "ghi_used_wm2": 64.0,
+    "fdir": 0.084371103,
+    "u10_after_floor_ms": 4.91,
+    "daytime": true,
+    "stability_class": 4,
+    "wind_exponent": 0.25,
+    "u2_ms": 3.283514897,
+    "cos_zenith_sunlit_mean_info": 0.147897242,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 35.74166652,
+    "tnwb_c": 29.768240786,
+    "tpsy_c": 29.537309262,
+    "wbgt_c": 31.436101854
+   },
+   "iterations": {
+    "tg": 9,
+    "tnwb": 9,
+    "tpsy": 9
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 34.272781593,
+    "tnwb_c": 29.598562711,
+    "wbgt_outdoor_formula_c": 31.023550216,
+    "wbgt_indoor_formula_c": 31.000828376
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 38.30107463,
+    "wbgt_c": 38.55382233,
+    "delta_vs_liljegren_c": 7.117720476
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.147505076,
+    "fdir": 0.08449602,
+    "u2_ms": 3.283514897,
+    "wbgt_c": 31.436184361,
+    "status": 0,
+    "delta_vs_primary_c": 8.2507e-05
+   },
+   "sensitivity_fdir_openmeteo": {
+    "fdir_openmeteo_direct_over_ghi": 0.203125,
+    "wbgt_c": 31.496210892,
+    "delta_vs_primary_c": 0.060109038,
+    "note": "sensitivity only: Open-Meteo direct_radiation/shortwave_radiation, no normsolar cap"
+   },
+   "checks": {
+    "api_vs_components_c": 1.0658141036401503e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "al_ain_inland_elevated",
+   "desc": "Al Ain 13:00 GST, ~290 m elevation",
+   "site": "al_ain",
+   "inputs": {
+    "lat": 24.2075,
+    "lon": 55.7447,
+    "time_end_utc": "2025-06-20T09:00Z",
+    "avg_minutes": 60,
+    "ta_c": 45.0,
+    "rh_pct": 10.0,
+    "td_c": null,
+    "p_hpa": 965.0,
+    "u10_ms": 3.0,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 950.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 10.0,
+    "time_eval_utc": "2025-06-20T08:30Z",
+    "julian_day": 2460846.854167,
+    "zenith_deg": 2.708527691,
+    "apparent_zenith_deg": 2.708527691,
+    "cos_zenith": 0.998882853,
+    "earth_sun_au": 1.016179845,
+    "toa_wm2": 1322.336296448,
+    "clearness_before_cap": 0.718425413,
+    "ghi_used_wm2": 950.0,
+    "fdir": 0.771530241,
+    "u10_after_floor_ms": 3.0,
+    "daytime": true,
+    "stability_class": 2,
+    "wind_exponent": 0.15,
+    "u2_ms": 2.356545091,
+    "cos_zenith_sunlit_mean_info": 0.996500967,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 58.637663551,
+    "tnwb_c": 22.526520712,
+    "tpsy_c": 20.113426396,
+    "wbgt_c": 31.996097209
+   },
+   "iterations": {
+    "tg": 17,
+    "tnwb": 18,
+    "tpsy": 20
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 43.134775335,
+    "tnwb_c": 20.573378972,
+    "wbgt_outdoor_formula_c": 27.528320348,
+    "wbgt_indoor_formula_c": 27.341797881
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 9.540541567,
+    "wbgt_c": 33.204432836,
+    "delta_vs_liljegren_c": 1.208335627
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.998882962,
+    "fdir": 0.771552581,
+    "u2_ms": 2.356545091,
+    "wbgt_c": 31.996026151,
+    "status": 0,
+    "delta_vs_primary_c": -7.1058e-05
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 1.4210854715202004e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "ruwais_humid_heat",
+   "desc": "industrial coast 11:00 GST, very humid heat",
+   "site": "ruwais",
+   "inputs": {
+    "lat": 24.11,
+    "lon": 52.73,
+    "time_end_utc": "2025-08-15T07:00Z",
+    "avg_minutes": 60,
+    "ta_c": 40.0,
+    "rh_pct": 60.0,
+    "td_c": null,
+    "p_hpa": 996.0,
+    "u10_ms": 2.0,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 800.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 60.0,
+    "time_eval_utc": "2025-08-15T06:30Z",
+    "julian_day": 2460902.770833,
+    "zenith_deg": 30.837458986,
+    "apparent_zenith_deg": 30.827828106,
+    "cos_zenith": 0.8587111,
+    "earth_sun_au": 1.012804215,
+    "toa_wm2": 1144.365064493,
+    "clearness_before_cap": 0.699077615,
+    "ghi_used_wm2": 800.0,
+    "fdir": 0.743031418,
+    "u10_after_floor_ms": 2.0,
+    "daytime": true,
+    "stability_class": 2,
+    "wind_exponent": 0.15,
+    "u2_ms": 1.57103006,
+    "cos_zenith_sunlit_mean_info": 0.856544632,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 55.944963581,
+    "tnwb_c": 34.124096662,
+    "tpsy_c": 32.386269477,
+    "wbgt_c": 39.075860379
+   },
+   "iterations": {
+    "tg": 20,
+    "tnwb": 8,
+    "tpsy": 8
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 39.876869102,
+    "tnwb_c": 32.553279735,
+    "wbgt_outdoor_formula_c": 34.762669635,
+    "wbgt_indoor_formula_c": 34.750356545
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 44.073513681,
+    "wbgt_c": 43.940890877,
+    "delta_vs_liljegren_c": 4.865030497
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.858718758,
+    "fdir": 0.743045132,
+    "u2_ms": 1.57103006,
+    "wbgt_c": 39.075815486,
+    "status": 0,
+    "delta_vs_primary_c": -4.4893e-05
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 2.1316282072803006e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "calm_humid_night",
+   "desc": "03:00 GST calm humid night (wind floored)",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-08-20T23:00Z",
+    "avg_minutes": 60,
+    "ta_c": 31.0,
+    "rh_pct": 85.0,
+    "td_c": null,
+    "p_hpa": 997.0,
+    "u10_ms": 0.3,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 0.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 85.0,
+    "time_eval_utc": "2025-08-20T22:30Z",
+    "julian_day": 2460908.4375,
+    "zenith_deg": 132.489267119,
+    "apparent_zenith_deg": 132.482967901,
+    "cos_zenith": -0.67537101,
+    "earth_sun_au": 1.011714286,
+    "toa_wm2": 0.0,
+    "clearness_before_cap": null,
+    "ghi_used_wm2": 0.0,
+    "fdir": 0.0,
+    "u10_after_floor_ms": 0.62,
+    "daytime": false,
+    "stability_class": 5,
+    "wind_exponent": 0.3,
+    "u2_ms": 0.382560995,
+    "cos_zenith_sunlit_mean_info": 0.0,
+    "sunlit_fraction_info": 0.0
+   },
+   "outputs": {
+    "tg_c": 30.535147378,
+    "tnwb_c": 28.822546455,
+    "tpsy_c": 28.758659852,
+    "wbgt_c": 29.382811994
+   },
+   "iterations": {
+    "tg": 15,
+    "tnwb": 8,
+    "tpsy": 9
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 30.535147378,
+    "tnwb_c": 28.822546455,
+    "wbgt_outdoor_formula_c": 29.382811994,
+    "wbgt_indoor_formula_c": 29.336326732
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 38.055068591,
+    "wbgt_c": 36.472641956,
+    "delta_vs_liljegren_c": 7.089829962
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": -0.675441107,
+    "fdir": 0.0,
+    "u2_ms": 0.185110159,
+    "wbgt_c": 29.382769911,
+    "status": 0,
+    "delta_vs_primary_c": -4.2083e-05
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 1.4210854715202004e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "spring_morning",
+   "desc": "09:00 GST spring",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-04-15T05:00Z",
+    "avg_minutes": 60,
+    "ta_c": 30.0,
+    "rh_pct": 45.0,
+    "td_c": null,
+    "p_hpa": 1010.0,
+    "u10_ms": 4.0,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 600.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 45.0,
+    "time_eval_utc": "2025-04-15T04:30Z",
+    "julian_day": 2460780.6875,
+    "zenith_deg": 57.022047117,
+    "apparent_zenith_deg": 56.997245429,
+    "cos_zenith": 0.544679355,
+    "earth_sun_au": 1.00323403,
+    "toa_wm2": 739.783972622,
+    "clearness_before_cap": 0.811047579,
+    "ghi_used_wm2": 600.0,
+    "fdir": 0.885848195,
+    "u10_after_floor_ms": 4.0,
+    "daytime": true,
+    "stability_class": 3,
+    "wind_exponent": 0.2,
+    "u2_ms": 2.899118655,
+    "cos_zenith_sunlit_mean_info": 0.543334932,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 40.991451099,
+    "tnwb_c": 22.47989855,
+    "tpsy_c": 20.812472211,
+    "wbgt_c": 26.934219205
+   },
+   "iterations": {
+    "tg": 13,
+    "tnwb": 16,
+    "tpsy": 17
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 29.129950802,
+    "tnwb_c": 20.919099332,
+    "wbgt_outdoor_formula_c": 23.469359693,
+    "wbgt_indoor_formula_c": 23.382354773
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 19.029222646,
+    "wbgt_c": 28.4284845,
+    "delta_vs_liljegren_c": 1.494265295
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.544608471,
+    "fdir": 0.885962828,
+    "u2_ms": 2.899118655,
+    "wbgt_c": 26.934405485,
+    "status": 0,
+    "delta_vs_primary_c": 0.000186281
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 1.7763568394002505e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "autumn_afternoon",
+   "desc": "15:00 GST autumn",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-10-15T11:00Z",
+    "avg_minutes": 60,
+    "ta_c": 36.0,
+    "rh_pct": 40.0,
+    "td_c": null,
+    "p_hpa": 1008.0,
+    "u10_ms": 3.0,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 450.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 40.0,
+    "time_eval_utc": "2025-10-15T10:30Z",
+    "julian_day": 2460963.9375,
+    "zenith_deg": 47.894918031,
+    "apparent_zenith_deg": 47.877086258,
+    "cos_zenith": 0.670723296,
+    "earth_sun_au": 0.997131883,
+    "toa_wm2": 922.160890362,
+    "clearness_before_cap": 0.48798426,
+    "ghi_used_wm2": 450.0,
+    "fdir": 0.355171145,
+    "u10_after_floor_ms": 3.0,
+    "daytime": true,
+    "stability_class": 3,
+    "wind_exponent": 0.2,
+    "u2_ms": 2.174338991,
+    "cos_zenith_sunlit_mean_info": 0.668635438,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 44.916014678,
+    "tnwb_c": 26.045525018,
+    "tpsy_c": 24.410640099,
+    "wbgt_c": 30.815070448
+   },
+   "iterations": {
+    "tg": 15,
+    "tnwb": 14,
+    "tpsy": 14
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 35.196863391,
+    "tnwb_c": 24.606250457,
+    "wbgt_outdoor_formula_c": 27.863747998,
+    "wbgt_indoor_formula_c": 27.783434337
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 23.673482886,
+    "wbgt_c": 33.655678774,
+    "delta_vs_liljegren_c": 2.840608326
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.670766276,
+    "fdir": 0.355103005,
+    "u2_ms": 2.174338991,
+    "wbgt_c": 30.815093422,
+    "status": 0,
+    "delta_vs_primary_c": 2.2973e-05
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 7.105427357601002e-15,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "solar_cap_cloud_enhancement",
+   "desc": "GHI above 0.85*TOA -> normsolar cap rescales GHI",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-06-21T09:00Z",
+    "avg_minutes": 60,
+    "ta_c": 44.0,
+    "rh_pct": 20.0,
+    "td_c": null,
+    "p_hpa": 994.0,
+    "u10_ms": 2.0,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 1150.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 20.0,
+    "time_eval_utc": "2025-06-21T08:30Z",
+    "julian_day": 2460847.854167,
+    "zenith_deg": 1.64543535,
+    "apparent_zenith_deg": 1.64543535,
+    "cos_zenith": 0.999587659,
+    "earth_sun_au": 1.016247453,
+    "toa_wm2": 1323.093268122,
+    "clearness_before_cap": 0.869175309,
+    "ghi_used_wm2": 1124.629277904,
+    "fdir": 0.9,
+    "u10_after_floor_ms": 2.0,
+    "daytime": true,
+    "stability_class": 1,
+    "wind_exponent": 0.15,
+    "u2_ms": 1.57103006,
+    "cos_zenith_sunlit_mean_info": 0.997207716,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 62.288682856,
+    "tnwb_c": 26.490615218,
+    "tpsy_c": 23.935418222,
+    "wbgt_c": 35.401167224
+   },
+   "iterations": {
+    "tg": 21,
+    "tnwb": 14,
+    "tpsy": 16
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 42.66691428,
+    "tnwb_c": 24.405873157,
+    "wbgt_outdoor_formula_c": 30.017494066,
+    "wbgt_indoor_formula_c": 29.884185494
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 18.122418868,
+    "wbgt_c": 36.010110615,
+    "delta_vs_liljegren_c": 0.608943391
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.999587029,
+    "fdir": 0.9,
+    "u2_ms": 1.57103006,
+    "wbgt_c": 35.401065044,
+    "status": 0,
+    "delta_vs_primary_c": -0.000102179
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 1.4210854715202004e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "liwa_very_dry",
+   "desc": "Liwa 14:00 GST, 48 C / 6 %",
+   "site": "liwa",
+   "inputs": {
+    "lat": 23.13,
+    "lon": 53.77,
+    "time_end_utc": "2025-06-25T10:00Z",
+    "avg_minutes": 60,
+    "ta_c": 48.0,
+    "rh_pct": 6.0,
+    "td_c": null,
+    "p_hpa": 990.0,
+    "u10_ms": 2.0,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 870.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 6.0,
+    "time_eval_utc": "2025-06-25T09:30Z",
+    "julian_day": 2460851.895833,
+    "zenith_deg": 14.320645642,
+    "apparent_zenith_deg": 14.31652602,
+    "cos_zenith": 0.968944448,
+    "earth_sun_au": 1.016473068,
+    "toa_wm2": 1281.96344394,
+    "clearness_before_cap": 0.678646497,
+    "ghi_used_wm2": 870.0,
+    "fdir": 0.7112749,
+    "u10_after_floor_ms": 2.0,
+    "daytime": true,
+    "stability_class": 2,
+    "wind_exponent": 0.15,
+    "u2_ms": 1.57103006,
+    "cos_zenith_sunlit_mean_info": 0.966627187,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 62.129254131,
+    "tnwb_c": 22.930738944,
+    "tpsy_c": 19.7053774,
+    "wbgt_c": 33.277368087
+   },
+   "iterations": {
+    "tg": 20,
+    "tnwb": 18,
+    "tpsy": 21
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 45.36623205,
+    "tnwb_c": 20.353038331,
+    "wbgt_outdoor_formula_c": 28.120373242,
+    "wbgt_indoor_formula_c": 27.856996447
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 6.667216564,
+    "wbgt_c": 33.77621611,
+    "delta_vs_liljegren_c": 0.498848022
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.968945724,
+    "fdir": 0.711297027,
+    "u2_ms": 1.57103006,
+    "wbgt_c": 33.277292403,
+    "status": 0,
+    "delta_vs_primary_c": -7.5684e-05
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 2.842170943040401e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "winter_night",
+   "desc": "02:00 GST winter night",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-01-15T22:00Z",
+    "avg_minutes": 60,
+    "ta_c": 18.0,
+    "rh_pct": 75.0,
+    "td_c": null,
+    "p_hpa": 1019.0,
+    "u10_ms": 1.5,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 0.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 75.0,
+    "time_eval_utc": "2025-01-15T21:30Z",
+    "julian_day": 2460691.395833,
+    "zenith_deg": 166.206949006,
+    "apparent_zenith_deg": 166.2055325,
+    "cos_zenith": -0.971157308,
+    "earth_sun_au": 0.983694013,
+    "toa_wm2": 0.0,
+    "clearness_before_cap": null,
+    "ghi_used_wm2": 0.0,
+    "fdir": 0.0,
+    "u10_after_floor_ms": 1.5,
+    "daytime": false,
+    "stability_class": 5,
+    "wind_exponent": 0.3,
+    "u2_ms": 0.925550794,
+    "cos_zenith_sunlit_mean_info": 0.0,
+    "sunlit_fraction_info": 0.0
+   },
+   "outputs": {
+    "tg_c": 16.606478588,
+    "tnwb_c": 15.026625108,
+    "tpsy_c": 15.170563078,
+    "wbgt_c": 15.639933293
+   },
+   "iterations": {
+    "tg": 12,
+    "tnwb": 17,
+    "tpsy": 18
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 16.606478588,
+    "tnwb_c": 15.026625108,
+    "wbgt_outdoor_formula_c": 15.639933293,
+    "wbgt_indoor_formula_c": 15.500581152
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 15.442872713,
+    "wbgt_c": 20.215048976,
+    "delta_vs_liljegren_c": 4.575115683
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": -0.971158102,
+    "fdir": 0.0,
+    "u2_ms": 0.925550794,
+    "wbgt_c": 15.639933293,
+    "status": 0,
+    "delta_vs_primary_c": -0.0
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 1.0658141036401503e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "openmeteo_snapshot_peak",
+   "desc": "Open-Meteo snapshot 11:00 GST (Abu Dhabi peak hour)",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-07-15T07:00Z",
+    "avg_minutes": 60,
+    "ta_c": 43.3,
+    "rh_pct": null,
+    "td_c": 16.6,
+    "p_hpa": 995.9,
+    "u10_ms": 0.87,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 754.0,
+    "direct_wm2": 509.0,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 21.482605844,
+    "time_eval_utc": "2025-07-15T06:30Z",
+    "julian_day": 2460871.770833,
+    "zenith_deg": 27.38974853,
+    "apparent_zenith_deg": 27.381389292,
+    "cos_zenith": 0.88796482,
+    "earth_sun_au": 1.016453596,
+    "toa_wm2": 1174.868231854,
+    "clearness_before_cap": 0.641774098,
+    "ghi_used_wm2": 754.0,
+    "fdir": 0.64987489,
+    "u10_after_floor_ms": 0.87,
+    "daytime": true,
+    "stability_class": 1,
+    "wind_exponent": 0.15,
+    "u2_ms": 0.683398076,
+    "cos_zenith_sunlit_mean_info": 0.885866722,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 61.688771269,
+    "tnwb_c": 28.1458761,
+    "tpsy_c": 24.051696438,
+    "wbgt_c": 36.369867524
+   },
+   "iterations": {
+    "tg": 27,
+    "tnwb": 13,
+    "tpsy": 16
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 41.617420412,
+    "tnwb_c": 24.776010216,
+    "wbgt_outdoor_formula_c": 29.996691234,
+    "wbgt_indoor_formula_c": 29.828433275
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 18.771869286,
+    "wbgt_c": 35.86844463,
+    "delta_vs_liljegren_c": -0.501422894
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.887960168,
+    "fdir": 0.649905161,
+    "u2_ms": 0.683398076,
+    "wbgt_c": 36.369779056,
+    "status": 0,
+    "delta_vs_primary_c": -8.8469e-05
+   },
+   "sensitivity_fdir_openmeteo": {
+    "fdir_openmeteo_direct_over_ghi": 0.675066313,
+    "wbgt_c": 36.28589373,
+    "delta_vs_primary_c": -0.083973794,
+    "note": "sensitivity only: Open-Meteo direct_radiation/shortwave_radiation, no normsolar cap"
+   },
+   "checks": {
+    "api_vs_components_c": 2.842170943040401e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  },
+  {
+   "id": "openmeteo_snapshot_shamal_10",
+   "desc": "as above with 10 m/s wind",
+   "site": "abu_dhabi_city",
+   "inputs": {
+    "lat": 24.4539,
+    "lon": 54.3773,
+    "time_end_utc": "2025-07-15T07:00Z",
+    "avg_minutes": 60,
+    "ta_c": 43.3,
+    "rh_pct": null,
+    "td_c": 16.6,
+    "p_hpa": 995.9,
+    "u10_ms": 10.0,
+    "wind_height_m": 10.0,
+    "ghi_wm2": 754.0,
+    "direct_wm2": null,
+    "site_type": "urban (thermofeel/KNMI exponents)"
+   },
+   "derived": {
+    "rh_used_pct": 21.482605844,
+    "time_eval_utc": "2025-07-15T06:30Z",
+    "julian_day": 2460871.770833,
+    "zenith_deg": 27.38974853,
+    "apparent_zenith_deg": 27.381389292,
+    "cos_zenith": 0.88796482,
+    "earth_sun_au": 1.016453596,
+    "toa_wm2": 1174.868231854,
+    "clearness_before_cap": 0.641774098,
+    "ghi_used_wm2": 754.0,
+    "fdir": 0.64987489,
+    "u10_after_floor_ms": 10.0,
+    "daytime": true,
+    "stability_class": 4,
+    "wind_exponent": 0.25,
+    "u2_ms": 6.68740305,
+    "cos_zenith_sunlit_mean_info": 0.885866722,
+    "sunlit_fraction_info": 1.0
+   },
+   "outputs": {
+    "tg_c": 51.481763562,
+    "tnwb_c": 25.203164117,
+    "tpsy_c": 24.051696438,
+    "wbgt_c": 32.268567594
+   },
+   "iterations": {
+    "tg": 10,
+    "tnwb": 15,
+    "tpsy": 16
+   },
+   "shade_variant": {
+    "note": "same Ta/RH/P/u2, GHI=0 (OSHA 'shade' convention). Indoor formula is 0.7*Tnwb+0.3*Tg.",
+    "tg_c": 42.564121435,
+    "tnwb_c": 24.247600725,
+    "wbgt_outdoor_formula_c": 29.816144794,
+    "wbgt_indoor_formula_c": 29.742556938
+   },
+   "bom_approximation_NOT_LILJEGREN": {
+    "e_hpa": 18.771869286,
+    "wbgt_c": 35.86844463,
+    "delta_vs_liljegren_c": 3.599877036
+   },
+   "original_c_pipeline_reference": {
+    "note": "wbgt.c semantics: Larson solar, no KNMI 10 m floor, MAX_ITER=50, urban, dT<0",
+    "cos_zenith": 0.887960168,
+    "fdir": 0.649905161,
+    "u2_ms": 6.68740305,
+    "wbgt_c": 32.268535202,
+    "status": 0,
+    "delta_vs_primary_c": -3.2392e-05
+   },
+   "sensitivity_fdir_openmeteo": null,
+   "checks": {
+    "api_vs_components_c": 1.4210854715202004e-14,
+    "c_transliteration_max_abs_c": 0.0,
+    "u2_tf_vs_ref_ms": 0.0
+   }
+  }
+ ],
+ "formula_cases": [
+  {
+   "tnwb_c": 25.0,
+   "tg_c": 45.0,
+   "ta_c": 35.0,
+   "wbgt_outdoor_c": 30.0,
+   "wbgt_indoor_shade_c": 31.0
+  },
+  {
+   "tnwb_c": 28.5,
+   "tg_c": 52.3,
+   "ta_c": 46.2,
+   "wbgt_outdoor_c": 35.03,
+   "wbgt_indoor_shade_c": 35.64
+  },
+  {
+   "tnwb_c": 30.0,
+   "tg_c": 30.0,
+   "ta_c": 30.0,
+   "wbgt_outdoor_c": 30.0,
+   "wbgt_indoor_shade_c": 30.0
+  },
+  {
+   "tnwb_c": 22.894,
+   "tg_c": 28.983,
+   "ta_c": 30.0,
+   "wbgt_outdoor_c": 24.8224,
+   "wbgt_indoor_shade_c": 24.7207
+  },
+  {
+   "tnwb_c": 27.0,
+   "tg_c": 60.0,
+   "ta_c": 40.0,
+   "wbgt_outdoor_c": 34.9,
+   "wbgt_indoor_shade_c": 36.9
+  },
+  {
+   "tnwb_c": 20.0,
+   "tg_c": 25.0,
+   "ta_c": 25.0,
+   "wbgt_outdoor_c": 21.5,
+   "wbgt_indoor_shade_c": 21.5
+  }
+ ],
+ "bom_approximation_cases_NOT_LILJEGREN": [
+  {
+   "ta_c": 29.4,
+   "rh_pct": 59.0,
+   "e_hpa": 24.104628034,
+   "wbgt_bom_c": 30.082918818,
+   "note": "BoM worked example (Brisbane January): 'a WBGT of about 30 degC'"
+  },
+  {
+   "ta_c": 30.0,
+   "rh_pct": 55.0,
+   "e_hpa": 23.257938789,
+   "wbgt_bom_c": 30.090369944,
+   "note": "Lemke & Kjellstrom 2012 Fig.1 ABM line (~30.1)"
+  },
+  {
+   "ta_c": 46.2,
+   "rh_pct": 13.0,
+   "e_hpa": 13.187802525,
+   "wbgt_bom_c": 35.318206392,
+   "note": ""
+  },
+  {
+   "ta_c": 35.0,
+   "rh_pct": 70.0,
+   "e_hpa": 39.211555406,
+   "wbgt_bom_c": 39.195141275,
+   "note": ""
+  },
+  {
+   "ta_c": 33.0,
+   "rh_pct": 60.0,
+   "e_hpa": 30.072226126,
+   "wbgt_bom_c": 34.469384868,
+   "note": ""
+  },
+  {
+   "ta_c": 25.0,
+   "rh_pct": 50.0,
+   "e_hpa": 15.79148126,
+   "wbgt_bom_c": 24.321052135,
+   "note": ""
+  },
+  {
+   "ta_c": 40.0,
+   "rh_pct": 60.0,
+   "e_hpa": 44.073513681,
+   "wbgt_bom_c": 43.940890877,
+   "note": ""
+  },
+  {
+   "ta_c": 18.0,
+   "rh_pct": 75.0,
+   "e_hpa": 15.442872713,
+   "wbgt_bom_c": 20.215048976,
+   "note": ""
+  }
+ ],
+ "sanity_checks": {
+  "c_transliteration_grid": {
+   "n_cases": 7500,
+   "grid": {
+    "Ta_C": [
+     20,
+     30,
+     40,
+     46,
+     50
+    ],
+    "RH_pct": [
+     5,
+     15,
+     40,
+     70,
+     95
+    ],
+    "u2_ms": [
+     0.13,
+     0.5,
+     1.0,
+     2.0,
+     5.0
+    ],
+    "GHI_Wm2": [
+     0,
+     200,
+     500,
+     800,
+     1000
+    ],
+    "fdir": [
+     0.0,
+     0.5,
+     0.9
+    ],
+    "cos_zenith": [
+     0.1,
+     0.4,
+     0.7,
+     1.0
+    ],
+    "P_hPa": 1000.0
+   },
+   "thermofeel_vs_c_f64_max_abs_degC": 2.1600499167107046e-12,
+   "thermofeel_nan_tg": 0,
+   "thermofeel_nan_tnwb": 9,
+   "n_physically_consistent": 4500,
+   "iterations_tg_max_all": 65,
+   "iterations_tnwb_max_all": 500,
+   "iterations_tg_max_physical": 49,
+   "iterations_tnwb_max_physical": 59,
+   "iterations_tg_median": 20.0,
+   "iterations_tnwb_median": 13.0,
+   "original_c_maxiter50_nonconverged_all": 140,
+   "original_c_maxiter50_nonconverged_physical": 1,
+   "float32_original_vs_thermofeel_wbgt_max_abs_degC": 0.018900650412533082,
+   "float32_original_vs_thermofeel_wbgt_p99_abs_degC": 0.0001533751746773501
+  },
+  "solar_vs_spa": {
+   "site": "abu_dhabi_city",
+   "period": "2025 hourly UTC",
+   "n_sun_up": 4421,
+   "noaa_vs_spa_max_abs_zenith_deg": 0.015889848657437255,
+   "noaa_vs_spa_max_abs_cos_zenith": 0.00027574286917686486,
+   "noaa_vs_spa_max_abs_apparent_zenith_deg_elev_gt5": 0.01629594809162427,
+   "larson_vs_spa_max_abs_zenith_deg": 0.011814288482469237
+  },
+  "lemke_kjellstrom_2012": {
+   "fig1": {
+    "n": 23,
+    "x": [
+     0,
+     50,
+     100,
+     150,
+     200,
+     250,
+     300,
+     350,
+     400,
+     450,
+     500,
+     550,
+     600,
+     650,
+     700,
+     750,
+     800,
+     850,
+     900,
+     950,
+     1000,
+     1050,
+     1100
+    ],
+    "digitized_wbgt_c": [
+     24.83,
+     25.17,
+     25.51,
+     25.84,
+     26.18,
+     26.48,
+     26.77,
+     27.09,
+     27.4,
+     27.74,
+     28.06,
+     28.32,
+     28.68,
+     28.97,
+     29.3,
+     29.61,
+     29.94,
+     30.22,
+     30.5,
+     30.81,
+     31.13,
+     31.44,
+     31.72
+    ],
+    "thermofeel_wbgt_c": [
+     24.822,
+     25.16,
+     25.492,
+     25.823,
+     26.152,
+     26.48,
+     26.807,
+     27.132,
+     27.456,
+     27.779,
+     28.101,
+     28.421,
+     28.74,
+     29.057,
+     29.374,
+     29.69,
+     30.003,
+     30.317,
+     30.628,
+     30.938,
+     31.248,
+     31.556,
+     31.862
+    ],
+    "max_abs_diff_c": 0.14240268689467683,
+    "rms_diff_c": 0.07754835889846813,
+    "excluded_points": null
+   },
+   "fig2": {
+    "n": 25,
+    "x": [
+     20.71,
+     22.14,
+     23.73,
+     25.36,
+     27.23,
+     29.1,
+     31.05,
+     33.11,
+     35.36,
+     37.75,
+     40.3,
+     42.96,
+     45.73,
+     48.73,
+     51.84,
+     55.13,
+     58.61,
+     62.25,
+     66.22,
+     70.26,
+     74.61,
+     79.07,
+     83.86,
+     94.26,
+     99.78
+    ],
+    "digitized_wbgt_c": [
+     23.2,
+     23.44,
+     23.72,
+     23.96,
+     24.23,
+     24.52,
+     24.82,
+     25.11,
+     25.43,
+     25.78,
+     26.13,
+     26.48,
+     26.85,
+     27.25,
+     27.66,
+     28.06,
+     28.49,
+     28.92,
+     29.36,
+     29.85,
+     30.33,
+     30.81,
+     31.3,
+     32.33,
+     32.87
+    ],
+    "thermofeel_wbgt_c": [
+     23.2,
+     23.436,
+     23.697,
+     23.957,
+     24.25,
+     24.54,
+     24.834,
+     25.143,
+     25.47,
+     25.814,
+     26.17,
+     26.537,
+     26.907,
+     27.304,
+     27.702,
+     28.117,
+     28.547,
+     28.98,
+     29.445,
+     29.903,
+     30.388,
+     30.867,
+     31.372,
+     32.419,
+     32.954
+    ],
+    "max_abs_diff_c": 0.088782910002152,
+    "rms_diff_c": 0.05104584965262504,
+    "excluded_points": null
+   },
+   "fig3": {
+    "n": 30,
+    "x": [
+     0.1,
+     0.2,
+     0.3,
+     0.4,
+     0.5,
+     0.6,
+     0.7,
+     0.8,
+     0.9,
+     1.0,
+     1.1,
+     1.2,
+     1.3,
+     1.4,
+     1.5,
+     1.6,
+     1.7,
+     1.8,
+     1.9,
+     2.0,
+     2.1,
+     2.2,
+     2.3,
+     2.4,
+     2.5,
+     2.6,
+     2.7,
+     2.8,
+     2.9,
+     3.0
+    ],
+    "digitized_wbgt_c": [
+     32.32,
+     30.75,
+     29.96,
+     29.44,
+     29.03,
+     28.75,
+     28.55,
+     28.35,
+     28.2,
+     28.07,
+     27.94,
+     27.83,
+     27.75,
+     27.67,
+     27.59,
+     27.5,
+     27.4,
+     27.38,
+     27.31,
+     27.26,
+     27.22,
+     27.16,
+     27.12,
+     27.1,
+     27.05,
+     27.02,
+     27.0,
+     26.95,
+     26.92,
+     26.88
+    ],
+    "thermofeel_wbgt_c": [
+     31.783,
+     30.828,
+     30.022,
+     29.501,
+     29.12,
+     28.83,
+     28.598,
+     28.405,
+     28.242,
+     28.101,
+     27.977,
+     27.868,
+     27.771,
+     27.683,
+     27.603,
+     27.53,
+     27.462,
+     27.401,
+     27.343,
+     27.291,
+     27.24,
+     27.193,
+     27.151,
+     27.109,
+     27.069,
+     27.032,
+     26.998,
+     26.964,
+     26.932,
+     26.902
+    ],
+    "max_abs_diff_c": 0.08989840506173863,
+    "rms_diff_c": 0.0419405855565803,
+    "excluded_points": "u2 < 0.13 m/s (below Liljegren MIN_SPEED)"
+   },
+   "fig4": {
+    "n": 22,
+    "x": [
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31,
+     32,
+     33,
+     34,
+     35,
+     36,
+     37,
+     38,
+     39,
+     40,
+     41,
+     42,
+     43
+    ],
+    "digitized_wbgt_c": [
+     21.14,
+     21.99,
+     22.85,
+     23.7,
+     24.54,
+     25.39,
+     26.31,
+     27.21,
+     28.13,
+     28.99,
+     29.83,
+     30.69,
+     31.57,
+     32.44,
+     33.32,
+     34.18,
+     35.04,
+     35.97,
+     36.91,
+     37.8,
+     38.67,
+     39.58
+    ],
+    "thermofeel_wbgt_c": [
+     21.152,
+     22.018,
+     22.881,
+     23.749,
+     24.618,
+     25.485,
+     26.357,
+     27.226,
+     28.101,
+     28.977,
+     29.85,
+     30.73,
+     31.606,
+     32.49,
+     33.369,
+     34.256,
+     35.137,
+     36.029,
+     36.914,
+     37.801,
+     38.697,
+     39.588
+    ],
+    "max_abs_diff_c": 0.09739761936040026,
+    "rms_diff_c": 0.04796243097666217,
+    "excluded_points": null
+   },
+   "S0_geometry_free": {
+    "digitized_c": 24.83,
+    "thermofeel_c": 24.8222,
+    "diff_c": -0.0078
+   },
+   "all_points_u_ge_0p13": {
+    "n": 99,
+    "rms_c": 0.05551214504403876,
+    "max_abs_c": 0.14240268689467683
+   },
+   "assumptions": "P = 1013.25 hPa; wind is the 2 m wind; solar-dependent points need geometry the paper does not state: fdir = 0.8 and cos(zenith) = 1 assumed (fdir 0.8 = 'propDirect' of the Lemke VBA lineage, see HeatStress R wbgt.Liljegren). The S = 0 point is geometry-free.",
+   "source": "Lemke B, Kjellstrom T. Calculating workplace WBGT from meteorological data: a tool for climate change assessment. Ind Health 2012;50(4):267-278, Figs 1-4 (Liljegren series, filled squares). Digitized from the open-access PDF at 400 dpi (gridline-calibrated, square-template detection); reading uncertainty ~ +/-0.05 degC.",
+   "fixed_conditions": {
+    "fig1": "wind 1 m/s, RH 55 %, Ta 30 C; x = solar W/m2",
+    "fig2": "solar 500, wind 1 m/s, Ta 30 C; x = RH % (markers at 1 C dew-point steps)",
+    "fig3": "solar 500, RH 55 %, Ta 30 C; x = wind m/s",
+    "fig4": "RH 55 %, solar 500, wind 1 m/s; x = Ta C"
+   }
+  }
+ }
+}

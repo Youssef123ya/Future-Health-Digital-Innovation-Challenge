@@ -1,0 +1,102 @@
+== ECTemp constants ==
+gamma2=0.000484 sigma2=356.4544 vertex CT=42.0471 vertex HR=194.962
+sigmoid derivative constants: {'(K-A)*Q*B': 8.1168, '-(1/nu)-1': -15.285714285714285, 'nu': 0.07} max |analytic-FD| = 2.35e-07
+max |generic EKF - transcribed JS| over scenarios = 0.0
+
+== HR(CT) table ==
+CT 35.5: HRquad   -0.992  HRsig   41.554  dHRquad   59.859  dHRsig    2.288
+CT 36.0: HRquad   27.795  HRsig   44.261  dHRquad   55.288  dHRsig    9.776
+CT 36.5: HRquad   54.296  HRsig   52.545  dHRquad   50.716  dHRsig   24.233
+CT 37.0: HRquad   78.512  HRsig   68.646  dHRquad   46.145  dHRsig   39.532
+CT 37.5: HRquad  100.441  HRsig   90.826  dHRquad   41.574  dHRsig   47.579
+CT 38.0: HRquad  120.085  HRsig  114.641  dHRquad   37.002  dHRsig   46.311
+CT 38.5: HRquad  137.443  HRsig  136.133  dHRquad   32.431  dHRsig   39.032
+CT 39.0: HRquad  152.516  HRsig  153.373  dHRquad   27.859  dHRsig   29.892
+CT 39.5: HRquad  165.303  HRsig  166.159  dHRquad   23.288  dHRsig   21.497
+CT 40.0: HRquad  175.804  HRsig  175.164  dHRquad   18.717  dHRsig   14.839
+CT 40.5: HRquad  184.019  HRsig  181.298  dHRquad   14.145  dHRsig    9.975
+CT 41.0: HRquad  189.949  HRsig  185.386  dHRquad    9.574  dHRsig    6.592
+
+== Steady-state CT for constant HR ==
+{'hr': 45, 'ct_ss_quadratic': 36.3196, 'ct_ss_sigmoid': 36.0698}
+{'hr': 50, 'ct_ss_quadratic': 36.4159, 'ct_ss_sigmoid': 36.3863}
+{'hr': 60, 'ct_ss_quadratic': 36.6136, 'ct_ss_sigmoid': 36.7614}
+{'hr': 70, 'ct_ss_quadratic': 36.8188, 'ct_ss_sigmoid': 37.0339}
+{'hr': 80, 'ct_ss_quadratic': 37.0324, 'ct_ss_sigmoid': 37.2671}
+{'hr': 90, 'ct_ss_quadratic': 37.2554, 'ct_ss_sigmoid': 37.4826}
+{'hr': 100, 'ct_ss_quadratic': 37.4894, 'ct_ss_sigmoid': 37.6913}
+{'hr': 110, 'ct_ss_quadratic': 37.7361, 'ct_ss_sigmoid': 37.9008}
+{'hr': 120, 'ct_ss_quadratic': 37.9977, 'ct_ss_sigmoid': 38.1174}
+{'hr': 130, 'ct_ss_quadratic': 38.2775, 'ct_ss_sigmoid': 38.348}
+{'hr': 140, 'ct_ss_quadratic': 38.5797, 'ct_ss_sigmoid': 38.6014}
+{'hr': 150, 'ct_ss_quadratic': 38.911, 'ct_ss_sigmoid': 38.8908}
+{'hr': 160, 'ct_ss_quadratic': 39.2817, 'ct_ss_sigmoid': 39.2386}
+{'hr': 170, 'ct_ss_quadratic': 39.7104, 'ct_ss_sigmoid': 39.6912}
+{'hr': 180, 'ct_ss_quadratic': 40.238, 'ct_ss_sigmoid': 40.3763}
+{'hr': 190, 'ct_ss_quadratic': 41.0053, 'ct_ss_sigmoid': 42.0652}
+{'hr': 195, 'ct_ss_quadratic': None, 'ct_ss_sigmoid': None}
+{'hr': 200, 'ct_ss_quadratic': None, 'ct_ss_sigmoid': None}
+
+== Steady-state filter dynamics (tau = equivalent first-order time constant, min) ==
+CT 37.0: quad k=0.001134 tau=18.6 | sig k=0.001139 tau=21.7
+CT 37.5: quad k=0.001137 tau=20.6 | sig k=0.001133 tau=18.0
+CT 38.0: quad k=0.001140 tau=23.2 | sig k=0.001134 tau=18.5
+CT 38.5: quad k=0.001143 tau=26.5 | sig k=0.001139 tau=22.0
+CT 39.0: quad k=0.001146 tau=30.8 | sig k=0.001145 tau=28.7
+CT 39.5: quad k=0.001150 tau=36.9 | sig k=0.001151 tau=39.9
+CT 40.0: quad k=0.001153 tau=45.9 | sig k=0.001155 tau=57.8
+
+== HR blunting (e.g. beta-blockade) steady-state underestimate ==
+{'true_hr': 120, 'hr_reduction_bpm': 15, 'ct_ss_true': 37.998, 'ct_ss_blunted': 37.611, 'underestimate_degC': 0.387}
+{'true_hr': 120, 'hr_reduction_bpm': 20, 'ct_ss_true': 37.998, 'ct_ss_blunted': 37.489, 'underestimate_degC': 0.508}
+{'true_hr': 120, 'hr_reduction_bpm': 27, 'ct_ss_true': 37.998, 'ct_ss_blunted': 37.324, 'underestimate_degC': 0.673}
+{'true_hr': 140, 'hr_reduction_bpm': 15, 'ct_ss_true': 38.58, 'ct_ss_blunted': 38.135, 'underestimate_degC': 0.445}
+{'true_hr': 140, 'hr_reduction_bpm': 20, 'ct_ss_true': 38.58, 'ct_ss_blunted': 37.998, 'underestimate_degC': 0.582}
+{'true_hr': 140, 'hr_reduction_bpm': 27, 'ct_ss_true': 38.58, 'ct_ss_blunted': 37.813, 'underestimate_degC': 0.767}
+{'true_hr': 160, 'hr_reduction_bpm': 15, 'ct_ss_true': 39.282, 'ct_ss_blunted': 38.741, 'underestimate_degC': 0.54}
+{'true_hr': 160, 'hr_reduction_bpm': 20, 'ct_ss_true': 39.282, 'ct_ss_blunted': 38.58, 'underestimate_degC': 0.702}
+{'true_hr': 160, 'hr_reduction_bpm': 27, 'ct_ss_true': 39.282, 'ct_ss_blunted': 38.366, 'underestimate_degC': 0.916}
+
+== Scenario end values ==
+constant_hr_80_60min                                         ct_quadratic: end=37.0377 max=37.0998 (t_max=1 min) | sigmoid end=37.2525 max=37.2525
+constant_hr_120_120min                                       ct_quadratic: end=37.9890 max=37.9890 (t_max=120 min) | sigmoid end=38.1140 max=38.1140
+constant_hr_150_120min                                       ct_quadratic: end=38.8638 max=38.8638 (t_max=120 min) | sigmoid end=38.8649 max=38.8649
+work_rest_mixed_120min                                       ct_quadratic: end=37.8854 max=38.6971 (t_max=100 min) | sigmoid end=37.9564 max=38.7692
+ramp_70_to_170_100min                                        ct_quadratic: end=38.7387 max=38.7387 (t_max=101 min) | sigmoid end=38.8199 max=38.8199
+extreme_hr_200_30min                                         ct_quadratic: end=38.6318 max=38.6318 (t_max=30 min) | sigmoid end=38.7781 max=38.7781
+low_hr_45_30min                                              ct_quadratic: end=36.5810 max=37.0977 (t_max=1 min) | sigmoid end=36.7346 max=37.0984
+work_rest_mixed_120min_missing_20_34                         ct_quadratic: end=37.8763 max=38.6731 (t_max=100 min)
+work_rest_mixed_120min_psi_0.85                              ct_quadratic: end=37.9390 max=38.5912 (t_max=100 min)
+work_rest_mixed_120min_deKorte2022_sigmoid_ct0_37.0_v0_0.02  ct_sigmoid: end=37.9583 max=38.7771 (t_max=100 min)
+work_rest_mixed_120min_Lignier2026_sigmoid_ct0_37.1_v0_0.01  ct_sigmoid: end=37.9579 max=38.7753 (t_max=100 min)
+
+== PSI ==
+{'ct': 37.1, 'hr': 75, 'ct0': 37.1, 'hr0': 75, 'psi': 0.0, 'category': 'no_little'}
+{'ct': 37.8, 'hr': 120, 'ct0': 37.1, 'hr0': 75, 'psi': 3.60119, 'category': 'low'}
+{'ct': 38.4, 'hr': 150, 'ct0': 37.1, 'hr0': 70, 'psi': 6.344697, 'category': 'high'}
+{'ct': 39.0, 'hr': 165, 'ct0': 37.0, 'hr0': 70, 'psi': 8.318182, 'category': 'very_high'}
+{'ct': 39.5, 'hr': 180, 'ct0': 37.0, 'hr0': 60, 'psi': 10.0, 'category': 'very_high'}
+{'ct': 38.0, 'hr': 140, 'ct0': 36.9, 'hr0': 80, 'psi': 5.115385, 'category': 'moderate'}
+{'ct': 37.6, 'hr': 110, 'ct0': 37.1, 'hr0': 85, 'psi': 2.357456, 'category': 'low'}
+
+== aPSI ==
+{'ct': 38.4, 'hr': 150, 'ct_rest': 37.1, 'hr_rest': 70, 'age': 30, 'tsk': None, 'hr_crit': 171.0, 'ct_crit': 39.5, 'apsi': 6.668729}
+{'ct': 38.4, 'hr': 150, 'ct_rest': 37.1, 'hr_rest': 70, 'age': 30, 'tsk': 37.4, 'hr_crit': 171.0, 'ct_crit': 38.75, 'apsi': 7.89979}
+{'ct': 38.4, 'hr': 150, 'ct_rest': 37.1, 'hr_rest': 70, 'age': 30, 'tsk': 34.4, 'hr_crit': 171.0, 'ct_crit': 39.5, 'apsi': 6.668729}
+{'ct': 39.0, 'hr': 160, 'ct_rest': 37.0, 'hr_rest': 70, 'age': 45, 'tsk': 36.0, 'hr_crit': 157.5, 'ct_crit': 39.25, 'apsi': 9.587302}
+
+== SQI ==
+{'name': 'clean_1hz', 'psi': 1.0, 'valid': True, 'hr_mean': 102.0, 'flags': [], 'r_scale': 1.0}
+{'name': '25pct_missing_1hz', 'psi': 0.75, 'valid': False, 'hr_mean': 102.0, 'flags': ['low_coverage'], 'r_scale': None}
+{'name': 'harmonic_jump_6s', 'psi': 0.833333, 'valid': True, 'hr_mean': 102.0, 'flags': ['out_of_range', 'ratio_jump'], 'r_scale': 1.552707}
+{'name': 'harmonic_halving_5s', 'psi': 0.833333, 'valid': True, 'hr_mean': 102.0, 'flags': ['ratio_jump'], 'r_scale': 1.552707}
+{'name': 'flatline_60s', 'psi': 0.0, 'valid': False, 'hr_mean': None, 'flags': ['flatline', 'low_coverage'], 'r_scale': None}
+{'name': 'contact_lost_20s', 'psi': 0.666667, 'valid': False, 'hr_mean': 102.0, 'flags': ['contact_lost', 'low_coverage'], 'r_scale': None}
+{'name': 'implausible_high_5s_interval', 'psi': 0.0, 'valid': False, 'hr_mean': None, 'flags': ['out_of_range', 'flatline', 'low_coverage'], 'r_scale': None}
+
+== Minutes to reach thresholds from CT0=37.1, v0=0 (quadratic) ==
+HR 120: ct_ss=37.998  minutes to 38.0/38.4/38.5/39.0 = {38.0: None, 38.4: None, 38.5: None, 39.0: None}
+HR 140: ct_ss=38.580  minutes to 38.0/38.4/38.5/39.0 = {38.0: 37, 38.4: 69, 38.5: 91, 39.0: None}
+HR 150: ct_ss=38.911  minutes to 38.0/38.4/38.5/39.0 = {38.0: 31, 38.4: 48, 38.5: 55, 39.0: None}
+HR 160: ct_ss=39.282  minutes to 38.0/38.4/38.5/39.0 = {38.0: 27, 38.4: 40, 38.5: 44, 39.0: 79}
+HR 170: ct_ss=39.710  minutes to 38.0/38.4/38.5/39.0 = {38.0: 24, 38.4: 34, 38.5: 38, 39.0: 58}

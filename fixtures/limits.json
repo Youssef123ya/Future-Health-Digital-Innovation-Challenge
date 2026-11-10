@@ -1,0 +1,4482 @@
+{
+ "schema_version": "1.0.0",
+ "title": "Zill occupational heat-limit oracle vectors (NIOSH/ACGIH/ISO 7243/NWS HI/TB MED 507/OSHA)",
+ "spec": "docs/research/limits_and_workrest.md",
+ "generator": "scripts/oracles/limits_oracle.py",
+ "generated_utc": "2026-11-09T03:55:01Z",
+ "environment": {
+  "python": "3.12.10",
+  "numpy": "2.5.4",
+  "pythermalcomfort": "4.8.1",
+  "platform": "Windows-11-10.0.26200-SP0"
+ },
+ "units": {
+  "mW": "W, whole-body metabolic rate (NOT W/m2); ACGIH/NIOSH values assume a 70 kg worker",
+  "wbgtC / *C": "degC (WBGT_eff = measured WBGT + clothing adjustment value)",
+  "tF / hiF / wbgtF": "degF",
+  "rhPct": "% (0-100)",
+  "workFraction / f": "fraction of each hour spent working (0-1)",
+  "qt": "US liquid quart = 0.946352946 L"
+ },
+ "conventions": {
+  "limit_comparison": "exceedance means WBGT_eff > limit (strict); WBGT_eff == limit is within the limit",
+  "acgih_rounding": "nearest 0.5 degC, half-up: floor(2x + 0.5)/2 (no ties occur in the table)",
+  "nws_threshold": "regression used when simple formula >= 80 degF (equation-page text rule)",
+  "tbmed_intervals": "[78,82) cat1, [82,85) cat2, [85,88) cat3, [88,90) cat4, >= 90 cat5 (degF)",
+  "osha_hi_levels": "<91 lower; [91,103) moderate; [103,115] high; >115 very high to extreme (degF)",
+  "nprm_triggers": "initial: HI >= 80 degF or WBGT >= RAL(M); high: HI >= 90 degF or WBGT >= REL(M)",
+  "rest_metabolic_rate_W": 115.0
+ },
+ "constants": {
+  "ral": {
+   "a": 59.9,
+   "b": 14.1,
+   "form": "a - b*log10(M_W)"
+  },
+  "rel": {
+   "a": 56.7,
+   "b": 11.5,
+   "form": "a - b*log10(M_W)"
+  },
+  "acgih_metabolic_W": {
+   "rest": 115.0,
+   "light": 180.0,
+   "moderate": 300.0,
+   "heavy": 415.0,
+   "very_heavy": 520.0
+  },
+  "acgih_table2_tlv_C": {
+   "75-100": {
+    "light": 31.0,
+    "moderate": 28.0,
+    "heavy": null,
+    "very_heavy": null
+   },
+   "50-75": {
+    "light": 31.0,
+    "moderate": 29.0,
+    "heavy": 27.5,
+    "very_heavy": null
+   },
+   "25-50": {
+    "light": 32.0,
+    "moderate": 30.0,
+    "heavy": 29.0,
+    "very_heavy": 28.0
+   },
+   "0-25": {
+    "light": 32.5,
+    "moderate": 31.5,
+    "heavy": 30.5,
+    "very_heavy": 30.0
+   }
+  },
+  "acgih_table2_al_C": {
+   "75-100": {
+    "light": 28.0,
+    "moderate": 25.0,
+    "heavy": null,
+    "very_heavy": null
+   },
+   "50-75": {
+    "light": 28.5,
+    "moderate": 26.0,
+    "heavy": 24.0,
+    "very_heavy": null
+   },
+   "25-50": {
+    "light": 29.5,
+    "moderate": 27.0,
+    "heavy": 25.5,
+    "very_heavy": 24.5
+   },
+   "0-25": {
+    "light": 30.0,
+    "moderate": 29.0,
+    "heavy": 28.0,
+    "very_heavy": 27.0
+   }
+  },
+  "acgih_cav_C": {
+   "short_sleeves_and_pants_woven": -1.0,
+   "work_clothes_long_sleeve_shirt_and_pants": 0.0,
+   "cloth_woven_coveralls": 0.0,
+   "sms_polypropylene_coveralls": 0.5,
+   "polyolefin_coveralls": 1.0,
+   "double_layer_woven_clothing": 3.0,
+   "limited_use_vapour_barrier_coveralls": 11.0
+  },
+  "acgih_hood_addition_C": 1.0,
+  "tbmed507_table3_2": {
+   "1": {
+    "easy": [
+     "NL",
+     0.5
+    ],
+    "moderate": [
+     "NL",
+     0.75
+    ],
+    "heavy": [
+     "40/20",
+     0.75
+    ],
+    "very_heavy": [
+     "20/40",
+     1.0
+    ]
+   },
+   "2": {
+    "easy": [
+     "NL",
+     0.5
+    ],
+    "moderate": [
+     "NL",
+     0.75
+    ],
+    "heavy": [
+     "30/30",
+     1.0
+    ],
+    "very_heavy": [
+     "15/45",
+     1.0
+    ]
+   },
+   "3": {
+    "easy": [
+     "NL",
+     0.75
+    ],
+    "moderate": [
+     "NL",
+     0.75
+    ],
+    "heavy": [
+     "30/30",
+     1.0
+    ],
+    "very_heavy": [
+     "10/50",
+     1.0
+    ]
+   },
+   "4": {
+    "easy": [
+     "NL",
+     0.75
+    ],
+    "moderate": [
+     "50/10",
+     0.75
+    ],
+    "heavy": [
+     "20/40",
+     1.0
+    ],
+    "very_heavy": [
+     "10/50",
+     1.0
+    ]
+   },
+   "5": {
+    "easy": [
+     "NL",
+     1.0
+    ],
+    "moderate": [
+     "20/40",
+     1.0
+    ],
+    "heavy": [
+     "15/45",
+     1.0
+    ],
+    "very_heavy": [
+     "10/50",
+     1.0
+    ]
+   }
+  },
+  "tbmed507_table3_3": {
+   "1": {
+    "easy": [
+     "NL",
+     0.5
+    ],
+    "moderate": [
+     "NL",
+     0.75
+    ],
+    "heavy": [
+     110,
+     0.75
+    ],
+    "very_heavy": [
+     45,
+     0.75
+    ]
+   },
+   "2": {
+    "easy": [
+     "NL",
+     0.5
+    ],
+    "moderate": [
+     "NL",
+     1.0
+    ],
+    "heavy": [
+     70,
+     1.0
+    ],
+    "very_heavy": [
+     40,
+     1.0
+    ]
+   },
+   "3": {
+    "easy": [
+     "NL",
+     0.75
+    ],
+    "moderate": [
+     "NL",
+     1.0
+    ],
+    "heavy": [
+     60,
+     1.0
+    ],
+    "very_heavy": [
+     25,
+     1.0
+    ]
+   },
+   "4": {
+    "easy": [
+     "NL",
+     0.75
+    ],
+    "moderate": [
+     180,
+     1.25
+    ],
+    "heavy": [
+     50,
+     1.25
+    ],
+    "very_heavy": [
+     20,
+     1.25
+    ]
+   },
+   "5": {
+    "easy": [
+     "NL",
+     1.0
+    ],
+    "moderate": [
+     70,
+     1.5
+    ],
+    "heavy": [
+     45,
+     1.5
+    ],
+    "very_heavy": [
+     20,
+     1.5
+    ]
+   }
+  },
+  "tbmed507_work_W": {
+   "easy": 250.0,
+   "moderate": 425.0,
+   "heavy": 600.0,
+   "very_heavy": 800.0
+  },
+  "tbmed507_caps_qt": {
+   "per_hour": 1.5,
+   "per_day": 12.0
+  },
+  "acclimatization_schedules": {
+   "niosh_new_worker": [
+    0.2,
+    0.4,
+    0.6,
+    0.8,
+    1.0
+   ],
+   "niosh_experienced_worker": [
+    0.5,
+    0.6,
+    0.8,
+    1.0
+   ],
+   "msha_new_miner": [
+    0.5,
+    0.6,
+    0.7,
+    0.8,
+    0.9,
+    1.0
+   ],
+   "msha_returning_after_9_days": [
+    0.5,
+    0.6,
+    0.9,
+    1.0
+   ],
+   "osha_nprm_new_employee": [
+    0.2,
+    0.4,
+    0.6,
+    0.8,
+    1.0
+   ],
+   "osha_nprm_returning_gt_14_days": [
+    0.5,
+    0.6,
+    0.8,
+    1.0
+   ]
+  },
+  "noaa_chart_F_niosh2016_appC": {
+   "40": [
+    80,
+    81,
+    83,
+    85,
+    88,
+    91,
+    94,
+    97,
+    101,
+    105,
+    109,
+    114,
+    119,
+    124,
+    130,
+    136
+   ],
+   "45": [
+    80,
+    82,
+    84,
+    87,
+    89,
+    93,
+    96,
+    100,
+    104,
+    109,
+    114,
+    119,
+    124,
+    130,
+    137
+   ],
+   "50": [
+    80,
+    83,
+    85,
+    88,
+    91,
+    95,
+    99,
+    103,
+    108,
+    113,
+    118,
+    124,
+    131,
+    137
+   ],
+   "55": [
+    80,
+    84,
+    86,
+    89,
+    93,
+    97,
+    101,
+    106,
+    112,
+    117,
+    124,
+    130,
+    137
+   ],
+   "60": [
+    82,
+    84,
+    88,
+    91,
+    95,
+    100,
+    105,
+    110,
+    116,
+    123,
+    129,
+    137
+   ],
+   "65": [
+    82,
+    85,
+    89,
+    93,
+    98,
+    103,
+    108,
+    114,
+    121,
+    128,
+    136
+   ],
+   "70": [
+    82,
+    86,
+    90,
+    95,
+    100,
+    105,
+    112,
+    119,
+    126,
+    134
+   ],
+   "75": [
+    84,
+    88,
+    92,
+    97,
+    103,
+    109,
+    116,
+    124,
+    132
+   ],
+   "80": [
+    84,
+    89,
+    94,
+    100,
+    106,
+    113,
+    121,
+    129
+   ],
+   "85": [
+    84,
+    90,
+    96,
+    102,
+    110,
+    117,
+    126,
+    135
+   ],
+   "90": [
+    86,
+    91,
+    98,
+    105,
+    113,
+    122,
+    131
+   ],
+   "95": [
+    86,
+    93,
+    100,
+    108,
+    117,
+    127
+   ],
+   "100": [
+    87,
+    95,
+    103,
+    112,
+    121,
+    132
+   ]
+  },
+  "osha_table2_C_action_limit_tlv": {
+   "light": [
+    28.0,
+    30.0
+   ],
+   "moderate": [
+    25.0,
+    28.0
+   ],
+   "heavy": [
+    23.0,
+    26.0
+   ],
+   "very_heavy": [
+    21.0,
+    25.0
+   ]
+  },
+  "us_quart_L": 0.946352946,
+  "us_fl_oz_mL": 29.5735295625,
+  "kcal_per_h_to_W": 1.163
+ },
+ "summary": {
+  "noaa_chart": {
+   "cells": 135,
+   "rothfusz_exact": 129,
+   "rothfusz_within_1F": 135,
+   "nws_full_exact": 121,
+   "nws_full_within_1F": 133
+  }
+ },
+ "checks": [
+  {
+   "check": "niosh_example_vs_equation",
+   "pass": true,
+   "detail": "REL(348.9)=27.459 (doc figure reading 27.8), RAL=24.048 (doc 25)"
+  },
+  {
+   "check": "assp2022_tlv_270W",
+   "pass": true,
+   "detail": "28.7393 vs published 28.74"
+  },
+  {
+   "check": "assp2022_tlv_481W",
+   "pass": true,
+   "detail": "25.8553 vs published 25.86"
+  },
+  {
+   "check": "assp2022_al_270W",
+   "pass": true,
+   "detail": "25.6178 vs published 25.62"
+  },
+  {
+   "check": "assp2022_al_115W",
+   "pass": true,
+   "detail": "30.8442 vs published 30.84"
+  },
+  {
+   "check": "acgih_tlv_75-100_light",
+   "pass": true,
+   "detail": "derived 30.764->31.0 vs published 31.0"
+  },
+  {
+   "check": "acgih_al_75-100_light",
+   "pass": true,
+   "detail": "derived 28.101->28.0 vs published 28.0"
+  },
+  {
+   "check": "acgih_tlv_75-100_moderate",
+   "pass": true,
+   "detail": "derived 28.213->28.0 vs published 28.0"
+  },
+  {
+   "check": "acgih_al_75-100_moderate",
+   "pass": true,
+   "detail": "derived 24.973->25.0 vs published 25.0"
+  },
+  {
+   "check": "acgih_tlv_50-75_light",
+   "pass": true,
+   "detail": "derived 31.237->31.0 vs published 31.0"
+  },
+  {
+   "check": "acgih_al_50-75_light",
+   "pass": true,
+   "detail": "derived 28.680->28.5 vs published 28.5"
+  },
+  {
+   "check": "acgih_tlv_50-75_moderate",
+   "pass": true,
+   "detail": "derived 29.049->29.0 vs published 29.0"
+  },
+  {
+   "check": "acgih_al_50-75_moderate",
+   "pass": true,
+   "detail": "derived 25.998->26.0 vs published 26.0"
+  },
+  {
+   "check": "acgih_tlv_50-75_heavy",
+   "pass": true,
+   "detail": "derived 27.588->27.5 vs published 27.5"
+  },
+  {
+   "check": "acgih_al_50-75_heavy",
+   "pass": true,
+   "detail": "derived 24.206->24.0 vs published 24.0"
+  },
+  {
+   "check": "acgih_tlv_25-50_light",
+   "pass": true,
+   "detail": "derived 31.759->32.0 vs published 32.0"
+  },
+  {
+   "check": "acgih_al_25-50_light",
+   "pass": true,
+   "detail": "derived 29.320->29.5 vs published 29.5"
+  },
+  {
+   "check": "acgih_tlv_25-50_moderate",
+   "pass": true,
+   "detail": "derived 30.054->30.0 vs published 30.0"
+  },
+  {
+   "check": "acgih_al_25-50_moderate",
+   "pass": true,
+   "detail": "derived 27.230->27.0 vs published 27.0"
+  },
+  {
+   "check": "acgih_tlv_25-50_heavy",
+   "pass": true,
+   "detail": "derived 28.833->29.0 vs published 29.0"
+  },
+  {
+   "check": "acgih_al_25-50_heavy",
+   "pass": true,
+   "detail": "derived 25.732->25.5 vs published 25.5"
+  },
+  {
+   "check": "acgih_tlv_25-50_very_heavy",
+   "pass": true,
+   "detail": "derived 27.930->28.0 vs published 28.0"
+  },
+  {
+   "check": "acgih_al_25-50_very_heavy",
+   "pass": true,
+   "detail": "derived 24.625->24.5 vs published 24.5"
+  },
+  {
+   "check": "acgih_tlv_0-25_light",
+   "pass": true,
+   "detail": "derived 32.342->32.5 vs published 32.5"
+  },
+  {
+   "check": "acgih_al_0-25_light",
+   "pass": true,
+   "detail": "derived 30.035->30.0 vs published 30.0"
+  },
+  {
+   "check": "acgih_tlv_0-25_moderate",
+   "pass": true,
+   "detail": "derived 31.314->31.5 vs published 31.5"
+  },
+  {
+   "check": "acgih_al_0-25_moderate",
+   "pass": true,
+   "detail": "derived 28.774->29.0 vs published 29.0"
+  },
+  {
+   "check": "acgih_tlv_0-25_heavy",
+   "pass": true,
+   "detail": "derived 30.494->30.5 vs published 30.5"
+  },
+  {
+   "check": "acgih_al_0-25_heavy",
+   "pass": true,
+   "detail": "derived 27.770->28.0 vs published 28.0"
+  },
+  {
+   "check": "acgih_tlv_0-25_very_heavy",
+   "pass": true,
+   "detail": "derived 29.848->30.0 vs published 30.0"
+  },
+  {
+   "check": "acgih_al_0-25_very_heavy",
+   "pass": true,
+   "detail": "derived 26.977->27.0 vs published 27.0"
+  },
+  {
+   "check": "awf_consistent_with_acgih_75pct",
+   "pass": true,
+   "detail": "f=0.74957"
+  },
+  {
+   "check": "ccohs_twa_example",
+   "pass": true,
+   "detail": "26.75"
+  },
+  {
+   "check": "assp2022_mass_110",
+   "pass": true,
+   "detail": "282.8571 vs 282.86"
+  },
+  {
+   "check": "assp2022_mass_87",
+   "pass": true,
+   "detail": "515.7857 vs 515.79"
+  },
+  {
+   "check": "kcal_example",
+   "pass": true,
+   "detail": "348.9000"
+  },
+  {
+   "check": "ccohs_cav_example",
+   "pass": true,
+   "detail": "28+3=31"
+  },
+  {
+   "check": "wc_niosh_26.0_300.0",
+   "pass": true,
+   "detail": "ptc 100.0 own 100.0"
+  },
+  {
+   "check": "wc_iso_26.0_300.0",
+   "pass": true,
+   "detail": "ptc 100.0 own 100.0"
+  },
+  {
+   "check": "wc_niosh_28.0_300.0",
+   "pass": true,
+   "detail": "ptc 100.0 own 100.0"
+  },
+  {
+   "check": "wc_iso_28.0_300.0",
+   "pass": true,
+   "detail": "ptc 100.0 own 100.0"
+  },
+  {
+   "check": "wc_niosh_30.0_300.0",
+   "pass": true,
+   "detail": "ptc 62.003258471944356 own 62.003258471944356"
+  },
+  {
+   "check": "wc_iso_30.0_300.0",
+   "pass": true,
+   "detail": "ptc 59.234972677595636 own 59.234972677595636"
+  },
+  {
+   "check": "wc_niosh_32.0_300.0",
+   "pass": true,
+   "detail": "ptc 19.47501404348266 own 19.47501404348266"
+  },
+  {
+   "check": "wc_iso_32.0_300.0",
+   "pass": true,
+   "detail": "ptc 8.961748633879806 own 8.961748633879806"
+  },
+  {
+   "check": "wc_niosh_30.0_180.0",
+   "pass": true,
+   "detail": "ptc 100.0 own 100.0"
+  },
+  {
+   "check": "wc_iso_30.0_180.0",
+   "pass": true,
+   "detail": "ptc 100.0 own 100.0"
+  },
+  {
+   "check": "wc_niosh_29.0_415.0",
+   "pass": true,
+   "detail": "ptc 61.92638242356278 own 61.92638242356278"
+  },
+  {
+   "check": "wc_iso_29.0_415.0",
+   "pass": true,
+   "detail": "ptc 51.81208053691277 own 51.81208053691277"
+  },
+  {
+   "check": "wc_niosh_31.0_520.0",
+   "pass": true,
+   "detail": "ptc 25.716617968350764 own 25.716617968350764"
+  },
+  {
+   "check": "wc_iso_31.0_520.0",
+   "pass": true,
+   "detail": "ptc 15.483870967741941 own 15.483870967741941"
+  },
+  {
+   "check": "wc_niosh_33.5_300.0",
+   "pass": true,
+   "detail": "ptc 0.0 own 0.0"
+  },
+  {
+   "check": "wc_iso_33.5_300.0",
+   "pass": true,
+   "detail": "ptc 0.0 own 0.0"
+  },
+  {
+   "check": "hi_threshold_rules_differ",
+   "pass": true,
+   "detail": "text {'hiF': 79.542, 'branch': 'simple', 'simpleF': 79.542, 'adjustmentF': 0.0} js {'hiF': 80.42556640000011, 'branch': 'rothfusz', 'simpleF': 79.542, 'adjustmentF': 0.0}"
+  },
+  {
+   "check": "ptc_equals_rothfusz_only_27.0_40.0",
+   "pass": true,
+   "detail": "ptc 26.863178964000014 vs rothfusz-only 26.863173119555604"
+  },
+  {
+   "check": "ptc_equals_rothfusz_only_30.0_60.0",
+   "pass": true,
+   "detail": "ptc 32.83204090000003 vs rothfusz-only 32.832032277777756"
+  },
+  {
+   "check": "ptc_equals_rothfusz_only_35.0_50.0",
+   "pass": true,
+   "detail": "ptc 40.67543619999999 vs rothfusz-only 40.675428944444484"
+  },
+  {
+   "check": "ptc_equals_rothfusz_only_38.0_30.0",
+   "pass": true,
+   "detail": "ptc 39.445016284 vs rothfusz-only 39.44501189511107"
+  },
+  {
+   "check": "ptc_equals_rothfusz_only_40.0_20.0",
+   "pass": true,
+   "detail": "ptc 39.3766318 vs rothfusz-only 39.37662891111112"
+  },
+  {
+   "check": "ptc_equals_rothfusz_only_42.0_10.0",
+   "pass": true,
+   "detail": "ptc 38.98666568400001 vs rothfusz-only 38.986664339555546"
+  },
+  {
+   "check": "ptc_equals_rothfusz_only_45.0_8.0",
+   "pass": true,
+   "detail": "ptc 41.314730608 vs rothfusz-only 41.3147295777778"
+  },
+  {
+   "check": "ptc_equals_rothfusz_only_28.0_90.0",
+   "pass": true,
+   "detail": "ptc 33.74765670400001 vs rothfusz-only 33.7476442484444"
+  },
+  {
+   "check": "ptc_equals_rothfusz_only_33.0_75.0",
+   "pass": true,
+   "detail": "ptc 45.71682486400008 vs rothfusz-only 45.716814275111346"
+  },
+  {
+   "check": "ptc_equals_rothfusz_only_46.0_15.0",
+   "pass": true,
+   "detail": "ptc 45.861575836000014 vs rothfusz-only 45.86157371377781"
+  },
+  {
+   "check": "ptc_nan_below_27C",
+   "pass": true,
+   "detail": "nan"
+  },
+  {
+   "check": "noaa_chart_rothfusz_within_1F",
+   "pass": true,
+   "detail": "135/135 cells (exact 129)"
+  },
+  {
+   "check": "noaa_chart_full_nws_within_1F_except_highRH",
+   "pass": true,
+   "detail": "133/135 cells (exact 121); worst (2.2878534000000172, (80.0, 100, 87, 89.28785340000002))"
+  },
+  {
+   "check": "osha_table2_light_within_1C",
+   "pass": true,
+   "detail": "RAL 28.10 vs 28.0; REL 30.76 vs 30.0"
+  },
+  {
+   "check": "osha_table2_moderate_within_1C",
+   "pass": true,
+   "detail": "RAL 24.97 vs 25.0; REL 28.21 vs 28.0"
+  },
+  {
+   "check": "osha_table2_heavy_within_1C",
+   "pass": true,
+   "detail": "RAL 22.99 vs 23.0; REL 26.59 vs 26.0"
+  },
+  {
+   "check": "osha_table2_very_heavy_within_1C",
+   "pass": true,
+   "detail": "RAL 21.60 vs 21.0; REL 25.47 vs 25.0"
+  }
+ ],
+ "vectors": [
+  {
+   "id": "ral_rel_100W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 100.0
+   },
+   "expected": {
+    "ralC": 31.7,
+    "relC": 33.7
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": ""
+  },
+  {
+   "id": "ral_rel_115W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 115.0
+   },
+   "expected": {
+    "ralC": 30.844160451014073,
+    "relC": 33.00197483593347
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": ""
+  },
+  {
+   "id": "ral_rel_117W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 117.0
+   },
+   "expected": {
+    "ralC": 30.73857934937912,
+    "relC": 32.91586258991914
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": ""
+  },
+  {
+   "id": "ral_rel_180W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 180.0
+   },
+   "expected": {
+    "ralC": 28.100657678043383,
+    "relC": 30.764366191311982
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": ""
+  },
+  {
+   "id": "ral_rel_233W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 233.0
+   },
+   "expected": {
+    "ralC": 26.520281513533135,
+    "relC": 29.475406908200785
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": ""
+  },
+  {
+   "id": "ral_rel_300W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 300.0
+   },
+   "expected": {
+    "ralC": 24.97259030845276,
+    "relC": 28.213105570723883
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": ""
+  },
+  {
+   "id": "ral_rel_348.9W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 348.9
+   },
+   "expected": {
+    "ralC": 24.04791633078164,
+    "relC": 27.45893885134673
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": "348.9 W = 300 kcal/h (NIOSH worked example)."
+  },
+  {
+   "id": "ral_rel_415W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 415.0
+   },
+   "expected": {
+    "ralC": 22.985521836359496,
+    "relC": 26.59244688781094
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": ""
+  },
+  {
+   "id": "ral_rel_465W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 465.0
+   },
+   "expected": {
+    "ralC": 22.28891336425165,
+    "relC": 26.024291041765533
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": ""
+  },
+  {
+   "id": "ral_rel_520W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 520.0
+   },
+   "expected": {
+    "ralC": 21.604352854749337,
+    "relC": 25.465961548199815
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": ""
+  },
+  {
+   "id": "ral_rel_580W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 580.0
+   },
+   "expected": {
+    "ralC": 20.935665290762586,
+    "relC": 24.920578074026224
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": ""
+  },
+  {
+   "id": "ral_rel_600W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC/relC",
+   "inputs": {
+    "mW": 600.0
+   },
+   "expected": {
+    "ralC": 20.728067369590626,
+    "relC": 24.751260620588102
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NIOSH 2016-106 sec 8.1: RAL = 59.9 - 14.1 log10 M; REL = 56.7 - 11.5 log10 M (M in W)",
+   "note": ""
+  },
+  {
+   "id": "assp2022_tlv_270W",
+   "group": "niosh_ral_rel",
+   "fn": "relC",
+   "inputs": {
+    "mW": 270.0
+   },
+   "expected": {
+    "valueC": 28.739316712171647,
+    "publishedC_2dp": 28.74
+   },
+   "tol": {
+    "abs": 0.005
+   },
+   "source": "ASSP Professional Safety, Aug 2022, Math Toolbox (published worked answer, 2 dp)",
+   "note": ""
+  },
+  {
+   "id": "assp2022_tlv_481W",
+   "group": "niosh_ral_rel",
+   "fn": "relC",
+   "inputs": {
+    "mW": 481.0
+   },
+   "expected": {
+    "valueC": 25.855331621700934,
+    "publishedC_2dp": 25.86
+   },
+   "tol": {
+    "abs": 0.005
+   },
+   "source": "ASSP Professional Safety, Aug 2022, Math Toolbox (published worked answer, 2 dp)",
+   "note": ""
+  },
+  {
+   "id": "assp2022_al_270W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC",
+   "inputs": {
+    "mW": 270.0
+   },
+   "expected": {
+    "valueC": 25.61777092535828,
+    "publishedC_2dp": 25.62
+   },
+   "tol": {
+    "abs": 0.005
+   },
+   "source": "ASSP Professional Safety, Aug 2022, Math Toolbox (published worked answer, 2 dp)",
+   "note": ""
+  },
+  {
+   "id": "assp2022_al_115W",
+   "group": "niosh_ral_rel",
+   "fn": "ralC",
+   "inputs": {
+    "mW": 115.0
+   },
+   "expected": {
+    "valueC": 30.844160451014073,
+    "publishedC_2dp": 30.84
+   },
+   "tol": {
+    "abs": 0.005
+   },
+   "source": "ASSP Professional Safety, Aug 2022, Math Toolbox (published worked answer, 2 dp)",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_75-100_light",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "light",
+    "allocation": "75-100",
+    "workFraction": 1.0
+   },
+   "expected": {
+    "mTwaW": 180.0,
+    "tlvRawC": 30.764366191311982,
+    "alRawC": 28.100657678043383,
+    "tlvRoundedC": 31.0,
+    "alRoundedC": 28.0,
+    "publishedTlvC": 31.0,
+    "publishedAlC": 28.0,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_75-100_moderate",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "moderate",
+    "allocation": "75-100",
+    "workFraction": 1.0
+   },
+   "expected": {
+    "mTwaW": 300.0,
+    "tlvRawC": 28.213105570723883,
+    "alRawC": 24.97259030845276,
+    "tlvRoundedC": 28.0,
+    "alRoundedC": 25.0,
+    "publishedTlvC": 28.0,
+    "publishedAlC": 25.0,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_75-100_heavy",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "heavy",
+    "allocation": "75-100",
+    "workFraction": 1.0
+   },
+   "expected": {
+    "mTwaW": 415.0,
+    "tlvRawC": 26.59244688781094,
+    "alRawC": 22.985521836359496,
+    "tlvRoundedC": 26.5,
+    "alRoundedC": 23.0,
+    "publishedTlvC": null,
+    "publishedAlC": null,
+    "screeningAvailable": false
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": "Published cell blank: screening not recommended -> detailed analysis / physiological monitoring."
+  },
+  {
+   "id": "acgih_t2_75-100_very_heavy",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "very_heavy",
+    "allocation": "75-100",
+    "workFraction": 1.0
+   },
+   "expected": {
+    "mTwaW": 520.0,
+    "tlvRawC": 25.465961548199815,
+    "alRawC": 21.604352854749337,
+    "tlvRoundedC": 25.5,
+    "alRoundedC": 21.5,
+    "publishedTlvC": null,
+    "publishedAlC": null,
+    "screeningAvailable": false
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": "Published cell blank: screening not recommended -> detailed analysis / physiological monitoring."
+  },
+  {
+   "id": "acgih_t2_50-75_light",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "light",
+    "allocation": "50-75",
+    "workFraction": 0.75
+   },
+   "expected": {
+    "mTwaW": 163.75,
+    "tlvRawC": 31.236914950366064,
+    "alRawC": 28.68004354784013,
+    "tlvRoundedC": 31.0,
+    "alRoundedC": 28.5,
+    "publishedTlvC": 31.0,
+    "publishedAlC": 28.5,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_50-75_moderate",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "moderate",
+    "allocation": "50-75",
+    "workFraction": 0.75
+   },
+   "expected": {
+    "mTwaW": 253.75,
+    "tlvRawC": 29.049330414405407,
+    "alRawC": 25.997874682010107,
+    "tlvRoundedC": 29.0,
+    "alRoundedC": 26.0,
+    "publishedTlvC": 29.0,
+    "publishedAlC": 26.0,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_50-75_heavy",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "heavy",
+    "allocation": "50-75",
+    "workFraction": 0.75
+   },
+   "expected": {
+    "mTwaW": 340.0,
+    "tlvRawC": 27.58799245401407,
+    "alRawC": 24.206147269704203,
+    "tlvRoundedC": 27.5,
+    "alRoundedC": 24.0,
+    "publishedTlvC": 27.5,
+    "publishedAlC": 24.0,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_50-75_very_heavy",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "very_heavy",
+    "allocation": "50-75",
+    "workFraction": 0.75
+   },
+   "expected": {
+    "mTwaW": 418.75,
+    "tlvRawC": 26.547519569483637,
+    "alRawC": 22.930437037366886,
+    "tlvRoundedC": 26.5,
+    "alRoundedC": 23.0,
+    "publishedTlvC": null,
+    "publishedAlC": null,
+    "screeningAvailable": false
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": "Published cell blank: screening not recommended -> detailed analysis / physiological monitoring."
+  },
+  {
+   "id": "acgih_t2_25-50_light",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "light",
+    "allocation": "25-50",
+    "workFraction": 0.5
+   },
+   "expected": {
+    "mTwaW": 147.5,
+    "tlvRawC": 31.758891766386913,
+    "alRawC": 29.320032513570037,
+    "tlvRoundedC": 32.0,
+    "alRoundedC": 29.5,
+    "publishedTlvC": 32.0,
+    "publishedAlC": 29.5,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_25-50_moderate",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "moderate",
+    "allocation": "25-50",
+    "workFraction": 0.5
+   },
+   "expected": {
+    "mTwaW": 207.5,
+    "tlvRawC": 30.054291837946717,
+    "alRawC": 27.23004477522162,
+    "tlvRoundedC": 30.0,
+    "alRoundedC": 27.0,
+    "publishedTlvC": 30.0,
+    "publishedAlC": 27.0,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_25-50_heavy",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "heavy",
+    "allocation": "25-50",
+    "workFraction": 0.5
+   },
+   "expected": {
+    "mTwaW": 265.0,
+    "tlvRawC": 28.83267244972671,
+    "alRawC": 25.73223317749101,
+    "tlvRoundedC": 29.0,
+    "alRoundedC": 25.5,
+    "publishedTlvC": 29.0,
+    "publishedAlC": 25.5,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_25-50_very_heavy",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "very_heavy",
+    "allocation": "25-50",
+    "workFraction": 0.5
+   },
+   "expected": {
+    "mTwaW": 317.5,
+    "tlvRawC": 27.929947109278068,
+    "alRawC": 24.62541341224528,
+    "tlvRoundedC": 28.0,
+    "alRoundedC": 24.5,
+    "publishedTlvC": 28.0,
+    "publishedAlC": 24.5,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_0-25_light",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "light",
+    "allocation": "0-25",
+    "workFraction": 0.25
+   },
+   "expected": {
+    "mTwaW": 131.25,
+    "tlvRawC": 32.34185791110306,
+    "alRawC": 30.034799699700276,
+    "tlvRoundedC": 32.5,
+    "alRoundedC": 30.0,
+    "publishedTlvC": 32.5,
+    "publishedAlC": 30.0,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_0-25_moderate",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "moderate",
+    "allocation": "0-25",
+    "workFraction": 0.25
+   },
+   "expected": {
+    "mTwaW": 161.25,
+    "tlvRawC": 31.31375318196599,
+    "alRawC": 28.774253901366993,
+    "tlvRoundedC": 31.5,
+    "alRoundedC": 29.0,
+    "publishedTlvC": 31.5,
+    "publishedAlC": 29.0,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_0-25_heavy",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "heavy",
+    "allocation": "0-25",
+    "workFraction": 0.25
+   },
+   "expected": {
+    "mTwaW": 190.0,
+    "tlvRawC": 30.49433358904247,
+    "alRawC": 27.769574226565112,
+    "tlvRoundedC": 30.5,
+    "alRoundedC": 28.0,
+    "publishedTlvC": 30.5,
+    "publishedAlC": 28.0,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "acgih_t2_0-25_very_heavy",
+   "group": "acgih_screening_table",
+   "fn": "acgihScreeningCell",
+   "inputs": {
+    "category": "very_heavy",
+    "allocation": "0-25",
+    "workFraction": 0.25
+   },
+   "expected": {
+    "mTwaW": 216.25,
+    "tlvRawC": 29.84800466442621,
+    "alRawC": 26.97711876247039,
+    "tlvRoundedC": 30.0,
+    "alRoundedC": 27.0,
+    "publishedTlvC": 30.0,
+    "publishedAlC": 27.0,
+    "screeningAvailable": true
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ACGIH TLV Heat Stress & Strain, Table 2 + notes (rest 115 W, mid-range Table 3 rate, work fraction = upper limit of range, nearest 0.5 degC). Published values: ACGIH text via Cal/OSHA docket; identical in CCOHS reproduction of 2026 TLVs and LBNL (2016 TLVs).",
+   "note": ""
+  },
+  {
+   "id": "awf_mod_accl_same_env_29.05",
+   "group": "allowed_work_fraction",
+   "fn": "allowedWorkFraction",
+   "inputs": {
+    "wbgtWorkC": 29.0509,
+    "wbgtRestC": 29.0509,
+    "mWorkW": 300.0,
+    "mRestW": 115.0,
+    "acclimatized": true
+   },
+   "expected": {
+    "f": 0.749569008272374,
+    "workMinPerHour": 44.97414049634244,
+    "marginAtFullWorkC": -0.8377944292761157,
+    "branch": "bisection"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "Derived: NIOSH/ACGIH 1-h TWA of WBGT_eff and M compared with REL/RAL(M_TWA); rest M = 115 W (ACGIH Table 2 basis). Solved by bisection (tol 1e-12).",
+   "note": "Same WBGT at work/rest: TLV at f=0.75 is 29.05 degC -> f ~ 0.75"
+  },
+  {
+   "id": "awf_mod_accl_cont_ok",
+   "group": "allowed_work_fraction",
+   "fn": "allowedWorkFraction",
+   "inputs": {
+    "wbgtWorkC": 27.0,
+    "wbgtRestC": 27.0,
+    "mWorkW": 300.0,
+    "mRestW": 115.0,
+    "acclimatized": true
+   },
+   "expected": {
+    "f": 1.0,
+    "workMinPerHour": 60.0,
+    "marginAtFullWorkC": 1.213105570723883,
+    "branch": "continuous_ok"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "Derived: NIOSH/ACGIH 1-h TWA of WBGT_eff and M compared with REL/RAL(M_TWA); rest M = 115 W (ACGIH Table 2 basis). Solved by bisection (tol 1e-12).",
+   "note": "REL(300)=28.21 >= 27 -> continuous work, margin 1.21 degC"
+  },
+  {
+   "id": "awf_mod_unaccl_sun30_shade28",
+   "group": "allowed_work_fraction",
+   "fn": "allowedWorkFraction",
+   "inputs": {
+    "wbgtWorkC": 30.0,
+    "wbgtRestC": 28.0,
+    "mWorkW": 300.0,
+    "mRestW": 115.0,
+    "acclimatized": false
+   },
+   "expected": {
+    "f": 0.2808005450397104,
+    "workMinPerHour": 16.848032702382625,
+    "marginAtFullWorkC": -5.027409691547241,
+    "branch": "bisection"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "Derived: NIOSH/ACGIH 1-h TWA of WBGT_eff and M compared with REL/RAL(M_TWA); rest M = 115 W (ACGIH Table 2 basis). Solved by bisection (tol 1e-12).",
+   "note": "Unacclimatised, rest in shade 2 degC cooler"
+  },
+  {
+   "id": "awf_heavy_accl_sun31_shade27",
+   "group": "allowed_work_fraction",
+   "fn": "allowedWorkFraction",
+   "inputs": {
+    "wbgtWorkC": 31.0,
+    "wbgtRestC": 27.0,
+    "mWorkW": 415.0,
+    "mRestW": 115.0,
+    "acclimatized": true
+   },
+   "expected": {
+    "f": 0.48276732812519185,
+    "workMinPerHour": 28.96603968751151,
+    "marginAtFullWorkC": -4.40755311218906,
+    "branch": "bisection"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "Derived: NIOSH/ACGIH 1-h TWA of WBGT_eff and M compared with REL/RAL(M_TWA); rest M = 115 W (ACGIH Table 2 basis). Solved by bisection (tol 1e-12).",
+   "note": "Acclimatised heavy work, shade rest 4 degC cooler"
+  },
+  {
+   "id": "awf_vheavy_accl_sun33_shade29",
+   "group": "allowed_work_fraction",
+   "fn": "allowedWorkFraction",
+   "inputs": {
+    "wbgtWorkC": 33.0,
+    "wbgtRestC": 29.0,
+    "mWorkW": 520.0,
+    "mRestW": 115.0,
+    "acclimatized": true
+   },
+   "expected": {
+    "f": 0.23870260809144384,
+    "workMinPerHour": 14.32215648548663,
+    "marginAtFullWorkC": -7.5340384518001855,
+    "branch": "bisection"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "Derived: NIOSH/ACGIH 1-h TWA of WBGT_eff and M compared with REL/RAL(M_TWA); rest M = 115 W (ACGIH Table 2 basis). Solved by bisection (tol 1e-12).",
+   "note": "Very heavy, Abu Dhabi-like summer midday"
+  },
+  {
+   "id": "awf_light_unaccl_sun34_shade34",
+   "group": "allowed_work_fraction",
+   "fn": "allowedWorkFraction",
+   "inputs": {
+    "wbgtWorkC": 34.0,
+    "wbgtRestC": 34.0,
+    "mWorkW": 180.0,
+    "mRestW": 115.0,
+    "acclimatized": false
+   },
+   "expected": {
+    "f": 0.0,
+    "workMinPerHour": 0.0,
+    "marginAtFullWorkC": -5.899342321956617,
+    "branch": "rest_exceeds_limit"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "Derived: NIOSH/ACGIH 1-h TWA of WBGT_eff and M compared with REL/RAL(M_TWA); rest M = 115 W (ACGIH Table 2 basis). Solved by bisection (tol 1e-12).",
+   "note": "Rest WBGT above RAL(115)=30.84 -> f = 0"
+  },
+  {
+   "id": "awf_mod_accl_sun32_shade25",
+   "group": "allowed_work_fraction",
+   "fn": "allowedWorkFraction",
+   "inputs": {
+    "wbgtWorkC": 32.0,
+    "wbgtRestC": 25.0,
+    "mWorkW": 300.0,
+    "mRestW": 115.0,
+    "acclimatized": true
+   },
+   "expected": {
+    "f": 0.6387993533180634,
+    "workMinPerHour": 38.3279611990838,
+    "marginAtFullWorkC": -3.786894429276117,
+    "branch": "bisection"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "Derived: NIOSH/ACGIH 1-h TWA of WBGT_eff and M compared with REL/RAL(M_TWA); rest M = 115 W (ACGIH Table 2 basis). Solved by bisection (tol 1e-12).",
+   "note": "Air-conditioned/shaded rest strongly cooler"
+  },
+  {
+   "id": "awf_light_accl_sun31_shade31",
+   "group": "allowed_work_fraction",
+   "fn": "allowedWorkFraction",
+   "inputs": {
+    "wbgtWorkC": 31.0,
+    "wbgtRestC": 31.0,
+    "mWorkW": 180.0,
+    "mRestW": 115.0,
+    "acclimatized": true
+   },
+   "expected": {
+    "f": 0.8723825888073407,
+    "workMinPerHour": 52.34295532844044,
+    "marginAtFullWorkC": -0.23563380868801787,
+    "branch": "bisection"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "Derived: NIOSH/ACGIH 1-h TWA of WBGT_eff and M compared with REL/RAL(M_TWA); rest M = 115 W (ACGIH Table 2 basis). Solved by bisection (tol 1e-12).",
+   "note": "REL(180)=30.76 < 31 -> partial"
+  },
+  {
+   "id": "twa_ccohs_example",
+   "group": "twa",
+   "fn": "twa",
+   "inputs": {
+    "values": [
+     25.0,
+     27.0,
+     28.0
+    ],
+    "minutes": [
+     30.0,
+     60.0,
+     30.0
+    ]
+   },
+   "expected": {
+    "value": 26.75
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "CCOHS OSH Answers 'Hot Environments - Assessment and Control Measures' TWA example",
+   "note": ""
+  },
+  {
+   "id": "twa_metabolic_40_20",
+   "group": "twa",
+   "fn": "twa",
+   "inputs": {
+    "values": [
+     300.0,
+     115.0
+    ],
+    "minutes": [
+     40.0,
+     20.0
+    ]
+   },
+   "expected": {
+    "value": 238.33333333333334,
+    "relAtTwaC": 29.362374948563694,
+    "ralAtTwaC": 26.38169450215201
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "ISO 7243:2017 Formula (4)/(5) with T = 1 h; NIOSH/ACGIH 1-h TWA",
+   "note": ""
+  },
+  {
+   "id": "twa_wbgt_45_15",
+   "group": "twa",
+   "fn": "twa",
+   "inputs": {
+    "values": [
+     31.2,
+     28.4
+    ],
+    "minutes": [
+     45.0,
+     15.0
+    ]
+   },
+   "expected": {
+    "value": 30.5
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "ISO 7243:2017 Formula (4)",
+   "note": ""
+  },
+  {
+   "id": "mass_scale_180W_110kg",
+   "group": "metabolic_scaling",
+   "fn": "scaleMetabolicRateByMass",
+   "inputs": {
+    "mW": 180.0,
+    "massKg": 110.0
+   },
+   "expected": {
+    "mW": 282.85714285714283,
+    "publishedW_2dp": 282.86
+   },
+   "tol": {
+    "abs": 0.005
+   },
+   "source": "ACGIH TLV Table 3 footnote; ASSP PSJ Aug 2022 worked answers",
+   "note": ""
+  },
+  {
+   "id": "mass_scale_415W_87kg",
+   "group": "metabolic_scaling",
+   "fn": "scaleMetabolicRateByMass",
+   "inputs": {
+    "mW": 415.0,
+    "massKg": 87.0
+   },
+   "expected": {
+    "mW": 515.7857142857143,
+    "publishedW_2dp": 515.79
+   },
+   "tol": {
+    "abs": 0.005
+   },
+   "source": "ACGIH TLV Table 3 footnote; ASSP PSJ Aug 2022 worked answers",
+   "note": ""
+  },
+  {
+   "id": "kcalh_300_to_W",
+   "group": "units",
+   "fn": "kcalPerHourToW",
+   "inputs": {
+    "kcalPerH": 300.0
+   },
+   "expected": {
+    "w": 348.90000000000003
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "1 kcal(IT)/h = 4186.8/3600 W = 1.163 W (NIOSH example: 300 kcal/h = 348.9 W)",
+   "note": ""
+  },
+  {
+   "id": "cav_double_layer_28",
+   "group": "clothing",
+   "fn": "wbgtEffective",
+   "inputs": {
+    "wbgtC": 28.0,
+    "clothing": "double_layer_woven_clothing",
+    "hood": false
+   },
+   "expected": {
+    "cavC": 3.0,
+    "wbgtEffC": 31.0,
+    "acgihModerateAcclimatizedAllocation": "0-25"
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "ACGIH 2026 TLV Table 1 (CAV) as reproduced by CCOHS; WBGT_eff = WBGT + CAV (ISO 7243:2017 eq. 3)",
+   "note": "CCOHS example: 28 + 3 = 31 -> 0-25% work; 30 + 3 = 33 -> above all screening values."
+  },
+  {
+   "id": "cav_double_layer_30",
+   "group": "clothing",
+   "fn": "wbgtEffective",
+   "inputs": {
+    "wbgtC": 30.0,
+    "clothing": "double_layer_woven_clothing",
+    "hood": false
+   },
+   "expected": {
+    "cavC": 3.0,
+    "wbgtEffC": 33.0,
+    "acgihModerateAcclimatizedAllocation": null
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "ACGIH 2026 TLV Table 1 (CAV) as reproduced by CCOHS; WBGT_eff = WBGT + CAV (ISO 7243:2017 eq. 3)",
+   "note": "CCOHS example: 28 + 3 = 31 -> 0-25% work; 30 + 3 = 33 -> above all screening values."
+  },
+  {
+   "id": "cav_vapour_barrier_20",
+   "group": "clothing",
+   "fn": "wbgtEffective",
+   "inputs": {
+    "wbgtC": 20.0,
+    "clothing": "limited_use_vapour_barrier_coveralls",
+    "hood": false
+   },
+   "expected": {
+    "cavC": 11.0,
+    "wbgtEffC": 31.0,
+    "acgihModerateAcclimatizedAllocation": "0-25"
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "ACGIH 2026 TLV Table 1 (CAV) as reproduced by CCOHS; WBGT_eff = WBGT + CAV (ISO 7243:2017 eq. 3)",
+   "note": ""
+  },
+  {
+   "id": "cav_polyolefin_hood_25",
+   "group": "clothing",
+   "fn": "wbgtEffective",
+   "inputs": {
+    "wbgtC": 25.0,
+    "clothing": "polyolefin_coveralls",
+    "hood": true
+   },
+   "expected": {
+    "cavC": 2.0,
+    "wbgtEffC": 27.0,
+    "acgihModerateAcclimatizedAllocation": "75-100"
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "ACGIH 2026 TLV Table 1 (CAV) as reproduced by CCOHS; WBGT_eff = WBGT + CAV (ISO 7243:2017 eq. 3)",
+   "note": ""
+  },
+  {
+   "id": "cav_short_sleeves_31",
+   "group": "clothing",
+   "fn": "wbgtEffective",
+   "inputs": {
+    "wbgtC": 31.0,
+    "clothing": "short_sleeves_and_pants_woven",
+    "hood": false
+   },
+   "expected": {
+    "cavC": -1.0,
+    "wbgtEffC": 30.0,
+    "acgihModerateAcclimatizedAllocation": "25-50"
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "ACGIH 2026 TLV Table 1 (CAV) as reproduced by CCOHS; WBGT_eff = WBGT + CAV (ISO 7243:2017 eq. 3)",
+   "note": ""
+  },
+  {
+   "id": "wc_niosh_26C_300W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityNiosh",
+   "inputs": {
+    "wbgtC": 26.0,
+    "mW": 300.0
+   },
+   "expected": {
+    "capacityPct": 100.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_niosh (Brode et al. 2018 NIOSH-based)",
+   "note": "capacity = clip((REL(117)-WBGT)/(REL(117)-REL(M))*100, 0, 100)"
+  },
+  {
+   "id": "wc_iso_26C_300W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityIsoBrode",
+   "inputs": {
+    "wbgtC": 26.0,
+    "mW": 300.0
+   },
+   "expected": {
+    "capacityPct": 100.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_iso (Brode et al. 2018 linear ISO fit)",
+   "note": "limit = 34.9 - M/46 (NOT an ISO 7243 equation; linear fit used by Brode et al. 2018)"
+  },
+  {
+   "id": "wc_niosh_28C_300W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityNiosh",
+   "inputs": {
+    "wbgtC": 28.0,
+    "mW": 300.0
+   },
+   "expected": {
+    "capacityPct": 100.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_niosh (Brode et al. 2018 NIOSH-based)",
+   "note": "capacity = clip((REL(117)-WBGT)/(REL(117)-REL(M))*100, 0, 100)"
+  },
+  {
+   "id": "wc_iso_28C_300W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityIsoBrode",
+   "inputs": {
+    "wbgtC": 28.0,
+    "mW": 300.0
+   },
+   "expected": {
+    "capacityPct": 100.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_iso (Brode et al. 2018 linear ISO fit)",
+   "note": "limit = 34.9 - M/46 (NOT an ISO 7243 equation; linear fit used by Brode et al. 2018)"
+  },
+  {
+   "id": "wc_niosh_30C_300W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityNiosh",
+   "inputs": {
+    "wbgtC": 30.0,
+    "mW": 300.0
+   },
+   "expected": {
+    "capacityPct": 62.003258471944356
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_niosh (Brode et al. 2018 NIOSH-based)",
+   "note": "capacity = clip((REL(117)-WBGT)/(REL(117)-REL(M))*100, 0, 100)"
+  },
+  {
+   "id": "wc_iso_30C_300W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityIsoBrode",
+   "inputs": {
+    "wbgtC": 30.0,
+    "mW": 300.0
+   },
+   "expected": {
+    "capacityPct": 59.234972677595636
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_iso (Brode et al. 2018 linear ISO fit)",
+   "note": "limit = 34.9 - M/46 (NOT an ISO 7243 equation; linear fit used by Brode et al. 2018)"
+  },
+  {
+   "id": "wc_niosh_32C_300W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityNiosh",
+   "inputs": {
+    "wbgtC": 32.0,
+    "mW": 300.0
+   },
+   "expected": {
+    "capacityPct": 19.47501404348266
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_niosh (Brode et al. 2018 NIOSH-based)",
+   "note": "capacity = clip((REL(117)-WBGT)/(REL(117)-REL(M))*100, 0, 100)"
+  },
+  {
+   "id": "wc_iso_32C_300W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityIsoBrode",
+   "inputs": {
+    "wbgtC": 32.0,
+    "mW": 300.0
+   },
+   "expected": {
+    "capacityPct": 8.961748633879806
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_iso (Brode et al. 2018 linear ISO fit)",
+   "note": "limit = 34.9 - M/46 (NOT an ISO 7243 equation; linear fit used by Brode et al. 2018)"
+  },
+  {
+   "id": "wc_niosh_30C_180W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityNiosh",
+   "inputs": {
+    "wbgtC": 30.0,
+    "mW": 180.0
+   },
+   "expected": {
+    "capacityPct": 100.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_niosh (Brode et al. 2018 NIOSH-based)",
+   "note": "capacity = clip((REL(117)-WBGT)/(REL(117)-REL(M))*100, 0, 100)"
+  },
+  {
+   "id": "wc_iso_30C_180W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityIsoBrode",
+   "inputs": {
+    "wbgtC": 30.0,
+    "mW": 180.0
+   },
+   "expected": {
+    "capacityPct": 100.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_iso (Brode et al. 2018 linear ISO fit)",
+   "note": "limit = 34.9 - M/46 (NOT an ISO 7243 equation; linear fit used by Brode et al. 2018)"
+  },
+  {
+   "id": "wc_niosh_29C_415W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityNiosh",
+   "inputs": {
+    "wbgtC": 29.0,
+    "mW": 415.0
+   },
+   "expected": {
+    "capacityPct": 61.92638242356278
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_niosh (Brode et al. 2018 NIOSH-based)",
+   "note": "capacity = clip((REL(117)-WBGT)/(REL(117)-REL(M))*100, 0, 100)"
+  },
+  {
+   "id": "wc_iso_29C_415W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityIsoBrode",
+   "inputs": {
+    "wbgtC": 29.0,
+    "mW": 415.0
+   },
+   "expected": {
+    "capacityPct": 51.81208053691277
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_iso (Brode et al. 2018 linear ISO fit)",
+   "note": "limit = 34.9 - M/46 (NOT an ISO 7243 equation; linear fit used by Brode et al. 2018)"
+  },
+  {
+   "id": "wc_niosh_31C_520W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityNiosh",
+   "inputs": {
+    "wbgtC": 31.0,
+    "mW": 520.0
+   },
+   "expected": {
+    "capacityPct": 25.716617968350764
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_niosh (Brode et al. 2018 NIOSH-based)",
+   "note": "capacity = clip((REL(117)-WBGT)/(REL(117)-REL(M))*100, 0, 100)"
+  },
+  {
+   "id": "wc_iso_31C_520W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityIsoBrode",
+   "inputs": {
+    "wbgtC": 31.0,
+    "mW": 520.0
+   },
+   "expected": {
+    "capacityPct": 15.483870967741941
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_iso (Brode et al. 2018 linear ISO fit)",
+   "note": "limit = 34.9 - M/46 (NOT an ISO 7243 equation; linear fit used by Brode et al. 2018)"
+  },
+  {
+   "id": "wc_niosh_33.5C_300W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityNiosh",
+   "inputs": {
+    "wbgtC": 33.5,
+    "mW": 300.0
+   },
+   "expected": {
+    "capacityPct": 0.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_niosh (Brode et al. 2018 NIOSH-based)",
+   "note": "capacity = clip((REL(117)-WBGT)/(REL(117)-REL(M))*100, 0, 100)"
+  },
+  {
+   "id": "wc_iso_33.5C_300W",
+   "group": "work_capacity_pythermalcomfort",
+   "fn": "workCapacityIsoBrode",
+   "inputs": {
+    "wbgtC": 33.5,
+    "mW": 300.0
+   },
+   "expected": {
+    "capacityPct": 0.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "pythermalcomfort 4.8.1 work_capacity_iso (Brode et al. 2018 linear ISO fit)",
+   "note": "limit = 34.9 - M/46 (NOT an ISO 7243 equation; linear fit used by Brode et al. 2018)"
+  },
+  {
+   "id": "hi_nws_simple_70F_50",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 70.0,
+    "rhPct": 50.0
+   },
+   "expected": {
+    "hiF": 69.05,
+    "hiC": 20.583333333333332,
+    "branch": "simple",
+    "simpleF": 69.05,
+    "adjustmentF": 0.0,
+    "nwsCategory": "none",
+    "oshaRiskLevel": "lower_caution"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": "simple branch (<80)"
+  },
+  {
+   "id": "hi_nws_rothfusz_90F_50",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 90.0,
+    "rhPct": 50.0
+   },
+   "expected": {
+    "hiF": 94.59694120000007,
+    "hiC": 34.77607844444449,
+    "branch": "rothfusz",
+    "simpleF": 91.05,
+    "adjustmentF": 0.0,
+    "nwsCategory": "extreme_caution",
+    "oshaRiskLevel": "moderate"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": ""
+  },
+  {
+   "id": "hi_nws_rothfusz_96F_65",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 96.0,
+    "rhPct": 65.0
+   },
+   "expected": {
+    "hiF": 121.03162930000015,
+    "hiC": 49.462016277777856,
+    "branch": "rothfusz",
+    "simpleF": 98.355,
+    "adjustmentF": 0.0,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "very_high_to_extreme"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": ""
+  },
+  {
+   "id": "hi_nws_rothfusz_104F_40",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 104.0,
+    "rhPct": 40.0
+   },
+   "expected": {
+    "hiF": 118.87706544000005,
+    "hiC": 48.26503635555558,
+    "branch": "rothfusz",
+    "simpleF": 105.97999999999999,
+    "adjustmentF": 0.0,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "very_high_to_extreme"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": ""
+  },
+  {
+   "id": "hi_nws_lowrh_100F_10",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 100.0,
+    "rhPct": 10.0
+   },
+   "expected": {
+    "hiF": 94.12248266218747,
+    "hiC": 34.512490367881924,
+    "branch": "rothfusz_low_rh_adj",
+    "simpleF": 100.17,
+    "adjustmentF": -0.6301260378126043,
+    "nwsCategory": "extreme_caution",
+    "oshaRiskLevel": "moderate"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": "low-RH adjustment subtracted"
+  },
+  {
+   "id": "hi_nws_lowrh_112F_5",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 112.0,
+    "rhPct": 5.0
+   },
+   "expected": {
+    "hiF": 103.65056854000004,
+    "hiC": 39.805871411111134,
+    "branch": "rothfusz_low_rh_adj",
+    "simpleF": 113.135,
+    "adjustmentF": 0.0,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "high"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": "low-RH adjustment; T at upper bound 112 (inclusive)"
+  },
+  {
+   "id": "hi_nws_highrh_82F_95",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 82.0,
+    "rhPct": 95.0
+   },
+   "expected": {
+    "hiF": 93.9721666399998,
+    "hiC": 34.428981466666556,
+    "branch": "rothfusz_high_rh_adj",
+    "simpleF": 84.36500000000001,
+    "adjustmentF": 1.0,
+    "nwsCategory": "extreme_caution",
+    "oshaRiskLevel": "moderate"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": "high-RH adjustment added"
+  },
+  {
+   "id": "hi_nws_highrh_87F_90",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 87.0,
+    "rhPct": 90.0
+   },
+   "expected": {
+    "hiF": 109.18318514000003,
+    "hiC": 42.87954730000002,
+    "branch": "rothfusz_high_rh_adj",
+    "simpleF": 89.63000000000001,
+    "adjustmentF": 0.0,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "high"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": "high-RH adjustment = 0 at T = 87 (inclusive bound)"
+  },
+  {
+   "id": "hi_nws_abudhabi_113F_15",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 113.0,
+    "rhPct": 15.0
+   },
+   "expected": {
+    "hiF": 112.01550022000008,
+    "hiC": 44.453055677777826,
+    "branch": "rothfusz",
+    "simpleF": 114.705,
+    "adjustmentF": 0.0,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "high"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": "45 degC / 15% RH: outside low-RH adj range (T > 112)"
+  },
+  {
+   "id": "hi_nws_abudhabi_104F_45",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 104.0,
+    "rhPct": 45.0
+   },
+   "expected": {
+    "hiF": 124.4208825399999,
+    "hiC": 51.34493474444438,
+    "branch": "rothfusz",
+    "simpleF": 106.21499999999999,
+    "adjustmentF": 0.0,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "very_high_to_extreme"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": "40 degC / 45% RH"
+  },
+  {
+   "id": "hi_nws_humid_95F_70",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 95.0,
+    "rhPct": 70.0
+   },
+   "expected": {
+    "hiF": 122.61304050000017,
+    "hiC": 50.34057805555565,
+    "branch": "rothfusz",
+    "simpleF": 97.49000000000001,
+    "adjustmentF": 0.0,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "very_high_to_extreme"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": ""
+  },
+  {
+   "id": "hi_nws_edge_80F_40",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 80.0,
+    "rhPct": 40.0
+   },
+   "expected": {
+    "hiF": 79.58,
+    "hiC": 26.43333333333333,
+    "branch": "simple",
+    "simpleF": 79.58,
+    "adjustmentF": 0.0,
+    "nwsCategory": "none",
+    "oshaRiskLevel": "lower_caution"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": "simple = 79.88 -> simple branch under both rules"
+  },
+  {
+   "id": "hi_nws_threshold_variant_78F_86",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 78.0,
+    "rhPct": 86.0
+   },
+   "expected": {
+    "hiF_textRule": 79.542,
+    "hiF_jsRule": 80.42556640000011,
+    "simpleF": 79.542,
+    "branch_textRule": "simple",
+    "branch_jsRule": "rothfusz"
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": "Equation page: regression if simple >= 80; WPC calculator JS: if simple > 79. Engine uses the text rule."
+  },
+  {
+   "id": "hi_c_27C_40",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsC",
+   "inputs": {
+    "tC": 27.0,
+    "rhPct": 40.0
+   },
+   "expected": {
+    "hiC": 26.863173119555604,
+    "hiF": 80.35371161520008,
+    "branch": "rothfusz",
+    "rothfuszOnlyC": 26.863173119555604,
+    "pythermalcomfortHiC": 26.863178964000014,
+    "pythermalcomfortCategory": "no risk",
+    "nwsMinusPythermalcomfortC": -5.844444409319749e-06,
+    "nwsCategory": "caution",
+    "oshaRiskLevel": "lower_caution"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula); pythermalcomfort 4.8.1 heat_index_rothfusz",
+   "note": "pythermalcomfort = Rothfusz polynomial in degC WITHOUT NWS adjustments/simple branch; valid only tdb >= 27 degC (else NaN). Do not port pythermalcomfort's version as 'NWS HI'."
+  },
+  {
+   "id": "hi_c_30C_60",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsC",
+   "inputs": {
+    "tC": 30.0,
+    "rhPct": 60.0
+   },
+   "expected": {
+    "hiC": 32.832032277777756,
+    "hiF": 91.09765809999996,
+    "branch": "rothfusz",
+    "rothfuszOnlyC": 32.832032277777756,
+    "pythermalcomfortHiC": 32.83204090000003,
+    "pythermalcomfortCategory": "extreme caution",
+    "nwsMinusPythermalcomfortC": -8.622222274823343e-06,
+    "nwsCategory": "extreme_caution",
+    "oshaRiskLevel": "moderate"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula); pythermalcomfort 4.8.1 heat_index_rothfusz",
+   "note": "pythermalcomfort = Rothfusz polynomial in degC WITHOUT NWS adjustments/simple branch; valid only tdb >= 27 degC (else NaN). Do not port pythermalcomfort's version as 'NWS HI'."
+  },
+  {
+   "id": "hi_c_35C_50",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsC",
+   "inputs": {
+    "tC": 35.0,
+    "rhPct": 50.0
+   },
+   "expected": {
+    "hiC": 40.675428944444484,
+    "hiF": 105.21577210000007,
+    "branch": "rothfusz",
+    "rothfuszOnlyC": 40.675428944444484,
+    "pythermalcomfortHiC": 40.67543619999999,
+    "pythermalcomfortCategory": "extreme caution",
+    "nwsMinusPythermalcomfortC": -7.2555555092890245e-06,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "high"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula); pythermalcomfort 4.8.1 heat_index_rothfusz",
+   "note": "pythermalcomfort = Rothfusz polynomial in degC WITHOUT NWS adjustments/simple branch; valid only tdb >= 27 degC (else NaN). Do not port pythermalcomfort's version as 'NWS HI'."
+  },
+  {
+   "id": "hi_c_38C_30",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsC",
+   "inputs": {
+    "tC": 38.0,
+    "rhPct": 30.0
+   },
+   "expected": {
+    "hiC": 39.44501189511107,
+    "hiF": 103.00102141119993,
+    "branch": "rothfusz",
+    "rothfuszOnlyC": 39.44501189511107,
+    "pythermalcomfortHiC": 39.445016284,
+    "pythermalcomfortCategory": "extreme caution",
+    "nwsMinusPythermalcomfortC": -4.388888925177525e-06,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "high"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula); pythermalcomfort 4.8.1 heat_index_rothfusz",
+   "note": "pythermalcomfort = Rothfusz polynomial in degC WITHOUT NWS adjustments/simple branch; valid only tdb >= 27 degC (else NaN). Do not port pythermalcomfort's version as 'NWS HI'."
+  },
+  {
+   "id": "hi_c_40C_20",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsC",
+   "inputs": {
+    "tC": 40.0,
+    "rhPct": 20.0
+   },
+   "expected": {
+    "hiC": 39.37662891111112,
+    "hiF": 102.87793204000002,
+    "branch": "rothfusz",
+    "rothfuszOnlyC": 39.37662891111112,
+    "pythermalcomfortHiC": 39.3766318,
+    "pythermalcomfortCategory": "extreme caution",
+    "nwsMinusPythermalcomfortC": -2.88888887922667e-06,
+    "nwsCategory": "extreme_caution",
+    "oshaRiskLevel": "moderate"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula); pythermalcomfort 4.8.1 heat_index_rothfusz",
+   "note": "pythermalcomfort = Rothfusz polynomial in degC WITHOUT NWS adjustments/simple branch; valid only tdb >= 27 degC (else NaN). Do not port pythermalcomfort's version as 'NWS HI'."
+  },
+  {
+   "id": "hi_c_42C_10",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsC",
+   "inputs": {
+    "tC": 42.0,
+    "rhPct": 10.0
+   },
+   "expected": {
+    "hiC": 38.77468641494339,
+    "hiF": 101.7944355468981,
+    "branch": "rothfusz_low_rh_adj",
+    "rothfuszOnlyC": 38.986664339555546,
+    "pythermalcomfortHiC": 38.98666568400001,
+    "pythermalcomfortCategory": "extreme caution",
+    "nwsMinusPythermalcomfortC": -0.21197926905662,
+    "nwsCategory": "extreme_caution",
+    "oshaRiskLevel": "moderate"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula); pythermalcomfort 4.8.1 heat_index_rothfusz",
+   "note": "pythermalcomfort = Rothfusz polynomial in degC WITHOUT NWS adjustments/simple branch; valid only tdb >= 27 degC (else NaN). Do not port pythermalcomfort's version as 'NWS HI'."
+  },
+  {
+   "id": "hi_c_45C_8",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsC",
+   "inputs": {
+    "tC": 45.0,
+    "rhPct": 8.0
+   },
+   "expected": {
+    "hiC": 41.3147295777778,
+    "hiF": 106.36651324000005,
+    "branch": "rothfusz",
+    "rothfuszOnlyC": 41.3147295777778,
+    "pythermalcomfortHiC": 41.314730608,
+    "pythermalcomfortCategory": "danger",
+    "nwsMinusPythermalcomfortC": -1.0302222008817807e-06,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "high"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula); pythermalcomfort 4.8.1 heat_index_rothfusz",
+   "note": "pythermalcomfort = Rothfusz polynomial in degC WITHOUT NWS adjustments/simple branch; valid only tdb >= 27 degC (else NaN). Do not port pythermalcomfort's version as 'NWS HI'."
+  },
+  {
+   "id": "hi_c_28C_90",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsC",
+   "inputs": {
+    "tC": 28.0,
+    "rhPct": 90.0
+   },
+   "expected": {
+    "hiC": 34.00319980399995,
+    "hiF": 93.20575964719991,
+    "branch": "rothfusz_high_rh_adj",
+    "rothfuszOnlyC": 33.7476442484444,
+    "pythermalcomfortHiC": 33.74765670400001,
+    "pythermalcomfortCategory": "extreme caution",
+    "nwsMinusPythermalcomfortC": 0.2555430999999402,
+    "nwsCategory": "extreme_caution",
+    "oshaRiskLevel": "moderate"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula); pythermalcomfort 4.8.1 heat_index_rothfusz",
+   "note": "pythermalcomfort = Rothfusz polynomial in degC WITHOUT NWS adjustments/simple branch; valid only tdb >= 27 degC (else NaN). Do not port pythermalcomfort's version as 'NWS HI'."
+  },
+  {
+   "id": "hi_c_33C_75",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsC",
+   "inputs": {
+    "tC": 33.0,
+    "rhPct": 75.0
+   },
+   "expected": {
+    "hiC": 45.716814275111346,
+    "hiF": 114.29026569520042,
+    "branch": "rothfusz",
+    "rothfuszOnlyC": 45.716814275111346,
+    "pythermalcomfortHiC": 45.71682486400008,
+    "pythermalcomfortCategory": "danger",
+    "nwsMinusPythermalcomfortC": -1.0588888734730517e-05,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "high"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula); pythermalcomfort 4.8.1 heat_index_rothfusz",
+   "note": "pythermalcomfort = Rothfusz polynomial in degC WITHOUT NWS adjustments/simple branch; valid only tdb >= 27 degC (else NaN). Do not port pythermalcomfort's version as 'NWS HI'."
+  },
+  {
+   "id": "hi_c_46C_15",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsC",
+   "inputs": {
+    "tC": 46.0,
+    "rhPct": 15.0
+   },
+   "expected": {
+    "hiC": 45.86157371377781,
+    "hiF": 114.55083268480006,
+    "branch": "rothfusz",
+    "rothfuszOnlyC": 45.86157371377781,
+    "pythermalcomfortHiC": 45.861575836000014,
+    "pythermalcomfortCategory": "danger",
+    "nwsMinusPythermalcomfortC": -2.1222222059691376e-06,
+    "nwsCategory": "danger",
+    "oshaRiskLevel": "high"
+   },
+   "tol": {
+    "abs": 1e-06
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula); pythermalcomfort 4.8.1 heat_index_rothfusz",
+   "note": "pythermalcomfort = Rothfusz polynomial in degC WITHOUT NWS adjustments/simple branch; valid only tdb >= 27 degC (else NaN). Do not port pythermalcomfort's version as 'NWS HI'."
+  },
+  {
+   "id": "hi_c_25C_50_ptc_nan",
+   "group": "heat_index_nws",
+   "fn": "heatIndexNwsC",
+   "inputs": {
+    "tC": 25.0,
+    "rhPct": 50.0
+   },
+   "expected": {
+    "hiC": 24.86111111111111,
+    "branch": "simple",
+    "pythermalcomfortHiC": null
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "NWS/WPC heat index equation page (Rothfusz 1990 SR 90-23 + adjustments + Steadman simple formula)",
+   "note": "pythermalcomfort returns NaN (limit_inputs=True, tdb < 27 degC); NWS simple formula still defined."
+  },
+  {
+   "id": "noaa_chart_90F_50",
+   "group": "heat_index_chart_crosscheck",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 90.0,
+    "rhPct": 50.0
+   },
+   "expected": {
+    "chartF": 95,
+    "nwsFullF": 94.59694120000007,
+    "nwsBranch": "rothfusz",
+    "rothfuszOnlyF": 94.59694120000007
+   },
+   "tol": {
+    "abs": 1e-09,
+    "chartAbsAfterRounding": 1.0
+   },
+   "source": "NIOSH 2016-106 Appendix C chart (adapted from NOAA 2012) vs NWS algorithm",
+   "note": ""
+  },
+  {
+   "id": "noaa_chart_96F_65",
+   "group": "heat_index_chart_crosscheck",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 96.0,
+    "rhPct": 65.0
+   },
+   "expected": {
+    "chartF": 121,
+    "nwsFullF": 121.03162930000015,
+    "nwsBranch": "rothfusz",
+    "rothfuszOnlyF": 121.03162930000015
+   },
+   "tol": {
+    "abs": 1e-09,
+    "chartAbsAfterRounding": 1.0
+   },
+   "source": "NIOSH 2016-106 Appendix C chart (adapted from NOAA 2012) vs NWS algorithm",
+   "note": ""
+  },
+  {
+   "id": "noaa_chart_104F_40",
+   "group": "heat_index_chart_crosscheck",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 104.0,
+    "rhPct": 40.0
+   },
+   "expected": {
+    "chartF": 119,
+    "nwsFullF": 118.87706544000005,
+    "nwsBranch": "rothfusz",
+    "rothfuszOnlyF": 118.87706544000005
+   },
+   "tol": {
+    "abs": 1e-09,
+    "chartAbsAfterRounding": 1.0
+   },
+   "source": "NIOSH 2016-106 Appendix C chart (adapted from NOAA 2012) vs NWS algorithm",
+   "note": ""
+  },
+  {
+   "id": "noaa_chart_100F_50",
+   "group": "heat_index_chart_crosscheck",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 100.0,
+    "rhPct": 50.0
+   },
+   "expected": {
+    "chartF": 118,
+    "nwsFullF": 118.31581150000031,
+    "nwsBranch": "rothfusz",
+    "rothfuszOnlyF": 118.31581150000031
+   },
+   "tol": {
+    "abs": 1e-09,
+    "chartAbsAfterRounding": 1.0
+   },
+   "source": "NIOSH 2016-106 Appendix C chart (adapted from NOAA 2012) vs NWS algorithm",
+   "note": ""
+  },
+  {
+   "id": "noaa_chart_86F_85",
+   "group": "heat_index_chart_crosscheck",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 86.0,
+    "rhPct": 85.0
+   },
+   "expected": {
+    "chartF": 102,
+    "nwsFullF": 102.45233309999972,
+    "nwsBranch": "rothfusz",
+    "rothfuszOnlyF": 102.45233309999972
+   },
+   "tol": {
+    "abs": 1e-09,
+    "chartAbsAfterRounding": 1.0
+   },
+   "source": "NIOSH 2016-106 Appendix C chart (adapted from NOAA 2012) vs NWS algorithm",
+   "note": ""
+  },
+  {
+   "id": "noaa_chart_80F_100",
+   "group": "heat_index_chart_crosscheck",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 80.0,
+    "rhPct": 100.0
+   },
+   "expected": {
+    "chartF": 87,
+    "nwsFullF": 89.28785340000002,
+    "nwsBranch": "rothfusz_high_rh_adj",
+    "rothfuszOnlyF": 87.18785340000002
+   },
+   "tol": {
+    "abs": 1e-09,
+    "chartAbsAfterRounding": 1.0
+   },
+   "source": "NIOSH 2016-106 Appendix C chart (adapted from NOAA 2012) vs NWS algorithm",
+   "note": "Chart omits the high-RH adjustment"
+  },
+  {
+   "id": "noaa_chart_80F_95",
+   "group": "heat_index_chart_crosscheck",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 80.0,
+    "rhPct": 95.0
+   },
+   "expected": {
+    "chartF": 86,
+    "nwsFullF": 87.79806179999997,
+    "nwsBranch": "rothfusz_high_rh_adj",
+    "rothfuszOnlyF": 86.39806179999997
+   },
+   "tol": {
+    "abs": 1e-09,
+    "chartAbsAfterRounding": 1.0
+   },
+   "source": "NIOSH 2016-106 Appendix C chart (adapted from NOAA 2012) vs NWS algorithm",
+   "note": "Chart omits the high-RH adjustment"
+  },
+  {
+   "id": "noaa_chart_110F_40",
+   "group": "heat_index_chart_crosscheck",
+   "fn": "heatIndexNwsF",
+   "inputs": {
+    "tF": 110.0,
+    "rhPct": 40.0
+   },
+   "expected": {
+    "chartF": 136,
+    "nwsFullF": 135.65698710000024,
+    "nwsBranch": "rothfusz",
+    "rothfuszOnlyF": 135.65698710000024
+   },
+   "tol": {
+    "abs": 1e-09,
+    "chartAbsAfterRounding": 1.0
+   },
+   "source": "NIOSH 2016-106 Appendix C chart (adapted from NOAA 2012) vs NWS algorithm",
+   "note": ""
+  },
+  {
+   "id": "osha_table2_light",
+   "group": "osha_table2_reference",
+   "fn": "ralC/relC",
+   "inputs": {
+    "category": "light",
+    "mW": 180.0
+   },
+   "expected": {
+    "ralC": 28.100657678043383,
+    "relC": 30.764366191311982,
+    "oshaPublishedActionLimitC": 28.0,
+    "oshaPublishedTlvC": 30.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "OSHA Heat Hazard Recognition page, Table 2 'adapted from NIOSH guidelines (2016)' (accessed 2026-11-09)",
+   "note": "Published values are whole-degree simplifications; use the equations."
+  },
+  {
+   "id": "osha_table2_moderate",
+   "group": "osha_table2_reference",
+   "fn": "ralC/relC",
+   "inputs": {
+    "category": "moderate",
+    "mW": 300.0
+   },
+   "expected": {
+    "ralC": 24.97259030845276,
+    "relC": 28.213105570723883,
+    "oshaPublishedActionLimitC": 25.0,
+    "oshaPublishedTlvC": 28.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "OSHA Heat Hazard Recognition page, Table 2 'adapted from NIOSH guidelines (2016)' (accessed 2026-11-09)",
+   "note": "Published values are whole-degree simplifications; use the equations."
+  },
+  {
+   "id": "osha_table2_heavy",
+   "group": "osha_table2_reference",
+   "fn": "ralC/relC",
+   "inputs": {
+    "category": "heavy",
+    "mW": 415.0
+   },
+   "expected": {
+    "ralC": 22.985521836359496,
+    "relC": 26.59244688781094,
+    "oshaPublishedActionLimitC": 23.0,
+    "oshaPublishedTlvC": 26.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "OSHA Heat Hazard Recognition page, Table 2 'adapted from NIOSH guidelines (2016)' (accessed 2026-11-09)",
+   "note": "Published values are whole-degree simplifications; use the equations."
+  },
+  {
+   "id": "osha_table2_very_heavy",
+   "group": "osha_table2_reference",
+   "fn": "ralC/relC",
+   "inputs": {
+    "category": "very_heavy",
+    "mW": 520.0
+   },
+   "expected": {
+    "ralC": 21.604352854749337,
+    "relC": 25.465961548199815,
+    "oshaPublishedActionLimitC": 21.0,
+    "oshaPublishedTlvC": 25.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "OSHA Heat Hazard Recognition page, Table 2 'adapted from NIOSH guidelines (2016)' (accessed 2026-11-09)",
+   "note": "Published values are whole-degree simplifications; use the equations."
+  },
+  {
+   "id": "tbmed_cat_77.9F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 77.9,
+    "wbgtC": 25.500000000000004
+   },
+   "expected": {
+    "category": 0
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": ""
+  },
+  {
+   "id": "tbmed_cat_78F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 78.0,
+    "wbgtC": 25.555555555555557
+   },
+   "expected": {
+    "category": 1
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": ""
+  },
+  {
+   "id": "tbmed_cat_81.9F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 81.9,
+    "wbgtC": 27.722222222222225
+   },
+   "expected": {
+    "category": 1
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": ""
+  },
+  {
+   "id": "tbmed_cat_81.95F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 81.95,
+    "wbgtC": 27.75
+   },
+   "expected": {
+    "category": 1
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Gap values (e.g. 81.95, 89.95) resolved by half-open intervals [78,82),[82,85),[85,88),[88,90),[90,inf)."
+  },
+  {
+   "id": "tbmed_cat_82F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 82.0,
+    "wbgtC": 27.77777777777778
+   },
+   "expected": {
+    "category": 2
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": ""
+  },
+  {
+   "id": "tbmed_cat_84.9F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 84.9,
+    "wbgtC": 29.38888888888889
+   },
+   "expected": {
+    "category": 2
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": ""
+  },
+  {
+   "id": "tbmed_cat_85F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 85.0,
+    "wbgtC": 29.444444444444443
+   },
+   "expected": {
+    "category": 3
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": ""
+  },
+  {
+   "id": "tbmed_cat_87.9F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 87.9,
+    "wbgtC": 31.055555555555557
+   },
+   "expected": {
+    "category": 3
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": ""
+  },
+  {
+   "id": "tbmed_cat_88F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 88.0,
+    "wbgtC": 31.11111111111111
+   },
+   "expected": {
+    "category": 4
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": ""
+  },
+  {
+   "id": "tbmed_cat_89.9F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 89.9,
+    "wbgtC": 32.166666666666664
+   },
+   "expected": {
+    "category": 4
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": ""
+  },
+  {
+   "id": "tbmed_cat_89.95F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 89.95,
+    "wbgtC": 32.19444444444444
+   },
+   "expected": {
+    "category": 4
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Gap values (e.g. 81.95, 89.95) resolved by half-open intervals [78,82),[82,85),[85,88),[88,90),[90,inf)."
+  },
+  {
+   "id": "tbmed_cat_90F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 90.0,
+    "wbgtC": 32.22222222222222
+   },
+   "expected": {
+    "category": 5
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": ""
+  },
+  {
+   "id": "tbmed_cat_95F",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtF": 95.0,
+    "wbgtC": 35.0
+   },
+   "expected": {
+    "category": 5
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": ""
+  },
+  {
+   "id": "tbmed_cat_25C",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtC": 25.0,
+    "wbgtF": 77.0
+   },
+   "expected": {
+    "category": 0
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Convert degC -> degF first."
+  },
+  {
+   "id": "tbmed_cat_25.6C",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtC": 25.6,
+    "wbgtF": 78.08
+   },
+   "expected": {
+    "category": 1
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Convert degC -> degF first."
+  },
+  {
+   "id": "tbmed_cat_27.8C",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtC": 27.8,
+    "wbgtF": 82.04
+   },
+   "expected": {
+    "category": 2
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Convert degC -> degF first."
+  },
+  {
+   "id": "tbmed_cat_29.4C",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtC": 29.4,
+    "wbgtF": 84.91999999999999
+   },
+   "expected": {
+    "category": 2
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Convert degC -> degF first."
+  },
+  {
+   "id": "tbmed_cat_31.1C",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtC": 31.1,
+    "wbgtF": 87.98
+   },
+   "expected": {
+    "category": 3
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Convert degC -> degF first."
+  },
+  {
+   "id": "tbmed_cat_32.2C",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtC": 32.2,
+    "wbgtF": 89.96000000000001
+   },
+   "expected": {
+    "category": 4
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Convert degC -> degF first."
+  },
+  {
+   "id": "tbmed_cat_35C",
+   "group": "tbmed507",
+   "fn": "tbmed507Category",
+   "inputs": {
+    "wbgtC": 35.0,
+    "wbgtF": 95.0
+   },
+   "expected": {
+    "category": 5
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Convert degC -> degF first."
+  },
+  {
+   "id": "tbmed_guidance_cat1_heavy",
+   "group": "tbmed507",
+   "fn": "tbmed507Guidance",
+   "inputs": {
+    "category": 1,
+    "work": "heavy"
+   },
+   "expected": {
+    "workRest": "40/20",
+    "waterQtPerH": 0.75,
+    "waterLPerH": 0.7097647094999999,
+    "continuousWorkMin": 110,
+    "continuousWaterQtPerH": 0.75,
+    "continuousWaterLPerH": 0.7097647094999999,
+    "workW": 600.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Caps: <= 1.5 qt/h and <= 12 qt/day regardless of table."
+  },
+  {
+   "id": "tbmed_guidance_cat3_moderate",
+   "group": "tbmed507",
+   "fn": "tbmed507Guidance",
+   "inputs": {
+    "category": 3,
+    "work": "moderate"
+   },
+   "expected": {
+    "workRest": "NL",
+    "waterQtPerH": 0.75,
+    "waterLPerH": 0.7097647094999999,
+    "continuousWorkMin": "NL",
+    "continuousWaterQtPerH": 1.0,
+    "continuousWaterLPerH": 0.946352946,
+    "workW": 425.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Caps: <= 1.5 qt/h and <= 12 qt/day regardless of table."
+  },
+  {
+   "id": "tbmed_guidance_cat4_moderate",
+   "group": "tbmed507",
+   "fn": "tbmed507Guidance",
+   "inputs": {
+    "category": 4,
+    "work": "moderate"
+   },
+   "expected": {
+    "workRest": "50/10",
+    "waterQtPerH": 0.75,
+    "waterLPerH": 0.7097647094999999,
+    "continuousWorkMin": 180,
+    "continuousWaterQtPerH": 1.25,
+    "continuousWaterLPerH": 1.1829411825,
+    "workW": 425.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Caps: <= 1.5 qt/h and <= 12 qt/day regardless of table."
+  },
+  {
+   "id": "tbmed_guidance_cat5_easy",
+   "group": "tbmed507",
+   "fn": "tbmed507Guidance",
+   "inputs": {
+    "category": 5,
+    "work": "easy"
+   },
+   "expected": {
+    "workRest": "NL",
+    "waterQtPerH": 1.0,
+    "waterLPerH": 0.946352946,
+    "continuousWorkMin": "NL",
+    "continuousWaterQtPerH": 1.0,
+    "continuousWaterLPerH": 0.946352946,
+    "workW": 250.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Caps: <= 1.5 qt/h and <= 12 qt/day regardless of table."
+  },
+  {
+   "id": "tbmed_guidance_cat5_very_heavy",
+   "group": "tbmed507",
+   "fn": "tbmed507Guidance",
+   "inputs": {
+    "category": 5,
+    "work": "very_heavy"
+   },
+   "expected": {
+    "workRest": "10/50",
+    "waterQtPerH": 1.0,
+    "waterLPerH": 0.946352946,
+    "continuousWorkMin": 20,
+    "continuousWaterQtPerH": 1.5,
+    "continuousWaterLPerH": 1.4195294189999998,
+    "workW": 800.0
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "TB MED 507 (12 Apr 2022) Table 3-2/3-3 and Figure 3-3",
+   "note": "Caps: <= 1.5 qt/h and <= 12 qt/day regardless of table."
+  },
+  {
+   "id": "fluid_caps",
+   "group": "hydration",
+   "fn": "fluidCaps",
+   "inputs": {},
+   "expected": {
+    "tbmedMaxLPerH": 1.4195294189999998,
+    "tbmedMaxLPerDay": 11.356235351999999,
+    "nioshMaxLPerH_48oz": 1.419529419,
+    "nioshCupMl_8oz": 236.5882365,
+    "nioshPerHourRangeL": [
+     0.7097647095,
+     0.946352946
+    ]
+   },
+   "tol": {
+    "abs": 1e-09
+   },
+   "source": "TB MED 507 Table 3-2 notes 5-6; NIOSH 2017-126 Hydration fact sheet",
+   "note": ""
+  },
+  {
+   "id": "osha_hi_risk_85F",
+   "group": "osha_hi_risk",
+   "fn": "oshaHeatIndexRiskLevel",
+   "inputs": {
+    "hiF": 85.0
+   },
+   "expected": {
+    "level": "lower_caution",
+    "nwsCategory": "caution"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "NIOSH 2016-106 Appendix C Table C-1 (adapted from OSHA 2012)",
+   "note": ""
+  },
+  {
+   "id": "osha_hi_risk_90.9F",
+   "group": "osha_hi_risk",
+   "fn": "oshaHeatIndexRiskLevel",
+   "inputs": {
+    "hiF": 90.9
+   },
+   "expected": {
+    "level": "lower_caution",
+    "nwsCategory": "extreme_caution"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "NIOSH 2016-106 Appendix C Table C-1 (adapted from OSHA 2012)",
+   "note": ""
+  },
+  {
+   "id": "osha_hi_risk_91F",
+   "group": "osha_hi_risk",
+   "fn": "oshaHeatIndexRiskLevel",
+   "inputs": {
+    "hiF": 91.0
+   },
+   "expected": {
+    "level": "moderate",
+    "nwsCategory": "extreme_caution"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "NIOSH 2016-106 Appendix C Table C-1 (adapted from OSHA 2012)",
+   "note": ""
+  },
+  {
+   "id": "osha_hi_risk_102.9F",
+   "group": "osha_hi_risk",
+   "fn": "oshaHeatIndexRiskLevel",
+   "inputs": {
+    "hiF": 102.9
+   },
+   "expected": {
+    "level": "moderate",
+    "nwsCategory": "extreme_caution"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "NIOSH 2016-106 Appendix C Table C-1 (adapted from OSHA 2012)",
+   "note": ""
+  },
+  {
+   "id": "osha_hi_risk_103F",
+   "group": "osha_hi_risk",
+   "fn": "oshaHeatIndexRiskLevel",
+   "inputs": {
+    "hiF": 103.0
+   },
+   "expected": {
+    "level": "high",
+    "nwsCategory": "danger"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "NIOSH 2016-106 Appendix C Table C-1 (adapted from OSHA 2012)",
+   "note": "103 degF appears in two bands; resolved to 'high' (conservative)."
+  },
+  {
+   "id": "osha_hi_risk_110F",
+   "group": "osha_hi_risk",
+   "fn": "oshaHeatIndexRiskLevel",
+   "inputs": {
+    "hiF": 110.0
+   },
+   "expected": {
+    "level": "high",
+    "nwsCategory": "danger"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "NIOSH 2016-106 Appendix C Table C-1 (adapted from OSHA 2012)",
+   "note": ""
+  },
+  {
+   "id": "osha_hi_risk_115F",
+   "group": "osha_hi_risk",
+   "fn": "oshaHeatIndexRiskLevel",
+   "inputs": {
+    "hiF": 115.0
+   },
+   "expected": {
+    "level": "high",
+    "nwsCategory": "danger"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "NIOSH 2016-106 Appendix C Table C-1 (adapted from OSHA 2012)",
+   "note": ""
+  },
+  {
+   "id": "osha_hi_risk_115.1F",
+   "group": "osha_hi_risk",
+   "fn": "oshaHeatIndexRiskLevel",
+   "inputs": {
+    "hiF": 115.1
+   },
+   "expected": {
+    "level": "very_high_to_extreme",
+    "nwsCategory": "danger"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "NIOSH 2016-106 Appendix C Table C-1 (adapted from OSHA 2012)",
+   "note": ""
+  },
+  {
+   "id": "osha_hi_risk_125F",
+   "group": "osha_hi_risk",
+   "fn": "oshaHeatIndexRiskLevel",
+   "inputs": {
+    "hiF": 125.0
+   },
+   "expected": {
+    "level": "very_high_to_extreme",
+    "nwsCategory": "extreme_danger"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "NIOSH 2016-106 Appendix C Table C-1 (adapted from OSHA 2012)",
+   "note": ""
+  },
+  {
+   "id": "nprm_trigger_hi_79.9F",
+   "group": "osha_nprm",
+   "fn": "oshaNprmTrigger",
+   "inputs": {
+    "hiF": 79.9
+   },
+   "expected": {
+    "trigger": "none"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "OSHA NPRM 89 FR 70698 (30 Aug 2024), proposed 29 CFR 1910.148(b),(e),(f)",
+   "note": "'at or above' -> >="
+  },
+  {
+   "id": "nprm_trigger_hi_80F",
+   "group": "osha_nprm",
+   "fn": "oshaNprmTrigger",
+   "inputs": {
+    "hiF": 80.0
+   },
+   "expected": {
+    "trigger": "initial"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "OSHA NPRM 89 FR 70698 (30 Aug 2024), proposed 29 CFR 1910.148(b),(e),(f)",
+   "note": "'at or above' -> >="
+  },
+  {
+   "id": "nprm_trigger_hi_89.9F",
+   "group": "osha_nprm",
+   "fn": "oshaNprmTrigger",
+   "inputs": {
+    "hiF": 89.9
+   },
+   "expected": {
+    "trigger": "initial"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "OSHA NPRM 89 FR 70698 (30 Aug 2024), proposed 29 CFR 1910.148(b),(e),(f)",
+   "note": "'at or above' -> >="
+  },
+  {
+   "id": "nprm_trigger_hi_90F",
+   "group": "osha_nprm",
+   "fn": "oshaNprmTrigger",
+   "inputs": {
+    "hiF": 90.0
+   },
+   "expected": {
+    "trigger": "high"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "OSHA NPRM 89 FR 70698 (30 Aug 2024), proposed 29 CFR 1910.148(b),(e),(f)",
+   "note": "'at or above' -> >="
+  },
+  {
+   "id": "nprm_trigger_hi_104F",
+   "group": "osha_nprm",
+   "fn": "oshaNprmTrigger",
+   "inputs": {
+    "hiF": 104.0
+   },
+   "expected": {
+    "trigger": "high"
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "OSHA NPRM 89 FR 70698 (30 Aug 2024), proposed 29 CFR 1910.148(b),(e),(f)",
+   "note": "'at or above' -> >="
+  },
+  {
+   "id": "nprm_trigger_wbgt_24C_300W",
+   "group": "osha_nprm",
+   "fn": "oshaNprmTrigger",
+   "inputs": {
+    "wbgtC": 24.0,
+    "mW": 300.0
+   },
+   "expected": {
+    "trigger": "none",
+    "ralC": 24.97259030845276,
+    "relC": 28.213105570723883
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "OSHA NPRM 89 FR 70698 (30 Aug 2024), proposed 29 CFR 1910.148(b),(e),(f)",
+   "note": "WBGT metric: initial at WBGT >= RAL(M); high at WBGT >= REL(M)."
+  },
+  {
+   "id": "nprm_trigger_wbgt_25.5C_300W",
+   "group": "osha_nprm",
+   "fn": "oshaNprmTrigger",
+   "inputs": {
+    "wbgtC": 25.5,
+    "mW": 300.0
+   },
+   "expected": {
+    "trigger": "initial",
+    "ralC": 24.97259030845276,
+    "relC": 28.213105570723883
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "OSHA NPRM 89 FR 70698 (30 Aug 2024), proposed 29 CFR 1910.148(b),(e),(f)",
+   "note": "WBGT metric: initial at WBGT >= RAL(M); high at WBGT >= REL(M)."
+  },
+  {
+   "id": "nprm_trigger_wbgt_28.5C_300W",
+   "group": "osha_nprm",
+   "fn": "oshaNprmTrigger",
+   "inputs": {
+    "wbgtC": 28.5,
+    "mW": 300.0
+   },
+   "expected": {
+    "trigger": "high",
+    "ralC": 24.97259030845276,
+    "relC": 28.213105570723883
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "OSHA NPRM 89 FR 70698 (30 Aug 2024), proposed 29 CFR 1910.148(b),(e),(f)",
+   "note": "WBGT metric: initial at WBGT >= RAL(M); high at WBGT >= REL(M)."
+  },
+  {
+   "id": "nprm_trigger_wbgt_29C_180W",
+   "group": "osha_nprm",
+   "fn": "oshaNprmTrigger",
+   "inputs": {
+    "wbgtC": 29.0,
+    "mW": 180.0
+   },
+   "expected": {
+    "trigger": "initial",
+    "ralC": 28.100657678043383,
+    "relC": 30.764366191311982
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "OSHA NPRM 89 FR 70698 (30 Aug 2024), proposed 29 CFR 1910.148(b),(e),(f)",
+   "note": "WBGT metric: initial at WBGT >= RAL(M); high at WBGT >= REL(M)."
+  },
+  {
+   "id": "nprm_trigger_wbgt_31C_180W",
+   "group": "osha_nprm",
+   "fn": "oshaNprmTrigger",
+   "inputs": {
+    "wbgtC": 31.0,
+    "mW": 180.0
+   },
+   "expected": {
+    "trigger": "high",
+    "ralC": 28.100657678043383,
+    "relC": 30.764366191311982
+   },
+   "tol": {
+    "exact": true
+   },
+   "source": "OSHA NPRM 89 FR 70698 (30 Aug 2024), proposed 29 CFR 1910.148(b),(e),(f)",
+   "note": "WBGT metric: initial at WBGT >= RAL(M); high at WBGT >= REL(M)."
+  },
+  {
+   "id": "acclim_niosh_new_worker_d1",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_new_worker",
+    "day": 1
+   },
+   "expected": {
+    "fraction": 0.2
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_niosh_new_worker_d2",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_new_worker",
+    "day": 2
+   },
+   "expected": {
+    "fraction": 0.4
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_niosh_new_worker_d3",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_new_worker",
+    "day": 3
+   },
+   "expected": {
+    "fraction": 0.6
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_niosh_new_worker_d4",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_new_worker",
+    "day": 4
+   },
+   "expected": {
+    "fraction": 0.8
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_niosh_new_worker_d5",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_new_worker",
+    "day": 5
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_niosh_new_worker_d7",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_new_worker",
+    "day": 7
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_niosh_experienced_worker_d1",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_experienced_worker",
+    "day": 1
+   },
+   "expected": {
+    "fraction": 0.5
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_niosh_experienced_worker_d2",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_experienced_worker",
+    "day": 2
+   },
+   "expected": {
+    "fraction": 0.6
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_niosh_experienced_worker_d3",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_experienced_worker",
+    "day": 3
+   },
+   "expected": {
+    "fraction": 0.8
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_niosh_experienced_worker_d4",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_experienced_worker",
+    "day": 4
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_niosh_experienced_worker_d5",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_experienced_worker",
+    "day": 5
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_niosh_experienced_worker_d7",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "niosh_experienced_worker",
+    "day": 7
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_new_miner_d1",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_new_miner",
+    "day": 1
+   },
+   "expected": {
+    "fraction": 0.5
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_new_miner_d2",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_new_miner",
+    "day": 2
+   },
+   "expected": {
+    "fraction": 0.6
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_new_miner_d3",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_new_miner",
+    "day": 3
+   },
+   "expected": {
+    "fraction": 0.7
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_new_miner_d4",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_new_miner",
+    "day": 4
+   },
+   "expected": {
+    "fraction": 0.8
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_new_miner_d5",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_new_miner",
+    "day": 5
+   },
+   "expected": {
+    "fraction": 0.9
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_new_miner_d7",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_new_miner",
+    "day": 7
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_returning_after_9_days_d1",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_returning_after_9_days",
+    "day": 1
+   },
+   "expected": {
+    "fraction": 0.5
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_returning_after_9_days_d2",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_returning_after_9_days",
+    "day": 2
+   },
+   "expected": {
+    "fraction": 0.6
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_returning_after_9_days_d3",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_returning_after_9_days",
+    "day": 3
+   },
+   "expected": {
+    "fraction": 0.9
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_returning_after_9_days_d4",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_returning_after_9_days",
+    "day": 4
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_returning_after_9_days_d5",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_returning_after_9_days",
+    "day": 5
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_msha_returning_after_9_days_d7",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "msha_returning_after_9_days",
+    "day": 7
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_new_employee_d1",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_new_employee",
+    "day": 1
+   },
+   "expected": {
+    "fraction": 0.2
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_new_employee_d2",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_new_employee",
+    "day": 2
+   },
+   "expected": {
+    "fraction": 0.4
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_new_employee_d3",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_new_employee",
+    "day": 3
+   },
+   "expected": {
+    "fraction": 0.6
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_new_employee_d4",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_new_employee",
+    "day": 4
+   },
+   "expected": {
+    "fraction": 0.8
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_new_employee_d5",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_new_employee",
+    "day": 5
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_new_employee_d7",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_new_employee",
+    "day": 7
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_returning_gt_14_days_d1",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_returning_gt_14_days",
+    "day": 1
+   },
+   "expected": {
+    "fraction": 0.5
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_returning_gt_14_days_d2",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_returning_gt_14_days",
+    "day": 2
+   },
+   "expected": {
+    "fraction": 0.6
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_returning_gt_14_days_d3",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_returning_gt_14_days",
+    "day": 3
+   },
+   "expected": {
+    "fraction": 0.8
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_returning_gt_14_days_d4",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_returning_gt_14_days",
+    "day": 4
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_returning_gt_14_days_d5",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_returning_gt_14_days",
+    "day": 5
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  },
+  {
+   "id": "acclim_osha_nprm_returning_gt_14_days_d7",
+   "group": "acclimatization",
+   "fn": "acclimatizationFraction",
+   "inputs": {
+    "schedule": "osha_nprm_returning_gt_14_days",
+    "day": 7
+   },
+   "expected": {
+    "fraction": 1.0
+   },
+   "tol": {
+    "abs": 1e-12
+   },
+   "source": "NIOSH 2016 Table 4-1 / sec 6.2.3; MSHA via NIOSH Table 8-2; OSHA NPRM 1910.148(e)(7)(i)(B) and (ii)(B)",
+   "note": "Fraction of the usual shift exposure duration allowed (maximum)."
+  }
+ ]
+}

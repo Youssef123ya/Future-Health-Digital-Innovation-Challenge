@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dev-dist/
+coverage/
+*.log
+.DS_Store
+.vite/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# internal orchestration scripts (not part of the product)
+.workflows/
+*.tgz

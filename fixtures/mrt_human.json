@@ -1,0 +1,620 @@
+{
+  "meta": {
+    "title": "Zill human mean radiant temperature (standing person) oracle vectors",
+    "generator": "scripts/oracles/mrt_human_oracle.py",
+    "oracle": "thermofeel.calculate_mean_radiant_temperature (Di Napoli et al. 2020; Thorsson et al. 2007)",
+    "consumer": "src/engine/indices.ts humanMrtC",
+    "spec": "docs/research/phs_iso7933.md section 10.3 item 3",
+    "environment": {
+      "python": "3.12.10",
+      "numpy": "2.5.4",
+      "thermofeel": "2.3.0"
+    },
+    "mapping": {
+      "f": "clamp(fdir, 0, 0.9); 0 when cos z < 0.00873 (Liljegren low-sun guard)",
+      "ssrd": "GHI",
+      "fdir_flux": "f * GHI (thermofeel 'fdir' is a horizontal FLUX)",
+      "dsrp": "f * GHI / cos z (DNI); 0 when f = 0",
+      "ssr": "(1 - albedo) * GHI; albedo default 0.45 (Liljegren ground)",
+      "strd": "emis_atm(Ta, RH) * 5.6696e-8 * Ta^4 (Liljegren sky)",
+      "strr": "strd - 0.999 * 5.6696e-8 * Tsfc^4; Tsfc default Ta (Liljegren)",
+      "cossza": "cos z"
+    },
+    "constants": {
+      "sigma_longwave_fluxes": 5.6696e-08,
+      "sigma_mrt_conversion": 5.67e-08,
+      "emis_sfc": 0.999,
+      "albedo_default": 0.45,
+      "cza_min": 0.00873,
+      "fdir_max": 0.9,
+      "shortwave_absorptivity": 0.7,
+      "longwave_emissivity": 0.97,
+      "angular_factor": 0.5
+    },
+    "tolerance_c": 1e-06,
+    "scalar_crosscheck_max_abs_diff_c": 5.684341886080802e-14
+  },
+  "cases": [
+    {
+      "id": "phs_10_3",
+      "desc": "phs_iso7933.md 10.3 point: 44 C / 20 % / 950 W/m2, fdir 0.85, cos z 0.95",
+      "inputs": {
+        "ta_c": 44.0,
+        "rh_pct": 20.0,
+        "ghi_wm2": 950.0,
+        "fdir": 0.85,
+        "cos_zenith": 0.95
+      },
+      "thermofeel_args": {
+        "ssrd": 950.0,
+        "ssr": 522.5,
+        "dsrp": 850.0,
+        "strd": 499.83477526362344,
+        "fdir_flux": 807.5,
+        "strr": -73.1944483857909,
+        "cossza": 0.95
+      },
+      "intermediates": {
+        "fdir_used": 0.85,
+        "emis_atm": 0.871395244571084,
+        "dni_wm2": 850.0,
+        "fp": 0.13377521371416506,
+        "ground_temp_used_c": 44.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 74.071917302
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "ad_noon_august",
+      "desc": "Abu Dhabi August noon: 42 C / 35 %, 900 W/m2, fdir 0.75, cos z 0.98",
+      "inputs": {
+        "ta_c": 42.0,
+        "rh_pct": 35.0,
+        "ghi_wm2": 900.0,
+        "fdir": 0.75,
+        "cos_zenith": 0.98
+      },
+      "thermofeel_args": {
+        "ssrd": 900.0,
+        "ssr": 495.00000000000006,
+        "dsrp": 688.7755102040817,
+        "strd": 520.1098289040674,
+        "fdir_flux": 675.0,
+        "strr": -38.6010835070482,
+        "cossza": 0.98
+      },
+      "intermediates": {
+        "fdir_used": 0.75,
+        "emis_atm": 0.9299795431466967,
+        "dni_wm2": 688.7755102040817,
+        "fp": 0.11197216132652844,
+        "ground_temp_used_c": 42.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 73.884931651
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "inland_noon_extreme",
+      "desc": "inland 46.2 C / 13 %, 916 W/m2, fdir 0.73, cos z 0.997",
+      "inputs": {
+        "ta_c": 46.2,
+        "rh_pct": 13.0,
+        "ghi_wm2": 916.0,
+        "fdir": 0.73,
+        "cos_zenith": 0.997
+      },
+      "thermofeel_args": {
+        "ssrd": 916.0,
+        "ssr": 503.80000000000007,
+        "dsrp": 670.692076228686,
+        "strd": 491.04720100826955,
+        "fdir_flux": 668.68,
+        "strr": -98.04814260509488,
+        "cossza": 0.997
+      },
+      "intermediates": {
+        "fdir_used": 0.73,
+        "emis_atm": 0.8327279431514629,
+        "dni_wm2": 670.692076228686,
+        "fp": 0.09075732294833791,
+        "ground_temp_used_c": 46.2,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 73.840946432
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "coastal_humid_morning",
+      "desc": "coastal 34 C / 70 %, 450 W/m2, fdir 0.6, cos z 0.55",
+      "inputs": {
+        "ta_c": 34.0,
+        "rh_pct": 70.0,
+        "ghi_wm2": 450.0,
+        "fdir": 0.6,
+        "cos_zenith": 0.55
+      },
+      "thermofeel_args": {
+        "ssrd": 450.0,
+        "ssr": 247.50000000000003,
+        "dsrp": 490.9090909090909,
+        "strd": 487.0182653345049,
+        "fdir_flux": 270.0,
+        "strr": -17.085552521187026,
+        "cossza": 0.55
+      },
+      "intermediates": {
+        "fdir_used": 0.6,
+        "emis_atm": 0.965140968657468,
+        "dni_wm2": 490.9090909090909,
+        "fp": 0.2595989620901518,
+        "ground_temp_used_c": 34.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 63.183437905
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "mid_morning",
+      "desc": "38 C / 40 %, 700 W/m2, fdir 0.7, cos z 0.8",
+      "inputs": {
+        "ta_c": 38.0,
+        "rh_pct": 40.0,
+        "ghi_wm2": 700.0,
+        "fdir": 0.7,
+        "cos_zenith": 0.8
+      },
+      "thermofeel_args": {
+        "ssrd": 700.0,
+        "ssr": 385.00000000000006,
+        "dsrp": 612.4999999999999,
+        "strd": 488.5690873564751,
+        "fdir_flux": 489.99999999999994,
+        "strr": -42.311847676278205,
+        "cossza": 0.8
+      },
+      "intermediates": {
+        "fdir_used": 0.7,
+        "emis_atm": 0.9193785010173815,
+        "dni_wm2": 612.4999999999999,
+        "fp": 0.1978784137704668,
+        "ground_temp_used_c": 38.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 70.048830111
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "late_afternoon_low_sun",
+      "desc": "low sun 39 C / 30 %, 120 W/m2, fdir 0.45, cos z 0.15",
+      "inputs": {
+        "ta_c": 39.0,
+        "rh_pct": 30.0,
+        "ghi_wm2": 120.0,
+        "fdir": 0.45,
+        "cos_zenith": 0.15
+      },
+      "thermofeel_args": {
+        "ssrd": 120.0,
+        "ssr": 66.0,
+        "dsrp": 360.0,
+        "strd": 478.6162171477414,
+        "fdir_flux": 54.0,
+        "strr": -59.12244833697457,
+        "cossza": 0.15
+      },
+      "intermediates": {
+        "fdir_used": 0.45,
+        "emis_atm": 0.8891635130972065,
+        "dni_wm2": 360.0,
+        "fp": 0.30453951169928767,
+        "ground_temp_used_c": 39.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 51.594403364
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "grazing_sun",
+      "desc": "grazing sun 33 C / 50 %, 20 W/m2, fdir 0.3, cos z 0.03",
+      "inputs": {
+        "ta_c": 33.0,
+        "rh_pct": 50.0,
+        "ghi_wm2": 20.0,
+        "fdir": 0.3,
+        "cos_zenith": 0.03
+      },
+      "thermofeel_args": {
+        "ssrd": 20.0,
+        "ssr": 11.0,
+        "dsrp": 200.0,
+        "strd": 454.47195973136894,
+        "fdir_flux": 6.0,
+        "strr": -43.09892878285524,
+        "cossza": 0.03
+      },
+      "intermediates": {
+        "fdir_used": 0.3,
+        "emis_atm": 0.9124679482904645,
+        "dni_wm2": 200.0,
+        "fp": 0.3078619390838521,
+        "ground_temp_used_c": 33.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 37.604672322
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "below_cza_min",
+      "desc": "cos z 0.005 < CZA_MIN: direct beam dropped (low-sun guard)",
+      "inputs": {
+        "ta_c": 32.0,
+        "rh_pct": 55.0,
+        "ghi_wm2": 4.0,
+        "fdir": 0.5,
+        "cos_zenith": 0.005
+      },
+      "thermofeel_args": {
+        "ssrd": 4.0,
+        "ssr": 2.2,
+        "dsrp": 0.0,
+        "strd": 451.0663102758833,
+        "fdir_flux": 0.0,
+        "strr": -40.035353153733695,
+        "cossza": 0.005
+      },
+      "intermediates": {
+        "fdir_used": 0.0,
+        "emis_atm": 0.9175600033987423,
+        "dni_wm2": 0.0,
+        "fp": 0.3079961653732151,
+        "ground_temp_used_c": 32.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 29.095670949
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "overcast",
+      "desc": "dusty overcast 37 C / 45 %, 350 W/m2, fdir 0.1, cos z 0.85",
+      "inputs": {
+        "ta_c": 37.0,
+        "rh_pct": 45.0,
+        "ghi_wm2": 350.0,
+        "fdir": 0.1,
+        "cos_zenith": 0.85
+      },
+      "thermofeel_args": {
+        "ssrd": 350.0,
+        "ssr": 192.50000000000003,
+        "dsrp": 41.1764705882353,
+        "strd": 486.7108850136802,
+        "fdir_flux": 35.0,
+        "strr": -37.37812163051268,
+        "cossza": 0.85
+      },
+      "intermediates": {
+        "fdir_used": 0.1,
+        "emis_atm": 0.9277511414368724,
+        "dni_wm2": 41.1764705882353,
+        "fp": 0.1803843419960062,
+        "ground_temp_used_c": 37.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 57.92838253
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "fdir_clamped",
+      "desc": "fdir 0.95 clamped to 0.9",
+      "inputs": {
+        "ta_c": 41.0,
+        "rh_pct": 25.0,
+        "ghi_wm2": 880.0,
+        "fdir": 0.95,
+        "cos_zenith": 0.97
+      },
+      "thermofeel_args": {
+        "ssrd": 880.0,
+        "ssr": 484.00000000000006,
+        "dsrp": 816.4948453608248,
+        "strd": 485.7301802489389,
+        "fdir_flux": 792.0,
+        "strr": -65.92304824660499,
+        "cossza": 0.97
+      },
+      "intermediates": {
+        "fdir_used": 0.9,
+        "emis_atm": 0.8796186172825229,
+        "dni_wm2": 816.4948453608248,
+        "fp": 0.12023164906405341,
+        "ground_temp_used_c": 41.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 67.573681708
+      },
+      "abs_diff_vs_scalar_c": 5.684341886080802e-14
+    },
+    {
+      "id": "night_clear_dry",
+      "desc": "clear night 33 C / 30 %",
+      "inputs": {
+        "ta_c": 33.0,
+        "rh_pct": 30.0,
+        "ghi_wm2": 0.0,
+        "fdir": 0.0,
+        "cos_zenith": -0.4
+      },
+      "thermofeel_args": {
+        "ssrd": 0.0,
+        "ssr": 0.0,
+        "dsrp": 0.0,
+        "strd": 422.4572054347528,
+        "fdir_flux": 0.0,
+        "strr": -75.1136830794714,
+        "cossza": -0.4
+      },
+      "intermediates": {
+        "fdir_used": 0.0,
+        "emis_atm": 0.8481901935411424,
+        "dni_wm2": 0.0,
+        "fp": 0.2829476448657315,
+        "ground_temp_used_c": 33.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 26.971431082
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "night_humid",
+      "desc": "humid night 31 C / 85 %",
+      "inputs": {
+        "ta_c": 31.0,
+        "rh_pct": 85.0,
+        "ghi_wm2": 0.0,
+        "fdir": 0.0,
+        "cos_zenith": -0.2
+      },
+      "thermofeel_args": {
+        "ssrd": 0.0,
+        "ssr": 0.0,
+        "dsrp": 0.0,
+        "strd": 469.942979661904,
+        "fdir_flux": 0.0,
+        "strr": -14.752747456688098,
+        "cossza": -0.2
+      },
+      "intermediates": {
+        "fdir_used": 0.0,
+        "emis_atm": 0.9685933058934819,
+        "dni_wm2": 0.0,
+        "fp": 0.30183482949527574,
+        "ground_temp_used_c": 31.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 29.755037641
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "hot_ground_60",
+      "desc": "hot ground 60 C under strong sun",
+      "inputs": {
+        "ta_c": 44.0,
+        "rh_pct": 20.0,
+        "ghi_wm2": 950.0,
+        "fdir": 0.85,
+        "cos_zenith": 0.95,
+        "ground_temp_c": 60.0
+      },
+      "thermofeel_args": {
+        "ssrd": 950.0,
+        "ssr": 522.5,
+        "dsrp": 850.0,
+        "strd": 499.83477526362344,
+        "fdir_flux": 807.5,
+        "strr": -197.87880861104895,
+        "cossza": 0.95
+      },
+      "intermediates": {
+        "fdir_used": 0.85,
+        "emis_atm": 0.871395244571084,
+        "dni_wm2": 850.0,
+        "fp": 0.13377521371416506,
+        "ground_temp_used_c": 60.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 80.459723645
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "asphalt_albedo_0_1",
+      "desc": "asphalt albedo 0.10, ground 65 C",
+      "inputs": {
+        "ta_c": 43.0,
+        "rh_pct": 25.0,
+        "ghi_wm2": 920.0,
+        "fdir": 0.8,
+        "cos_zenith": 0.96,
+        "ground_temp_c": 65.0,
+        "albedo": 0.1
+      },
+      "thermofeel_args": {
+        "ssrd": 920.0,
+        "ssr": 828.0,
+        "dsrp": 766.6666666666667,
+        "strd": 505.78017744708177,
+        "fdir_flux": 736.0,
+        "strr": -234.77167906875445,
+        "cossza": 0.96
+      },
+      "intermediates": {
+        "fdir_used": 0.8,
+        "emis_atm": 0.8929695300180407,
+        "dni_wm2": 766.6666666666667,
+        "fp": 0.12736818982854592,
+        "ground_temp_used_c": 65.0,
+        "albedo_used": 0.1
+      },
+      "outputs": {
+        "mrt_c": 70.76642457
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "bright_ground_albedo_0_6",
+      "desc": "bright concrete albedo 0.60",
+      "inputs": {
+        "ta_c": 42.0,
+        "rh_pct": 30.0,
+        "ghi_wm2": 900.0,
+        "fdir": 0.8,
+        "cos_zenith": 0.95,
+        "albedo": 0.6
+      },
+      "thermofeel_args": {
+        "ssrd": 900.0,
+        "ssr": 360.0,
+        "dsrp": 757.8947368421053,
+        "strd": 508.77020527148073,
+        "fdir_flux": 720.0,
+        "strr": -49.94070713963487,
+        "cossza": 0.95
+      },
+      "intermediates": {
+        "fdir_used": 0.8,
+        "emis_atm": 0.9097037909512242,
+        "dni_wm2": 757.8947368421053,
+        "fp": 0.13377521371416506,
+        "ground_temp_used_c": 42.0,
+        "albedo_used": 0.6
+      },
+      "outputs": {
+        "mrt_c": 78.468335423
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "mild_november_noon",
+      "desc": "mild November noon 29 C / 45 %, 650 W/m2, fdir 0.7, cos z 0.75",
+      "inputs": {
+        "ta_c": 29.0,
+        "rh_pct": 45.0,
+        "ghi_wm2": 650.0,
+        "fdir": 0.7,
+        "cos_zenith": 0.75
+      },
+      "thermofeel_args": {
+        "ssrd": 650.0,
+        "ssr": 357.50000000000006,
+        "dsrp": 606.6666666666666,
+        "strd": 411.104513391735,
+        "fdir_flux": 454.99999999999994,
+        "strr": -60.96755228915657,
+        "cossza": 0.75
+      },
+      "intermediates": {
+        "fdir_used": 0.7,
+        "emis_atm": 0.8699803244785962,
+        "dni_wm2": 606.6666666666666,
+        "fp": 0.21318500415451375,
+        "ground_temp_used_c": 29.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 61.464369267
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "winter_morning",
+      "desc": "winter morning 22 C / 65 %, 300 W/m2, fdir 0.55, cos z 0.4",
+      "inputs": {
+        "ta_c": 22.0,
+        "rh_pct": 65.0,
+        "ghi_wm2": 300.0,
+        "fdir": 0.55,
+        "cos_zenith": 0.4
+      },
+      "thermofeel_args": {
+        "ssrd": 300.0,
+        "ssr": 165.0,
+        "dsrp": 412.5,
+        "strd": 371.744716548294,
+        "fdir_flux": 165.0,
+        "strr": -58.07769671626488,
+        "cossza": 0.4
+      },
+      "intermediates": {
+        "fdir_used": 0.55,
+        "emis_atm": 0.8640149056237393,
+        "dni_wm2": 412.5,
+        "fp": 0.2829476448657315,
+        "ground_temp_used_c": 22.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 45.208137695
+      },
+      "abs_diff_vs_scalar_c": 0.0
+    },
+    {
+      "id": "cool_ground_night",
+      "desc": "night with ground 5 K above air (stored heat)",
+      "inputs": {
+        "ta_c": 32.0,
+        "rh_pct": 60.0,
+        "ghi_wm2": 0.0,
+        "fdir": 0.0,
+        "cos_zenith": -0.3,
+        "ground_temp_c": 37.0
+      },
+      "thermofeel_args": {
+        "ssrd": 0.0,
+        "ssr": 0.0,
+        "dsrp": 0.0,
+        "strd": 456.71382216616695,
+        "fdir_flux": 0.0,
+        "strr": -67.37518447802591,
+        "cossza": -0.3
+      },
+      "intermediates": {
+        "fdir_used": 0.0,
+        "emis_atm": 0.9290481835425303,
+        "dni_wm2": 0.0,
+        "fp": 0.2940402934963919,
+        "ground_temp_used_c": 37.0,
+        "albedo_used": 0.45
+      },
+      "outputs": {
+        "mrt_c": 31.809497819
+      },
+      "abs_diff_vs_scalar_c": 5.684341886080802e-14
+    }
+  ]
+}

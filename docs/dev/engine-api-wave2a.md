@@ -1,0 +1,305 @@
+
+## engine-core
+Files: src\engine\indices.ts, src\engine\risk.ts, src\engine\indices.test.ts, src\engine\risk.test.ts, scripts\oracles\mrt_human_oracle.py, fixtures\mrt_human.json
+- indices.ts: export const HUMAN_MRT: { readonly SHORTWAVE_ABSORPTIVITY: 0.7; readonly LONGWAVE_EMISSIVITY: 0.97; readonly ANGULAR_FACTOR: 0.5; readonly FP_COEFF: 0.308; readonly SIGMA_MRT: 5.67e-8; readonly SIGMA_FLUX: number /* LILJEGREN.STEFANB 5.6696e-8 */; readonly GROUND_EMISSIVITY: number /* 0.999 */; readonly DEFAULT_ALBEDO: number /* 0.45 */; readonly basis: string }
+- indices.ts: export interface HumanMrtInput { taC: number; rhPct: number; ghiWm2: number /* instantaneous at geometry time, use WbgtComponents.ghiUsedWm2 */; fdir: number /* Liljegren fraction, preprocessed inside */; cosZenith: number; groundTempC?: number /* default Ta */; albedo?: number /* default 0.45 */; shade?: boolean /* engineered shade */ }
+- indices.ts: export function humanMrtC(input: HumanMrtInput): number  // °C; throws RangeError on non-finite
+- indices.ts: export const SITE_HEAT_DEFAULTS: { readonly windUnknown10Ms: 0.5; readonly meterDiscrepancyC: 3; readonly basis: string }
+- indices.ts: export interface SiteHeatOptions { engineeredShade?: boolean /* default true */; radiationAvgMin?: number; terrain?: WindTerrain; groundTempC?: number; albedo?: number }
+- indices.ts: export interface SiteHeat extends HeatIndices { siteId: Site['id']; taC: number; rhPct: number; pHpa: number; mrtHumanShadeC: number; mrtGlobeC: number; mrtGlobeShadeC: number; twbPsychrometricC: number; twlShadeWm2: number; twlFlags: TwlFlag[]; twlShadeFlags: TwlFlag[]; twlInValidRange: boolean; components: WbgtComponents; measured: boolean; measuredMinusModelC: number | null; backstop: Bb2002Backstop; drivers: RiskDriver[] }  // HeatIndices.mrtC = human MRT in sun (PHS), twlWm2 = sun TWL
+- indices.ts: export const SITE_HEAT_DRIVER_IDS: readonly ['env_wind_default', 'env_solar_clear_sky', 'env_pressure_default', 'env_radiant_boost_ignored', 'env_radiant_boost_site_default', 'wbgt_measured', 'wbgt_meter_model_mismatch', 'wbgt_solver_not_converged', 'twl_out_of_valid_range', 'bb2002_backstop']
+- indices.ts: export function computeSiteHeat(env: EnvSample, site: Site, opts?: SiteHeatOptions): SiteHeat  // throws RangeError when taC or humidity missing (no safe default)
+- risk.ts: export type WorkerLocation = 'sun' | 'shade' | 'indoor_cool'
+- risk.ts: export interface WorkerEnvStatus { source: EnvSource; ageMin: number | null; stale: boolean; confidence: 'high' | 'medium' | 'low'; wbgtMarginC: number; drivers: RiskDriver[] }  // data/weather ResolvedEnvironment is assignable
+- risk.ts: export interface WorkerContext { now: number; profile: WorkerProfile; task: Task | null /* null = rest */; location: WorkerLocation; heat: SiteHeat; env?: WorkerEnvStatus; pack?: RulePack; network: 'online' | 'offline'; fastingNow?: boolean; buddyAssigned?: boolean }
+- risk.ts: export interface CaseResolution { by: 'first_aider' | 'supervisor' | 'occ_health'; t: number }
+- risk.ts: export interface WorkerInputs { physioMinute?: PhysioMinuteInput | null /* null = missing minute */; checkin?: Checkin; intake?: FluidIntake; resolution?: CaseResolution }
+- risk.ts: export interface ProjectionRecord { t: number; minutes: number | null; binding: 'rectal' | 'dehydration' | null; key: string; withinLimits: boolean; failing: PhsValidityField[] }
+- risk.ts: export interface ClinicalLatch { tier: ClinicalTier; channel: ChannelId; since: number; lastTriggerT: number; noHotWorkUntil?: number; resolvedAt?: number; resolvedBy?: CaseResolution['by']; clearedAt?: number }
+- risk.ts: export interface WorkerEngineState { workerId: string; shiftStartT: number; lastT: number; phsT: number; phs: PhsState | null; projection: ProjectionRecord | null; physio: PhysioMonitorState; checkins: Checkin[] /* 12 h */; intakes: FluidIntake[] /* 24 h */; latch: ClinicalLatch | null; hotWorkMinToday: number; dayStartT: number; sweatingSinceT: number | null; displayed: { level: RiskLevel; since: number }; pending: { level: RiskLevel; since: number } | null; lastAssessment: RiskAssessment | null }  // plain data; JSON and structuredClone round-trips tested
+- risk.ts: export interface WorkerEngineOptions { projectionEveryMin?: number /* 5 */; horizonMin?: number /* 120 */; dwellMin?: number /* 10 */; maxCatchUpMin?: number /* 60 */; newShiftGapMin?: number /* 360 */ }
+- risk.ts: export interface CreateWorkerEngineOptions { seatedHr0Bpm?: number | null; ct0C?: number }
+- risk.ts: export interface WorkerStepDetail { computedLevel: RiskLevel; held: boolean; acclimatization: AcclimatizationAssessment; conservative: ConservativeModeResult; allowedWork: AllowedWorkResult; regulation: RegulatoryFloor; projection: ProjectionRecord | null; phsApplicable: boolean; phsWithinLimits: boolean; physioDisplay: EctempBand | null; hotWorkMinToday: number; hotWorkBudgetMin: number | null; latch: ClinicalLatch | null; workW: number; wbgtWorkEffC: number; wbgtRestEffC: number }  // worker-screen/sim only (holds clinical items)
+- risk.ts: export interface WorkerStepResult { state: WorkerEngineState; assessment: RiskAssessment; detail: WorkerStepDetail }
+- risk.ts: export const RISK_THRESHOLDS: { readonly environment: { readonly safeMarginC: 1; readonly cautionMinWorkFraction: 0.75; readonly highMinWorkFraction: 0.25; readonly restMetabolicW: 115; readonly budgetShiftMin: 480; readonly basis: string }; readonly projection: { readonly horizonMin: 120; readonly everyMin: 5; readonly safeAboveMin: 90; readonly cautionAboveMin: 45; readonly highFromMin: 15; readonly maxAirSpeedMs: number /* 3 */; readonly basis: string }; readonly dwell: { readonly dwellMin: 10; readonly basis: string }; readonly steps: { readonly maxCatchUpMin: 60; readonly newShiftGapMin: 360; readonly checkinHistoryH: 12; readonly intakeHistoryH: 24; readonly conservativeCheckinEveryMin: 30; readonly basis: string } }
+- risk.ts: export const RISK_DRIVER_IDS: readonly ['wbgt_over_limit', 'wbgt_near_limit', 'wbgt_within_limit', 'work_rest_cycle', 'clothing_adjustment', 'limit_ral_unacclimatized', 'limit_ral_acclimatizing', 'limit_ral_conservative', 'acclimatization_budget', 'acclimatization_budget_exhausted', 'metabolic_rate_extrapolated', 'wbgt_method_not_applicable', 'phs_minutes_to_limit', 'phs_limit_reached', 'phs_beyond_horizon', 'phs_out_of_validity', 'phs_clothing_unverified', 'phs_not_applicable', 'phs_recovery_not_modelled', 'phs_no_drinking', 'clinical_latch', 'no_hot_work_today', 'level_held_dwell', 'step_gap_capped', 'conservative_checkin_due', 'buddy_required', 'lone_work_not_allowed', 'water_paused_fasting', 'water_restricted', 'meter_check_advised']
+- risk.ts: export type RiskDriverId = (typeof RISK_DRIVER_IDS)[number]
+- risk.ts: export const DRIVER_IDS: readonly string[]  // unique, stable: RISK_DRIVER_IDS + SITE_HEAT_DRIVER_IDS + pass-through ids (regulation, physio, clinical incl. symptom_<SymptomId>, data-layer env_*)
+- risk.ts: export const ACTION_PRIORITY: readonly ActionId[]  // call_998, cool_first, stay_with_worker, stop_work, rest_shade_now, cool_down, first_aider_check, no_hot_work_today, midday_break, restrict_fluids, medical_evaluation, acclimatization_plan, rotate_task, shade_breaks, reduce_intensity, no_lone_work, buddy_check, symptom_checkin, drink_water, electrolytes, occ_health_review, check_sensor
+- risk.ts: export function environmentLevel(f: number, marginC: number): RiskLevel
+- risk.ts: export function projectionLevel(minutes: number | null): RiskLevel
+- risk.ts: export function orderActions(actions: Iterable<ActionId>): ActionId[]
+- risk.ts: export function sortDrivers(drivers: readonly RiskDriver[], channelLevels: Partial<Record<ChannelId, RiskLevel>>): RiskDriver[]
+- risk.ts: export function createWorkerEngine(profile: WorkerProfile, shiftStartT: number, opts?: CreateWorkerEngineOptions): WorkerEngineState
+- risk.ts: export function stepWorkerEngine(state: WorkerEngineState, ctx: WorkerContext, inputs?: WorkerInputs, options?: WorkerEngineOptions): WorkerStepResult
+- risk.ts: export function assessSnapshot(ctx: WorkerContext, partialState?: Partial<WorkerEngineState>): RiskAssessment
+New types:
+- HumanMrtInput (indices.ts)
+- SiteHeatOptions (indices.ts)
+- SiteHeat extends HeatIndices (indices.ts)
+- WorkerLocation (risk.ts)
+- WorkerEnvStatus (risk.ts)
+- WorkerContext (risk.ts)
+- CaseResolution (risk.ts)
+- WorkerInputs (risk.ts)
+- ProjectionRecord (risk.ts)
+- ClinicalLatch (risk.ts)
+- WorkerEngineState (risk.ts)
+- WorkerEngineOptions (risk.ts)
+- CreateWorkerEngineOptions (risk.ts)
+- WorkerStepDetail (risk.ts)
+- WorkerStepResult (risk.ts)
+- RiskDriverId (risk.ts)
+
+## alerts-planner
+Files: src\engine\alerts.ts, src\engine\alerts.test.ts, src\engine\planner.ts, src\engine\planner.test.ts
+- // ── src/engine/alerts.ts ──
+- const ALERT_MIN_LEVEL: RiskLevel = 'caution'  // [ENG] caution reaches the worker's device only
+- const SUPERVISOR_MIN_LEVEL: RiskLevel = 'high'
+- const REPEAT_SUPPRESSION_MIN = 20  // ARCHITECTURE §6
+- const CREW_BUNDLE_MIN_WORKERS = 3  // [ENG]
+- const CREW_BUNDLE_WINDOW_MIN = 5  // [ENG]
+- const STOP_ACK_TIMEOUT_MIN = 2  // ARCHITECTURE §6
+- const EMERGENCY_ACK_TIMEOUT_MIN = 1  // [ENG]
+- const EMERGENCY_REPEAT_MIN = 5  // [ENG]
+- const HIGH_ACK_TIMEOUT_MIN = 10  // [ENG]
+- const DEESCALATION_DWELL_MIN = 10  // ARCHITECTURE §6
+- const CLINICAL_RESOLUTION_HOLD_MIN = 30  // [ENG], T2 'not improving at 30 min'
+- const CLOSED_ALERT_RETENTION_MIN = 60  // [ENG]
+- const SUPPRESSION_LOG_MAX = 10_000  // [ENG]
+- const CLINICAL_CHANNELS: readonly ChannelId[]  // ['physiology','symptoms','hydration']
+- const LATCHING_CHANNELS: readonly ChannelId[]  // ['symptoms','physiology']
+- const BUNDLE_CHANNELS: readonly ChannelId[]  // ['environment','regulation']
+- const CLINICAL_RESOLVER_ROLES: readonly Role[]  // first_aider, supervisor, occ_health
+- const EXPOSURE_RESOLVER_ROLES: readonly Role[]  // supervisor, first_aider, occ_health, hse_manager
+- const CREW_ROLES: readonly Role[]  // supervisor, hse_manager
+- const ACK_ROLES: readonly Role[]  // worker, buddy, supervisor, first_aider, occ_health
+- const EMERGENCY_RESPONDER_ROLES: readonly Role[]  // buddy, supervisor, first_aider, occ_health
+- const CLINICAL_TEXT_PATTERN: RegExp  // defensive reason filter (clinical terms, extra-care/conservative)
+- interface AlertPolicy { minAlertLevel: RiskLevel; supervisorMinLevel: RiskLevel; repeatSuppressionMin: number; crewBundleMinWorkers: number; crewBundleWindowMin: number; stopAckTimeoutMin: number; emergencyAckTimeoutMin: number; emergencyRepeatMin: number; highAckTimeoutMin: number; deescalationDwellMin: number; clinicalResolutionHoldMin: number; closedAlertRetentionMin: number }
+- const DEFAULT_ALERT_POLICY: Readonly<AlertPolicy>
+- type NotificationChannel = 'app' | 'push' | 'sms' | 'voice' | 'siren'
+- type NotificationKind = 'alert' | 'crew_alert' | 'deescalation' | 'update' | 'escalation' | 'renotify' | 'siren' | 'reminder' | 'device_offline'
+- interface Notification { id: string; t: number; alertId: string; to: { role: Role; id?: string }; channel: NotificationChannel; level: RiskLevel; actions: ActionId[]; reasonKey: string; text: string; requiresAck: boolean; kind: NotificationKind }
+- interface EngineAlert extends Alert { memberIds?: string[] }
+- interface RosterEntry { crewId: string; siteId: string; displayName: string; buddyId?: string; supervisorId?: string; network?: 'online' | 'offline' }
+- interface AlertContext { now: number; roster: Readonly<Record<string, RosterEntry>> }
+- type AlertOrigin = 'new' | 'escalation' | 'deescalation' | 'crew'
+- type AlertCloseReason = 'superseded' | 'auto_dwell' | 'manual' | 'members_cleared'
+- interface AlertRecord { alert: EngineAlert; origin: AlertOrigin; drivingChannels: ChannelId[]; clinical: boolean; latched: boolean; bundleEligible: boolean; requiresAck: boolean; acks: Array<{ role: Role; t: number }>; reasonKey: string; workMinPerHour?: number; crewAlertId?: string; activeMemberIds?: string[]; supervisorTargets?: Array<string | null>; stopEscalatedAt?: number; renotifiedAt?: number; remindedAt?: number; closedReason?: AlertCloseReason; resolvedBy?: Role }
+- interface WorkerAlertTrack { workerId: string; roster: RosterEntry; level: RiskLevel; lastT: number; openAlertId: string | null; belowSince: number | null; told: Record<string, number>; suppressedKey: string | null; resolutionHold?: { level: RiskLevel; t: number } }
+- interface SuppressionEvent { t: number; workerId: string; level: RiskLevel; actions: ActionId[] }
+- interface AlertEngineState { version: 1; idPrefix: string; alertSeq: number; notificationSeq: number; alerts: Record<string, AlertRecord>; workers: Record<string, WorkerAlertTrack>; crewOpen: Record<string, string>; suppressed: SuppressionEvent[] }
+- interface ProcessResult { state: AlertEngineState; raised: EngineAlert[]; updated: EngineAlert[]; notifications: Notification[] }
+- interface TickResult { state: AlertEngineState; updated: EngineAlert[]; notifications: Notification[] }
+- interface AckResult { state: AlertEngineState; ok: boolean; alert: EngineAlert | null; counted: boolean; reason?: 'unknown_alert' | 'role_not_permitted' }
+- interface ResolveResult { state: AlertEngineState; ok: boolean; alert: EngineAlert | null; updated: EngineAlert[]; reason?: 'unknown_alert' | 'role_not_permitted' }
+- interface AlertStats { alerts: number; byLevel: Record<RiskLevel, number>; byScope: Record<Alert['scope'], number>; acknowledged: number; unacknowledged: number; resolved: number; medianTimeToAckMin: number | null; medianTimeToAckMinByLevel: Partial<Record<RiskLevel, number>>; escalations: { alertsEscalated: number; stopUnacknowledged: number; emergencyRenotified: number; highReminders: number }; suppressed: number; crewBundledWorkerAlerts: number; notifications: number; notificationsByChannel: Record<NotificationChannel, number>; notificationsByRole: Partial<Record<Role, number>>; notificationsByKind: Partial<Record<NotificationKind, number>> }
+- function createAlertEngine(opts?: { idPrefix?: string }): AlertEngineState
+- function processAssessments(state: AlertEngineState, assessments: readonly RiskAssessment[], ctx: AlertContext, opts?: Partial<AlertPolicy>): ProcessResult  // runs tick(state, ctx.now) first (idempotent)
+- function tick(state: AlertEngineState, now: number, opts?: Partial<AlertPolicy>): TickResult
+- function acknowledge(state: AlertEngineState, alertId: string, role: Role, t: number): AckResult
+- function resolve(state: AlertEngineState, alertId: string, role: Role, t: number): ResolveResult
+- function alertStats(alerts: readonly Alert[], notifications: readonly Notification[], suppressed?: number | readonly SuppressionEvent[]): AlertStats
+- // ── src/engine/planner.ts ──
+- const PLAN_SLOT_MIN = 5  // [ENG]
+- const DEFAULT_MIN_BLOCK_MIN = 30  // [ENG]
+- const WORK_MIN_GRANULARITY = 5  // [ENG] floor, protective
+- const STOP_BAND_WORK_FRACTION = 0.25  // ARCHITECTURE §5 stop band
+- const FORECAST_HOLD_MIN = 60  // [ENG]
+- const FORECAST_MAX_GAP_MIN = 180  // [ENG] fail-safe beyond
+- const COOLER_CAPACITY_L = 20 * US_QUART_L  // ≈18.93 L, 5-US-gal cooler [ENG]
+- const COOLER_REFILL_INTERVAL_H = 2  // [ENG], ADOSH CoP §2(d)(ii)
+- const SHIFT_START_CANDIDATES: readonly string[]  // ['05:00','06:00','07:00']
+- const SHIFT_WORK_TIE_TOLERANCE = 0.05  // [ENG]
+- interface PlannerHour { t: number; wbgtC: number; wbgtShadeC: number; twlWm2: number; twlShadeWm2?: number }
+- interface PlanDayInput { date: string; site: Site; crews: Crew[]; workers: WorkerProfile[]; hourly: PlannerHour[]; shift: { start: string; end: string }; pack?: RulePack; minBlockMin?: number; restAreaWbgtC?: number }
+- interface CrewBinding { limit: ExposureLimitId; conservative: boolean; stricterTier: boolean; nonAcclimatizedMemberIds: string[]; unknownMemberIds: string[]; crewSize: number; text: string; basis: string }
+- interface HourOutlook { hour: string; t: number; wbgtC: number; wbgtShadeC: number; twlWm2: number; twlShadeWm2: number; zone: TwlZoneId | null; zoneLabel: string | null; shadeZone: TwlZoneId | null; middayBreak: boolean; allowedWorkMinPerHour: Record<WorkClass, number>; allowedWorkMinPerHourShade: Record<WorkClass, number>; binding: { limit: ExposureLimitId; clothingAdjustmentC: number; stricterTier: boolean }; forecastFallback: boolean }
+- interface RestCycle { workMin: number; restMin: number; source: 'niosh' | 'rule_pack' | 'both' | 'none'; text: string }
+- interface BlockHour { hour: string; wallMin: number; workMin: number; allowedWorkMinPerHour: number; nioshWorkMinPerHour: number; packWorkMinPerHour: number; zone: TwlZoneId | null; wbgtWorkEffC: number; wbgtRestEffC: number; twlWm2: number }
+- interface PlanBlock { taskId: string | null; taskName: string | null; start: string; end: string; startT: number; endT: number; location: 'sun' | 'shade'; workMinPerHour: number; restMinPerHour: number; rest: RestCycle; workMin: number; restMin: number; waterL: number; hours: BlockHour[]; notes: string[]; basis: string[] }
+- interface NaiveBlock { taskId: string; start: string; end: string; location: 'sun' | 'shade'; workMin: number }
+- interface UnscheduledTask { taskId: string; requiredMin: number; scheduledMin: number; reason: 'deferred' | 'incomplete' | 'invalid'; bestHour: string | null; bestWorkMinPerHour: number }
+- interface CrewPlan { crewId: string; binding: CrewBinding; blocks: PlanBlock[]; workMin: number; restMin: number; idleMin: number; waterL: number; coolersNeeded: number; exposureCMin: number; naive: { blocks: NaiveBlock[]; workMin: number; exposureCMin: number }; lostWorkMinVsNaive: number; exposureReduction: number; unscheduled: UnscheduledTask[]; allowance: Array<{ hour: string; byTask: Record<string, number> }> }
+- interface DayPlanTotals { workMin: number; restMin: number; idleMin: number; naiveWorkMin: number; lostWorkMinVsNaive: number; exposurePlanCMin: number; exposureNaiveCMin: number; exposureReduction: number; waterL: number; coolersNeeded: number }
+- type PlanWarningCode = 'invalid_shift' | 'no_forecast' | 'forecast_gap' | 'unknown_worker' | 'empty_crew' | 'invalid_task' | 'task_deferred' | 'task_incomplete' | 'fixed_task_moved' | 'unacclimatized_reassign' | 'acclimatization_ramp' | 'rest_exceeds_limit'
+- interface PlanWarning { code: PlanWarningCode; text: string; crewId?: string; taskId?: string; workerIds?: string[]; hours?: string[] }
+- interface DayPlan { date: string; siteId: Site['id']; packId: RulePackId; shift: { start: string; end: string }; hours: HourOutlook[]; crews: CrewPlan[]; totals: DayPlanTotals; warnings: PlanWarning[]; basis: string[] }
+- interface ShiftOption { rank: number; start: string; end: string; totals: DayPlanTotals; unscheduledWorkMin: number; warnings: number; reason: string }
+- function planDay(input: PlanDayInput): DayPlan
+- function suggestShiftStart(input: PlanDayInput, candidates?: readonly string[]): ShiftOption[]  // default SHIFT_START_CANDIDATES
+New types:
+- AlertPolicy
+- NotificationChannel
+- NotificationKind
+- Notification
+- EngineAlert
+- RosterEntry
+- AlertContext
+- AlertOrigin
+- AlertCloseReason
+- AlertRecord
+- WorkerAlertTrack
+- SuppressionEvent
+- AlertEngineState
+- ProcessResult
+- TickResult
+- AckResult
+- ResolveResult
+- AlertStats
+- PlannerHour
+- PlanDayInput
+- CrewBinding
+- HourOutlook
+- RestCycle
+- BlockHour
+- PlanBlock
+- NaiveBlock
+- UnscheduledTask
+- CrewPlan
+- DayPlanTotals
+- PlanWarningCode
+- PlanWarning
+- DayPlan
+- ShiftOption
+
+## sim-truth
+Files: src\sim\gagge.ts, src\sim\truth.ts, src\sim\gagge.test.ts, src\sim\truth.test.ts, scripts\oracles\gagge_oracle.py, fixtures\gagge.json
+- gagge.ts: const GAGGE: { readonly MET_FACTOR: 58.2; BODY_WEIGHT_KG: 70; SBC: 0.000000056697; C_SW: 170; C_DIL: 120; C_STR: 0.5; T_SKIN_NEUTRAL_C: 33.7; T_CORE_NEUTRAL_C: 36.8; ALFA0: 0.1; SKIN_BLOOD_FLOW_NEUTRAL: 6.3; MAX_SKIN_BLOOD_FLOW: 90; MIN_SKIN_BLOOD_FLOW: 0.5; MAX_SWEATING: 500; I_CL_CLOTHED: 0.45; I_CL_NUDE: 1; LEWIS_RATIO: 2.2; H_R_INITIAL: 4.7; CLOTHING_EMISSIVITY: 0.95; AR_AD_STANDING: 0.73; AR_AD_SITTING: 0.7; T_CL_TOLERANCE_C: 0.01; T_CL_MAX_ITER: 150; TISSUE_CONDUCTANCE: 5.28; BLOOD_HEAT_CAPACITY: 1.163; BODY_SPECIFIC_HEAT: 0.97; LATENT_HEAT_WH_PER_G: 0.68; UPSTREAM_STEPS: 59; P_ATM_STD_PA: 101325 } (as const)
+- gagge.ts: type GaggePosition = 'standing' | 'sitting'
+- gagge.ts: interface GaggeInputs { taC: number; trC: number; vMs: number; rhPct: number; metabolic: number /* W/m2 */; wme: number /* W/m2 */; clo: number; im?: number; bodyPosition: GaggePosition; bsa: number; pAtmPa?: number; wMax?: number }
+- gagge.ts: interface GaggeDehydration { pct: number; setpointCPerPct: number; sweatGainLossPerPct: number }
+- gagge.ts: interface GaggeParams { sweatGainMultiplier: number; setpointShiftC: number; dehydration?: GaggeDehydration; maxSkinBloodFlow?: number; maxSweatingGm2h?: number }
+- gagge.ts: const GAGGE_PARITY_PARAMS: Readonly<GaggeParams>  // { sweatGainMultiplier: 1, setpointShiftC: 0 }
+- gagge.ts: interface GaggeState { tCoreC; tSkinC; mBl; alfa; eSkinWm2; hRWm2K; metShiveringWm2; massKg; minutes; tClC; qSensibleWm2; eRswWm2; eDiffWm2; eMaxWm2; w; wMax; mRswGm2h /* evaporated = upstream m_rsw */; sweatProdGm2h /* produced */; qResWm2; cResWm2; sweatG; skinDiffusionG; respiratoryWaterG: number }
+- gagge.ts: interface GaggeStateOptions { tCoreC?: number; tSkinC?: number; mBl?: number; massKg?: number; initialMetabolicWm2?: number }
+- gagge.ts: function createGaggeState(opts: GaggeStateOptions = {}): GaggeState
+- gagge.ts: function pSatTorr(tC: number): number
+- gagge.ts: function gaggeDefaultWMax(vMs: number, clo: number): number
+- gagge.ts: function gaggeStep(state: GaggeState, inputs: GaggeInputs, minutes: number, params: Readonly<GaggeParams> = GAGGE_PARITY_PARAMS): GaggeState  // throws RangeError on non-integer/negative minutes, non-finite inputs, wMax outside (0.06,1]
+- gagge.ts: function gaggeWaterLossG(state: Pick<GaggeState, 'sweatG' | 'skinDiffusionG' | 'respiratoryWaterG'>): number
+- truth.ts: type TruthParams = typeof DEFAULT_PARAMS  // groups: traits, acclimatisation, illness, hydration, environment, mrt, clothing, hr, wearable, selfPacing, behaviour, symptoms, reporting, events, cooling
+- truth.ts: type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] }
+- truth.ts: const TRUTH_PARAMS: TruthParams  // deep-frozen; every field cited or tagged [ASSUMPTION]/[ENG]
+- truth.ts: function withTruthParams(overrides: DeepPartial<TruthParams>, base: TruthParams = TRUTH_PARAMS): TruthParams
+- truth.ts: interface HiddenTraits { workerId: string; sex: 'male' | 'female'; ageYears; massKg; heightCm; bsaM2; metabolicMultiplier; vo2maxMlKgMin; hrMaxBpm; hrRestBpm; acclimTauFactor; acclimFraction; sweatGainMultiplier; sweatSodiumMmolL; illnessPropensity; baselineDrinkMlPerH; sweatReplacementFraction; complianceFactor; microclimateOffsetC; selfPacingPropensity; symptomSusceptibility; selfReportFactor; respondFactor; ppgBiasBpm; ppgNoiseSdBpm; ppgDropoutFactor: number }
+- truth.ts: function trueAcclimatizationFraction(profile: Pick<WorkerProfile, 'daysOnSite' | 'daysAwayRecent' | 'experiencedInHeat'>, traits: Pick<HiddenTraits, 'acclimTauFactor'>, params: TruthParams = TRUTH_PARAMS): number
+- truth.ts: function sampleHiddenTraits(profile: WorkerProfile, rng: Rng, params: TruthParams = TRUTH_PARAMS): HiddenTraits
+- truth.ts: interface DailyCondition { illness: 'none' | 'febrile' | 'gi'; startDehydrationPct: number }
+- truth.ts: const HEALTHY_DAY: Readonly<DailyCondition>
+- truth.ts: function sampleDailyCondition(traits: HiddenTraits, rng: Rng, params: TruthParams = TRUTH_PARAMS): DailyCondition
+- truth.ts: type TruthLocation = 'sun' | 'shade' | 'indoor_cool'
+- truth.ts: interface MrtFluxes { lwDownWm2: number; lwUpWm2: number; diffuseWm2: number; reflectedWm2: number; dniWm2: number; cosZenith: number }
+- truth.ts: function humanMrtFromFluxesC(f: MrtFluxes, params: TruthParams['mrt'] = TRUTH_PARAMS.mrt): number
+- truth.ts: interface TruthMrtInputs { taC: number; rhPct: number; ghiWm2: number; fdir: number; cosZenith: number; location: TruthLocation; siteRadiantBoostC?: number; microclimateOffsetC?: number }
+- truth.ts: function truthHumanMrtC(inp: TruthMrtInputs, params: TruthParams = TRUTH_PARAMS): number
+- truth.ts: function truthClothing(clothing: ClothingId, hood: boolean, params: TruthParams = TRUTH_PARAMS): { clo: number; icl: number }
+- truth.ts: function truthDynamicClothing(stat: { clo: number; icl: number }, imst: number, vArMs: number, walkMs: number, params: TruthParams = TRUTH_PARAMS): { clo: number; icl: number }
+- truth.ts: type SymptomCluster = 'heat_exhaustion' | 'cramps' | 'cns' | 'thirst'
+- truth.ts: interface ActiveSymptom { id: SymptomId; cluster: SymptomCluster; onsetT: number }
+- truth.ts: interface SymptomEpisode { onsetT: number; recoveryRunMin: number; noticed: boolean }
+- truth.ts: type TruthOutcomeKind = 'excessive_strain' | 'severe_strain' | 'critical' | 'dehydration'
+- truth.ts: interface TruthOutcome { kind: TruthOutcomeKind; t: number; onsetT: number; value: number }
+- truth.ts: type TruthEvent = { type: 'outcome'; t: number; outcome: TruthOutcome } | { type: 'symptom_onset'; t: number; cluster: SymptomCluster; symptoms: SymptomId[]; selfReported: boolean } | { type: 'symptom_added'; t: number; cluster: SymptomCluster; symptoms: SymptomId[] } | { type: 'symptom_resolved'; t: number; cluster: SymptomCluster } | { type: 'buddy_noticed'; t: number; symptoms: SymptomId[] } | { type: 'pace_change'; t: number; paceFactor: number }
+- truth.ts: interface TruthState { t; minute; params: TruthParams; traits: HiddenTraits; workerId: string; acclimFraction; unacclimatised: boolean; illness: DailyCondition['illness']; siteRadiantBoostC; gagge: GaggeState; coreRestC; deficitMl; dehydrationPct; intakeMl; waterLossMl; sweatMl; sodiumLossMmol; sweatRateMlPerH; location: TruthLocation; airC; mrtC; effMetabolicW; paceFactor; hrEpsBpm; symptoms: readonly ActiveSymptom[]; episodes: { heat_exhaustion: SymptomEpisode | null; cramps: SymptomEpisode | null; cns: SymptomEpisode | null }; excessRunMin; excessRunStartT: number | null; outcomes: Partial<Record<TruthOutcomeKind, TruthOutcome>>; maxCoreC; maxDehydrationPct; events: readonly TruthEvent[]; lastEvents: readonly TruthEvent[] }
+- truth.ts: interface InitTruthOptions { day?: DailyCondition; params?: TruthParams }
+- truth.ts: function truthRestMetabolicW(): number  // 115 W (REST_METABOLIC_W)
+- truth.ts: function trueMetabolicW(taskMetabolicW: number, traits: Pick<HiddenTraits, 'metabolicMultiplier'>): number
+- truth.ts: function initTruth(profile: WorkerProfile, traits: HiddenTraits, t0: number, opts: InitTruthOptions = {}): TruthState
+- truth.ts: function vo2FromMetabolicW(metabolicW: number, massKg: number, rq: number = TRUTH_PARAMS.hr.rq): number
+- truth.ts: function trueHeartRate(state: TruthState, traits: HiddenTraits, metabolicW: number = state.effMetabolicW): number
+- truth.ts: interface TruthActivity { metabolicW: number; location: TruthLocation; clothing: ClothingId; hood: boolean }
+- truth.ts: interface TruthInputs { taC: number; rhPct: number; wind2Ms: number; ghiWm2: number; fdir: number; cosZenith: number; pHpa?: number; activity: TruthActivity; drankMl: number; radiantBoostC?: number; cooling?: 'none' | 'towels' | 'immersion' }
+- truth.ts: const TRUTH_UNIFORMS_PER_MINUTE = 12
+- truth.ts: function stepTruth(state: TruthState, inputs: TruthInputs, dtMin: number, rng: Rng): TruthState  // throws RangeError unless dtMin is a positive integer
+- truth.ts: interface DrinkContext { reminder: boolean; canDrink: boolean; onBreak?: boolean; reminderMl?: number }
+- truth.ts: function drinkDecision(state: TruthState, traits: HiddenTraits, ctx: DrinkContext, rng: Rng): number
+- truth.ts: interface CheckinResponse { symptoms: SymptomId[]; urineColor: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 }
+- truth.ts: function respondToCheckin(state: TruthState, traits: HiddenTraits, rng: Rng): CheckinResponse | null
+- truth.ts: function activeSymptomIds(state: TruthState): SymptomId[]
+- truth.ts: interface WearableChainState { lastMinuteIndex: number; dropout: boolean; offSkinRemainingS: number; cadenceRemainingS: number; cadenceFactor: number; noiseBpm: number }
+- truth.ts: function createWearableChain(): WearableChainState
+- truth.ts: interface WearableContext { minuteIndex: number; armWork: boolean; dust: boolean; chain?: WearableChainState /* updated in place */; params?: TruthParams['wearable'] }
+- truth.ts: function wearableSamples(hrTrue: number, traits: HiddenTraits, ctx: WearableContext, rng: Rng): HrRawSample[]  // 60 samples, tSec 0-59 within the minute; [] on whole-minute loss
+New types:
+- GaggePosition
+- GaggeInputs
+- GaggeDehydration
+- GaggeParams
+- GaggeState
+- GaggeStateOptions
+- TruthParams
+- DeepPartial<T>
+- HiddenTraits
+- DailyCondition
+- TruthLocation
+- MrtFluxes
+- TruthMrtInputs
+- SymptomCluster
+- ActiveSymptom
+- SymptomEpisode
+- TruthOutcomeKind
+- TruthOutcome
+- TruthEvent
+- TruthState
+- InitTruthOptions
+- TruthActivity
+- TruthInputs
+- DrinkContext
+- CheckinResponse
+- WearableChainState
+- WearableContext
+
+## docs-science
+Files: docs\SCIENCE.md, docs\LIMITATIONS.md
+- docs/SCIENCE.md preamble: status on 2026-11-10 (869 tests passing; integration layer in progress; validate pipeline missing), the claims Zill does not make, tag and term vocabulary
+- SCIENCE §1 The evidence chain on one page: weather → heat indices → exposure limits → personal projection → physiology → symptoms → fused level (table plus three design rules)
+- SCIENCE §2.1 Outdoor and shade WBGT (Liljegren 2008): purpose, inputs and units, equations, constants, implementation notes, verification table, [ENG], UNVERIFIED
+- SCIENCE §2.2 Solar geometry (NOAA) and Open-Meteo hour-mean radiation (t − 30 min geometry, cos-zenith disaggregation, data contract, verification)
+- SCIENCE §2.3 PHS ISO 7933:2023 (continuous stepper, latching, hcMode choice, drink = 0 handling and the E10 look-ahead, reflective-clothing trap, clothing inputs, MRT decision, Annex F 2004/2023 results)
+- SCIENCE §2.4 ISO 8996 / NIOSH REL-RAL / ACGIH CAV / allowed work fraction / acclimatisation / water recommendation
+- SCIENCE §2.5 TWL (Brake & Bates 2002), including the zone-B ambiguity (physical vs alt_1p8), Table I agreement and scope
+- SCIENCE §2.6 ADOSH / MoHRE rule packs (Abu Dhabi zone table, midday break, Sharjah and Qatar packs, boundary rule)
+- SCIENCE §2.7 ECTemp / PSI / SQI (Kalman equations, channel validity, floors, reported published accuracy, patents)
+- SCIENCE §2.8 Clinical triage, cooling protocol, urine colour, fluid caps, conservative mode
+- SCIENCE §3 Fusion design per ARCHITECTURE §5–6: integration input requirements, channel table, fusion and alert policy (design only, no implementation claims)
+- SCIENCE §4 Traceability table: rule → standard/clause → module·function → test (55 rows)
+- SCIENCE §5 How fail-safe defaults enter each model (30 rows, each with its test evidence)
+- SCIENCE §6 Reference fixtures, generators, tolerances and worst errors achieved; how to reproduce
+- SCIENCE §7 Key sources
+- docs/LIMITATIONS.md: status vocabulary; §1 Evidence and integration (E-01–E-03); §2 Models (M-01–M-21); §3 Data (D-01–D-11); §4 Physiology (P-01–P-11); §5 Clinical (C-01–C-09); §6 Translations (T-01–T-06); §7 Regulatory interpretation (R-01–R-08); §8 Governance and law (G-01–G-04); §9 Simulation limits placeholder from SIMULATION.md §6 (S-01–S-04)
+
+## docs-governance-pilot
+Files: docs\GOVERNANCE.md, docs\PILOT.md
+- GOVERNANCE.md sections:
+- Tag legend (P/S/D/ENG/UNVERIFIED and Code/Contract/Process)
+- §0 Summary
+- §1 Principles (11, each marked with how it is enforced)
+- §2 Data inventory: §2.1 table of the 18 fields (generated: class, consent scope, whether in the sync payload, who can ever receive it); §2.2 profile inputs no role can request (nationality never stored); §2.3 where data lives and retention; §2.4 what leaves the device (generated inspectSyncPayload example, 224 bytes); §2.5 what Zill does not collect
+- §3 Role × purpose matrix: §3.1 order in which project() decides; §3.2 matrix of 8 roles × 9 purposes (generated); §3.3 grants G1–G7 (generated); §3.4 design decisions and the residual inference risk
+- §4 Consent: §4.1 processing activities and legal bases (generated); §4.2 the five scopes (generated from CONSENT_NOTICES); §4.3 receipts; §4.4 who may collect consent and why supervisors may not (DoH SBR); §4.5 withdrawal; §4.6 vital-interest exception; §4.7 languages and literacy, including the consent-text inconsistency
+- §5 Prohibited purposes: §5.1 refusal text and basis per purpose (generated); §5.2 enforcement in code; §5.3 contract clauses C1–C12; §5.4 why the bans matter for safety
+- §6 Hash-chained audit log, 'who saw my data', publishing the chain head (anchor cadence proposal), notes for production
+- §7 Aggregates: §7.1 k per role (generated); §7.2 primary and complementary suppression; §7.3 worked example at k=5 and k=10 (generated with aggregate()); §7.4 homogeneity and differencing limits
+- §8 Legal mapping (PDPL, ICT Health Law, DoH SBR 2026, DoH RAI Standard, DoH AI Policy 2018, ADHICS V2, UAE AI Charter, ILO code mapped clause by clause, C155/C161/C187, MoHRE MR 44/2022, ADOSH CoP 11.0 v4.0 and Mechanism 11.0, EDE) with UNVERIFIED marks
+- §9 Device status and claims framing (EDE, verbatim intended-purpose statement, wearable gate, claims table, clinical sign-off, ECTemp/aPSI patents)
+- §10 AI governance: what kind of system it is; human oversight; transparency; contestability; fairness monitoring; model change control
+- §11 DPIA outline with a risk-to-mitigation table R1–R17
+- §12 Accountability roles
+- §13 Open governance decisions 1–15
+- Appendix A: full table-generation script (relative imports), checked to reproduce every generated table
+- PILOT.md sections:
+- §0 Summary
+- §1 The problem (cited burden, outside-heatwave share, gaps in the midday ban, ADPHC TWL precedent, market gap)
+- §2 Buyers by segment, with budget owner and entry wedge
+- §3 Value per stakeholder and how the pilot tests each
+- §4 Pricing and unit economics: §4.1 benchmarks; §4.2 pricing hypothesis [D]; §4.3 cost to serve a 200-worker site for one season, with tagged inputs and break-even prices; §4.4 weather licensing (Open-Meteo tiers); §4.5 market pools; §4.6 beachhead
+- §5 Pilot design Zill-AD1: objectives; setting and consent model; stepped-wedge schedule (40/80 crew-weeks); shadow mode; ten pre-specified endpoints including alert lead time, adherence, false alarms, acceptability, data quality and safety; precision; why incidence is not feasible (0.59–3.06 expected cases, P(0)=0.05); analysis and progression criteria; safety monitoring and stopping rules; data management
+- §6 Ethics and approvals checklist (DoH SBR pathway, consent in Arabic and English, impartial witness, research staff, DPIA, insurance, EDE memo, employer agreement, worker committee and ombudsperson)
+- §7 Integrations (meters, weather, worker channels, HSE platforms, roster, flag boards, wearables gated, regulator reporting)
+- §8 Deployment architecture and scaling (edge-first, offline, sync, UAE hosting, per-jurisdiction rule packs, multi-tenant)
+- §9 Timeline to June 2027 and status of the GITEX readiness package
+- §10 Risks and mitigations
+- §11 KPIs
+- §12 Open decisions

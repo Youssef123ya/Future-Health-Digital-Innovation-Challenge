@@ -1,0 +1,944 @@
+
+## heat-indices
+Files: src\engine\units.ts, src\engine\psychro.ts, src\engine\solar.ts, src\engine\wbgt.ts, src\engine\units.test.ts, src\engine\psychro.test.ts, src\engine\solar.test.ts, src\engine\wbgt.test.ts
+- units.ts: const KELVIN_OFFSET = 273.15
+- units.ts: function cToK(tC: number): number
+- units.ts: function kToC(tK: number): number
+- units.ts: function cToF(tC: number): number
+- units.ts: function fToC(tF: number): number
+- units.ts: function deltaCToF(deltaC: number): number  // difference, no offset
+- units.ts: function deltaFToC(deltaF: number): number
+- units.ts: function kmhToMs(kmh: number): number
+- units.ts: function msToKmh(ms: number): number
+- units.ts: function hpaToKpa(hpa: number): number
+- units.ts: function kpaToHpa(kpa: number): number
+- units.ts: function duboisBsaM2(massKg: number, heightCm: number): number  // 0.202·W^0.425·(H/100)^0.725; 75 kg/180 cm → 1.937871486
+- units.ts: function wm2ToW(wm2: number, bsaM2: number): number
+- units.ts: function wToWm2(w: number, bsaM2: number): number
+- units.ts: const W_M2_PER_MET = 58.15
+- units.ts: function metToWm2(met: number): number
+- units.ts: function wm2ToMet(wm2: number): number
+- units.ts: const W_PER_KCAL_H = 1.163
+- units.ts: function kcalhToW(kcalh: number): number
+- units.ts: function wToKcalh(w: number): number
+- units.ts: const L_PER_US_QUART = 0.946352946
+- units.ts: const ML_PER_US_FL_OZ = 29.5735295625
+- units.ts: function usQuartToL(quarts: number): number
+- units.ts: function lToUsQuart(litres: number): number
+- units.ts: function usFlOzToMl(flOz: number): number
+- units.ts: function mlToUsFlOz(ml: number): number
+- units.ts: function lToMl(litres: number): number
+- units.ts: function mlToL(ml: number): number
+- psychro.ts: const RH_MIN_PCT = 1; const RH_MAX_PCT = 100
+- psychro.ts: function clampRhPct(rhPct: number): number  // [1,100] (D8)
+- psychro.ts: function liljegrenEsatHpa(tK: number): number  // 1.004·6.1121·exp(17.502(T−273.15)/(T−32.18)) hPa, T in K (WBGT only)
+- psychro.ts: function liljegrenDewPointK(eHpa: number): number  // exact inverse of liljegrenEsatHpa
+- psychro.ts: function vapourPressureHpa(taC: number, rhPct: number): number  // Liljegren eair, RH clamped
+- psychro.ts: function rhFromDewPointPct(taC: number, tdC: number): number  // 100·esat(Td)/esat(Ta), clamped [1,100]
+- psychro.ts: function dewPointC(taC: number, rhPct: number): number
+- psychro.ts: function psatTetensKpa(tC: number): number  // 0.6105·exp(17.27t/(t+237.3)) kPa — PHS 2023 and TWL only
+- psychro.ts: function vapourPressureTetensKpa(taC: number, rhPct: number): number  // PHS/TWL p_a in kPa (= psat·rh/100, reproduces phs.json 2023 p_a_kpa to 4e-16)
+- solar.ts: interface SolarPosition { julianDay: number; declinationDeg: number; eqOfTimeMin: number; hourAngleDeg: number; zenithDeg: number; refractionDeg: number; apparentZenithDeg: number; apparentElevationDeg: number; cosZenith: number; cosApparentZenith: number; earthSunAu: number }
+- solar.ts: function julianDayFromEpochMs(tMs: number): number
+- solar.ts: function solarPositionFromJulianDay(jd: number, latDeg: number, lonDeg: number): SolarPosition
+- solar.ts: function solarPosition(tMs: number, latDeg: number, lonDeg: number): SolarPosition  // NOAA/Meeus; use cosApparentZenith in the model
+- solar.ts: const SOLAR_CONSTANT_WM2 = 1367
+- solar.ts: function toaHorizontalWm2(cosZenith: number, earthSunAu: number): number  // 1367·max(cz,0)/R² (no CZA_MIN cut-off)
+- solar.ts: interface HourMeanSolarPosition extends SolarPosition { tEvalMs: number }
+- solar.ts: function hourMeanSolarPosition(tEndMs: number, latDeg: number, lonDeg: number, avgMin?: number /* default 60 */): HourMeanSolarPosition  // geometry at tEnd − avgMin/2
+- solar.ts: interface DaylightMeanElevation { sunlitMeanSinElevation: number; sunlitFraction: number; intervalMeanSinElevation: number }
+- solar.ts: function daylightMeanSinElevation(tStartMs: number, tEndMs: number, latDeg: number, lonDeg: number, samples?: number /* default 60 */): DaylightMeanElevation  // midpoint samples of apparent sin(elev); intervalMean = divisor for hour-mean direct → DNI
+- wbgt.ts: const LILJEGREN: { readonly STEFANB: 5.6696e-8; CP; M_AIR; M_H2O; R_GAS; R_AIR; PR; RATIO; EMIS_GLOBE; ALB_GLOBE; D_GLOBE_M; EMIS_WICK; ALB_WICK; D_WICK_M; L_WICK_M; EMIS_SFC; ALB_SFC; SOLAR_CONST_WM2; CZA_MIN: 0.00873; NORMSOLAR_MAX: 0.85; FDIR_MAX: 0.9; MIN_SPEED_MS: 0.13; CONVERGENCE_K: 0.02; MAX_ITER: 500; DAMPING_NEW_WEIGHT: 0.1; MIN_WIND_10M_MS: 0.62; REF_HEIGHT_M: 2; WIND_HEIGHT_M: 10 } (all number, as const)
+- wbgt.ts: function viscosityKgMs(tK: number): number
+- wbgt.ts: function thermalConductivityWmK(tK: number): number
+- wbgt.ts: function diffusivityM2s(tK: number, pHpa: number): number
+- wbgt.ts: function latentHeatEvapJkg(tK: number): number  // Quirk Q1 kept
+- wbgt.ts: function atmosphericEmissivity(tK: number, rhFrac: number): number
+- wbgt.ts: function airDensityKgM3(tK: number, pHpa: number): number
+- wbgt.ts: function hSphereWm2K(tK: number, pHpa: number, speedMs: number): number
+- wbgt.ts: function hCylinderWm2K(tK: number, pHpa: number, speedMs: number): number
+- wbgt.ts: interface LiljegrenInputs { taC: number; rhPct: number; pHpa: number; u2Ms: number; ghiWm2: number; fdir: number; cosZenith: number; extraRadiantK4?: number }
+- wbgt.ts: interface SolveResult { valueC: number; iterations: number; converged: boolean; fallback: boolean }
+- wbgt.ts: function preprocessFdir(fdir: number, cosZenith: number): number  // clamp [0,0.9]; 0 if cz < 0.00873
+- wbgt.ts: function globeTemperature(inp: LiljegrenInputs): SolveResult  // 2-inch globe, no normsolar cap at this level
+- wbgt.ts: function naturalWetBulb(inp: LiljegrenInputs): SolveResult
+- wbgt.ts: function psychrometricWetBulb(taC: number, rhPct: number, pHpa: number, u2Ms: number): SolveResult  // wick eq. with rad = 0
+- wbgt.ts: function wbgtOutdoorC(tnwbC: number, tgC: number, taC: number): number  // 0.7·Tnwb + 0.2·Tg + 0.1·Ta
+- wbgt.ts: function wbgtIndoorC(tnwbC: number, tgC: number): number  // 0.7·Tnwb + 0.3·Tg
+- wbgt.ts: interface DirectBeamResult { ghiUsedWm2: number; fdir: number; clearness: number | null; capped: boolean }
+- wbgt.ts: function liljegrenDirectBeam(ghiWm2: number, toaWm2: number): DirectBeamResult  // S*=min(GHI/TOA,0.85), GHI_used=S*·TOA, fdir=clamp(exp(3−1.34S*−1.65/S*),0,0.9)
+- wbgt.ts: function liljegrenToaWm2(cosZenith: number, earthSunAu: number): number  // 0 when cz < CZA_MIN
+- wbgt.ts: function clearSkyGhiWm2(cosZenith: number): number  // Kasten–Czeplak max(910·cz − 30, 0)
+- wbgt.ts: type StabilityClass = 1 | 2 | 3 | 4 | 5 | 6
+- wbgt.ts: type WindTerrain = 'urban' | 'rural'
+- wbgt.ts: const LSRDT: readonly (readonly number[])[]; const URBAN_WIND_EXPONENTS: readonly number[]; const RURAL_WIND_EXPONENTS: readonly number[]
+- wbgt.ts: function stabilityClassSrdt(daytime: boolean, u10Ms: number, ghiWm2: number, nightDeltaTNonNegative?: boolean): StabilityClass
+- wbgt.ts: function windSpeed2mMs(u10Ms: number, stabilityClass: StabilityClass, terrain?: WindTerrain): number  // max(u10·0.2^p, 0.13)
+- wbgt.ts: interface Wind2mResult { u10UsedMs: number; u2Ms: number; stabilityClass: StabilityClass; exponent: number }
+- wbgt.ts: function wind2mFrom10m(u10Ms: number, cosZenith: number, ghiUsedWm2: number, opts?: { terrain?: WindTerrain; apply10mFloor?: boolean; nightDeltaTNonNegative?: boolean }): Wind2mResult  // default applies the 0.62 m/s 10 m floor, urban
+- wbgt.ts: function globeMrtC(tgC: number, taC: number, pHpa: number, u2Ms: number): number  // T_mrt⁴ = T_g⁴ + h_sphere(T_ref)/(5.6696e-8·0.95)·(T_g − T_a)
+- wbgt.ts: function globeMrtFromRadiationC(taC: number, rhPct: number, ghiWm2: number, fdir: number, cosZenith: number): number  // globe MRT from the model's radiation field (cross-check)
+- wbgt.ts: function bomApproxWbgtNotForAlerts(taC: number, rhPct: number): { wbgtC: number; eHpa: number }  // comparator only, never for alerts
+- wbgt.ts: type FdirMethod = 'liljegren' | 'direct_ratio'
+- wbgt.ts: type WbgtDefaultId = 'wind_unknown_floor' | 'solar_unknown_clear_sky' | 'pressure_unknown_standard' | 'radiant_boost_invalid_ignored' | 'direct_ratio_unavailable'
+- wbgt.ts: interface WbgtOptions { radiationAvgMin?: number /* default 0 for source 'site_sensor', else 60 */; engineeredShade?: boolean /* default true [ENG] */; radiantBoostInShade?: boolean /* default true [ENG] */; terrain?: WindTerrain /* 'urban' */; fdirMethod?: FdirMethod /* 'liljegren' */; includeCalmAirBound?: boolean /* false */ }
+- wbgt.ts: interface WbgtComponents { t: number; source: EnvSource; wbgtC: number /* exposure: measured if env.measuredWbgtC else model */; wbgtSource: 'measured' | 'model'; wbgtModelC: number; wbgtShadeC: number; wbgtCalmAirC: number | null; measuredMinusModelC: number | null; tgC: number; tnwbC: number; tpwbC: number; mrtC: number; tgShadeC: number; tnwbShadeC: number; mrtShadeC: number; engineeredShade: boolean; taC: number; rhPct: number; humidityFrom: 'dew_point' | 'rh'; pHpa: number; wind10Ms: number /* after 0.62 floor */; wind2Ms: number; stabilityClass: StabilityClass; windExponent: number; tEvalMs: number; cosZenith: number /* apparent, at tEvalMs */; apparentZenithDeg: number; earthSunAu: number; toaWm2: number; ghiInputWm2: number; ghiUsedWm2: number; clearness: number | null; fdir: number; fdirMethod: FdirMethod; solarCapped: boolean; radiantBoostC: number; radiantBoostShadeC: number; converged: boolean; solverFallback: boolean; iterations: { tg: number; tnwb: number; tpwb: number; tgShade: number; tnwbShade: number }; defaults: WbgtDefaultId[] }
+- wbgt.ts: function wbgtComponents(env: EnvSample, latDeg: number, lonDeg: number, opts?: WbgtOptions): WbgtComponents  // throws RangeError if taC or humidity (tdC/rhPct) missing; HeatIndices mapping: wbgtC, wbgtShadeC, tgC, tnwbC, tpwbC, mrtC, wind2Ms, cosZenith, source, t
+New types:
+- SolarPosition (solar.ts)
+- HourMeanSolarPosition (solar.ts)
+- DaylightMeanElevation (solar.ts)
+- LiljegrenInputs (wbgt.ts)
+- SolveResult (wbgt.ts)
+- DirectBeamResult (wbgt.ts)
+- StabilityClass = 1|2|3|4|5|6 (wbgt.ts)
+- WindTerrain = 'urban'|'rural' (wbgt.ts)
+- Wind2mResult (wbgt.ts)
+- FdirMethod = 'liljegren'|'direct_ratio' (wbgt.ts)
+- WbgtDefaultId (wbgt.ts)
+- WbgtOptions (wbgt.ts)
+- WbgtComponents (wbgt.ts)
+
+## phs
+Files: src\engine\phs.ts, src\engine\phs.test.ts
+- type PhsModel = '7933-2023' | '7933-2004'
+- type PhsHcMode = 'tclIteration' | 'pythermalcomfort'
+- type PhsDrink0Mode = 'pythermalcomfort' | 'threshold3PctOnly'
+- type PhsSpHeatBasis = 'pythermalcomfort' | 'basic2004'
+- type PhsPosture = 'standing' | 'sitting' | 'crouching'
+- interface PhsInputBase { tdbC: number; trC: number; vMs: number; metabolicWm2: number; wmeWm2: number; clo: number; posture: PhsPosture; acclimatized: boolean; drink: 0 | 1; massKg: number; heightM: number; walkSpeedMs?: number; thetaDeg?: number; iMst?: number; aP?: number; fR?: number }
+- type PhsInput = PhsInputBase & ({ rhPct: number; paKpa?: undefined } | { paKpa: number; rhPct?: undefined })
+- interface PhsOptions { model?: PhsModel; hcMode?: PhsHcMode; drink0Mode?: PhsDrink0Mode; spHeatBasis?: PhsSpHeatBasis }
+- interface PhsRunOptions extends PhsOptions { durationMin?: number /* default 480 */; trace?: boolean }
+- interface PhsState { model: PhsModel; tSkC: number; tCrC: number; tReC: number; tCrEqC: number; skinCoreWeight: number /* alpha */; sweatRateWm2: number; evapLoadWm2Min: number; elapsedMin: number; exposureStarted: boolean; drinkRestricted: boolean; tReLimitMin: number | null; waterLoss3PctMin: number | null; waterLoss5PctMin: number | null; waterLoss7p5PctMin: number | null; hcSegment: { key: string; hcWm2K: number } | null }
+- interface PhsTracePoint { minute: number; tReC: number; tSkC: number; tCrC: number; sweatRateWm2: number; waterLossG: number }
+- interface PhsLimitMinutes { tReMin: number | null; lossMin: number | null; loss50Min?: number | null }
+- interface PhsResult { model: PhsModel; durationMin: number; tReC: number; tSkC: number; tCrC: number; tCrEqC: number; skinCoreWeight: number; sweatRateWm2: number; sweatRateGPerH: number; evapLoadWm2Min: number; waterLossG: number; dLimTReMin: number | null; dLimLossMin: number | null; dLimLoss50Min?: number | null /* 2004 only */; validity: PhsValidity; state: PhsState; trace?: PhsTracePoint[] }
+- interface PhsLimitProjection { minutes: number | null; binding: 'rectal' | 'dehydration' | null }
+- type PhsValidityField = 'tdbC' | 'trMinusTdbC' | 'vMs' | 'paKpa' | 'metabolicWm2' | 'clo'
+- interface PhsRange { min: number; max: number }
+- interface PhsValidityIssue extends PhsRange { field: PhsValidityField; value: number }
+- interface PhsValidity { withinLimits: boolean; failing: PhsValidityIssue[] }
+- interface PhsConstants { readonly model: PhsModel; readonly tdbC, trC, paKpa, vMs, metabolicWm2, wmeWm2, clo, aDuM2, spHeatWMinM2K, dMax3PctG, dMax5PctG, dMax7p5PctG, swMaxWm2, wMax, fcl, iClStM2KW, iTotStM2KW, vRMs, walkSpeedMs, corrCl, corrIa, corrTot, iTotDynM2KW, iADynM2KW, iClDynM2KW, corrE, imDyn, rTDynM2KpaW, tExpC, cResWm2, eResWm2, zWm2K, hcInitialWm2K, auxRWm2K4, fClR, tCrEqMC, tSkEqClBase, tSkEqNuBase, trK4: number }
+- const PHS_DEFAULT_OPTIONS: Readonly<Required<PhsOptions>> /* { model: '7933-2023', hcMode: 'tclIteration', drink0Mode: 'pythermalcomfort', spHeatBasis: 'pythermalcomfort' } */
+- const PHS_T_RE_LIMIT_C = 38
+- const PHS_MAX_ITERATIONS = 1000
+- const PHS_DEFAULT_DURATION_MIN = 480
+- const PHS_DRINK0_TIME_FACTOR = 0.6
+- const PHS_D_MAX_BODY_MASS_FRACTION: { readonly drinkRestricted: 0.03; readonly percentile95: 0.05; readonly mean2004: 0.075 }
+- const PHS_INITIAL_CONDITIONS: { readonly tSkC: 34.1; readonly tCrC: 36.8; readonly tReC: 36.8; readonly tCrEqC: 36.8; readonly skinCoreWeight: 0.3 }
+- const PHS_DEFAULT_I_MST = 0.38
+- const PHS_VALIDITY_LIMITS: Readonly<Record<PhsModel, Readonly<Record<PhsValidityField, PhsRange>>>>
+- function phsDuBoisAreaM2(massKg: number, heightM: number): number
+- function phsVapourPressureKpa(tdbC: number, rhPct: number, model: PhsModel): number
+- function phsValidity(input: PhsInput, model?: PhsModel /* default '7933-2023' */): PhsValidity
+- function phsConstants(input: PhsInput, opts?: PhsOptions, tSkInitialC?: number /* default 34.1 */): PhsConstants
+- function phsInitialState(input: PhsInput, opts?: PhsOptions): PhsState
+- function phsStep(state: PhsState, input: PhsInput, minutes: number, opts?: PhsOptions): PhsState
+- function phsRun(input: PhsInput, opts?: PhsRunOptions, init?: PhsState): PhsResult
+- function phsLimitMinutes(state: PhsState, opts?: Pick<PhsOptions, 'drink0Mode'>): PhsLimitMinutes
+- function minutesToLimit(state: PhsState, input: PhsInput, horizonMin: number, opts?: PhsOptions): PhsLimitProjection
+New types:
+- PhsModel
+- PhsHcMode
+- PhsDrink0Mode
+- PhsSpHeatBasis
+- PhsPosture
+- PhsInputBase
+- PhsInput
+- PhsOptions
+- PhsRunOptions
+- PhsState
+- PhsTracePoint
+- PhsLimitMinutes
+- PhsResult
+- PhsLimitProjection
+- PhsValidityField
+- PhsRange
+- PhsValidityIssue
+- PhsValidity
+- PhsConstants
+
+## limits
+Files: src\engine\limits.ts, src\engine\limits.test.ts
+- const LIMITS_BASIS: { readonly rel: string; ral: string; twa: string; allowedWork: string; clothing: string; screening: string; metabolic: string; acclimatization: string; heatIndex: string; oshaHeatIndex: string; dubaiHeatIndex: string; tbmed507: string; hydration: string; ilo2024Water: string; heatAlert: string; oshaNprm: string; workCapacity: string } (as const citation strings for RiskDriver.basis)
+- const NIOSH_LIMITS = { ral: { a: 59.9, b: 14.1 }, rel: { a: 56.7, b: 11.5 } } as const
+- const REST_METABOLIC_W = 115
+- const MIN_METABOLIC_W = 115
+- const MAX_PLOTTED_METABOLIC_W = 600
+- const NIOSH_HAS_CEILING_LIMIT = false  // NIOSH 2016 removed ceilings
+- type ExposureLimitId = 'REL' | 'RAL'
+- function ralC(mW: number): number  // pure equation, unclamped
+- function relC(mW: number): number  // pure equation, unclamped
+- function exposureLimitC(mW: number, limit: ExposureLimitId): number  // engine policy: M_eff = max(M,115 W), no upper clamp, throws RangeError if non-finite
+- function selectExposureLimit(status: AcclimatizationStatus | undefined, conservativeMode = false): ExposureLimitId  // 'REL' only if 'acclimatized' && !conservativeMode
+- const ACGIH_METABOLIC_W: Readonly<Record<WorkClass, number>>  // rest 115, light 180, moderate 300, heavy 415, very_heavy 520
+- const ACGIH_REFERENCE_MASS_KG = 70
+- const DEFAULT_BODY_MASS_KG = 75
+- const DEFAULT_HEIGHT_CM = 175
+- const STANDARD_BSA_M2 = { male70kg175cm: 1.8, female60kg170cm: 1.6 } as const
+- const KCAL_PER_H_TO_W = 1.163
+- interface Iso8996Class { workClass: WorkClass; isoClass: 0|1|2|3|4; isoName: 'resting'|'low'|'moderate'|'high'|'very_high'; meanWm2: number; rangeWm2: readonly [number, number]; meanW: number; rangeW: readonly [number, number]; examples: string }
+- const ISO8996_2004_CLASSES: Readonly<Record<WorkClass, Iso8996Class>>  // 65/100/165/230/290 W/m2; 115/180/295/415/520 W
+- interface TypicalTask { id: string; label: string; workClass: WorkClass; basis: string }
+- const TYPICAL_TASKS: readonly TypicalTask[]  // OSHA workload list; forklift_mobile_equipment = 'moderate'
+- function kcalPerHourToW(kcalPerH: number): number
+- function scaleMetabolicRateByMass(mW: number, massKg: number): number  // pure ACGIH M*mass/70
+- function duBoisAreaM2(massKg: number, heightCm: number): number
+- function workClassForWm2(mWm2: number): WorkClass  // shared boundaries -> higher class
+- function taskMetabolicW(task: { workClass: WorkClass; metabolicWm2?: number }, massKg?: number): number  // W; override*1.8 m2 else ACGIH W; x max(1, mass/70); unknown mass -> 75 kg
+- type AcgihEnsembleId = 'short_sleeves_and_pants_woven' | 'work_clothes_long_sleeve_shirt_and_pants' | 'cloth_woven_coveralls' | 'sms_polypropylene_coveralls' | 'polyolefin_coveralls' | 'double_layer_woven_clothing' | 'limited_use_vapour_barrier_coveralls'
+- const ACGIH_CAV_C: Readonly<Record<AcgihEnsembleId, number>>  // -1, 0, 0, 0.5, 1, 3, 11
+- const HOOD_ADDITION_C = 1
+- const NIOSH_LIMIT_CORRECTION_C = { twoLayer: -2, partiallyImpermeableOrAprons: -4 } as const  // documented alternative, not used
+- interface PhsClothingInputs { clo: number; imst: number; applicable: boolean; verified: boolean; atValidityLimit: boolean; note: string }
+- interface ClothingSpec { id: ClothingId; label: string; acgihEnsemble: AcgihEnsembleId; cavC: number; wbgtMethodApplicable: boolean; physiologicalMonitoringAdvised: boolean; phs: PhsClothingInputs; basis: string }
+- const CLOTHING: Readonly<Record<ClothingId, ClothingSpec>>  // CAV work_clothes 0, cloth_coveralls 0, fr_coveralls 0, sms 0.5, polyolefin 1, double_layer 3, vapour_barrier 11 (phs.applicable=false)
+- const DEFAULT_CLOTHING: ClothingId = 'cloth_coveralls'
+- function acgihCavC(ensemble: AcgihEnsembleId, hood = false): number  // raw ACGIH arithmetic incl. -1 row
+- function clothingAdjustmentC(clothing: ClothingId | undefined, hood = false): number  // never negative, +1 hood, undefined -> cloth coveralls
+- function wbgtEffectiveC(wbgtC: number, clothing: ClothingId | undefined, hood = false): number
+- type AcgihAllocation = '75-100' | '50-75' | '25-50' | '0-25'
+- type AcgihScreeningCategory = Exclude<WorkClass, 'rest'>
+- const ACGIH_SCREENING_ROWS: readonly { allocation: AcgihAllocation; workFraction: number }[]
+- type AcgihScreeningTable = Readonly<Record<AcgihAllocation, Readonly<Record<AcgihScreeningCategory, number | null>>>>
+- const ACGIH_SCREENING_C: Readonly<{ tlv: AcgihScreeningTable; actionLimit: AcgihScreeningTable }>
+- function roundHalfUpToHalf(x: number): number
+- interface AcgihScreeningCell { category: AcgihScreeningCategory; allocation: AcgihAllocation; workFraction: number; mTwaW: number; tlvRawC: number; alRawC: number; tlvRoundedC: number; alRoundedC: number; publishedTlvC: number | null; publishedAlC: number | null; screeningAvailable: boolean }
+- function acgihScreeningCell(category: AcgihScreeningCategory, allocation: AcgihAllocation): AcgihScreeningCell
+- function acgihScreeningAllocation(wbgtEffC: number, category: AcgihScreeningCategory, limit: ExposureLimitId): AcgihAllocation | null
+- function twa(values: readonly number[], minutes: readonly number[]): number  // throws RangeError on bad input
+- interface AllowedWorkInput { workW: number; restW?: number /* default 115 */; wbgtWorkEffC: number; wbgtRestEffC: number; limit: ExposureLimitId }
+- type AllowedWorkBinding = 'continuous_ok' | 'work_rest' | 'rest_exceeds_limit'
+- interface AllowedWorkResult { f: number; workMinPerHour: number; restMinPerHour: number; binding: AllowedWorkBinding; marginC: number /* Limit(Mwork) - WBGTwork at f=1 */; limitC: number /* limit at M_TWA(f) */; limitAtFullWorkC: number; mTwaW: number; wbgtTwaEffC: number; limit: ExposureLimitId; extrapolated: boolean /* workW > 600 */; basis: string }
+- function allowedWorkFraction(input: AllowedWorkInput): AllowedWorkResult  // bisection; throws RangeError on non-finite
+- type AcclimatizationScheduleId = 'niosh_new_worker' | 'niosh_experienced_worker' | 'msha_new_miner' | 'msha_returning_after_9_days' | 'osha_nprm_new_employee' | 'osha_nprm_returning_gt_14_days' | 'adosh_tg_new_employee' | 'adosh_tg_experienced_employee'
+- const ACCLIMATIZATION_SCHEDULES: Readonly<Record<AcclimatizationScheduleId, readonly number[]>>
+- function acclimatizationFraction(schedule: AcclimatizationScheduleId, day: number): number  // 1-based; <1 or NaN -> day 1; beyond end -> 1
+- const ACCLIMATIZATION_RULES = { adoshUnacclimatizedAbsenceDays: 14, unacclimatizedWindowDays: 7, lossBeginsAbsenceDays: 4, completeLossAbsenceDays: 21, newWorkerAcclimatizingDays: 14, minDailyHeatExposureH: 2 } as const
+- interface AdoshReacclimatizationRow { absenceDays: readonly [number, number | null]; illnessDays: readonly [number, number | null] | null; sequence: readonly (number | 'reduced_expectations')[] }
+- const ADOSH_TG_REACCLIMATIZATION: readonly AdoshReacclimatizationRow[]
+- interface AcclimatizationInput { daysOnSite: number; daysAwayRecent: number; experiencedInHeat: boolean }  // a WorkerProfile can be passed directly
+- type AcclimatizationReason = 'retained' | 'completed' | 'new_worker' | 'returning_after_absence' | 'long_absence' | 'unknown_history'
+- interface AcclimatizationAssessment { status: AcclimatizationStatus; dayOfRamp: number | null; maxExposureFraction: number; schedule: AcclimatizationScheduleId | null; reason: AcclimatizationReason; adoshUnacclimatized: boolean; limit: ExposureLimitId; basis: string }
+- function assessAcclimatization(input: AcclimatizationInput): AcclimatizationAssessment
+- const NWS_HI = { simple, regressionThresholdF: 80, rothfusz: [9 coeffs], lowRh, highRh, categoriesF: { caution: 80, extremeCaution: 90, danger: 103, extremeDanger: 125 }, fullSunAddUpToF: 15 } as const
+- type HeatIndexBranch = 'simple' | 'rothfusz' | 'rothfusz_low_rh_adj' | 'rothfusz_high_rh_adj'
+- interface HeatIndexDetail { hiF: number; hiC: number; branch: HeatIndexBranch; simpleF: number; adjustmentF: number }
+- function rothfuszF(tF: number, rhPct: number): number  // bare regression, reference only
+- function heatIndexNwsDetail(tF: number, rhPct: number): HeatIndexDetail  // RH clamped 0-100; throws on non-finite
+- function heatIndexNwsF(tF: number, rhPct: number): number
+- function heatIndexNwsC(tC: number, rhPct: number): number  // use for HeatIndices.heatIndexC
+- type NwsHeatIndexCategory = 'none' | 'caution' | 'extreme_caution' | 'danger' | 'extreme_danger'
+- function nwsHeatIndexCategory(hiF: number): NwsHeatIndexCategory
+- type OshaHeatIndexRisk = 'lower_caution' | 'moderate' | 'high' | 'very_high_to_extreme'
+- const OSHA_HI_RISK_F = { moderateFrom: 91, highFrom: 103, veryHighAbove: 115 } as const
+- function oshaHeatIndexRiskLevel(hiF: number): OshaHeatIndexRisk
+- type DubaiHeatIndexLevel = 'low_caution' | 'moderate' | 'high' | 'very_high'
+- interface DubaiHeatIndexBand { level: DubaiHeatIndexLevel; printed: string; aboveC: number | null; flag: 'green' | 'yellow' | 'amber' | 'red' }
+- const DUBAI_MUNICIPALITY_HI_LEVELS: readonly DubaiHeatIndexBand[]
+- function dubaiHeatIndexLevel(hiC: number): DubaiHeatIndexLevel
+- type TbMed507Category = 0 | 1 | 2 | 3 | 4 | 5
+- type TbMed507Work = 'easy' | 'moderate' | 'heavy' | 'very_heavy'
+- const TBMED507_CAT_LOWER_F = { 1: 78, 2: 82, 3: 85, 4: 88, 5: 90 } as const
+- const TBMED507_FLAG = { 1: 'white', 2: 'green', 3: 'yellow', 4: 'red', 5: 'black' } as const
+- const TBMED507_WORK_W: Readonly<Record<TbMed507Work, number>>  // 250/425/600/800
+- interface TbMed507WorkRestCell { workRest: readonly [number, number] | null; waterQtPerH: number }
+- interface TbMed507ContinuousCell { continuousWorkMin: number | null; waterQtPerH: number }
+- const TBMED507_TABLE_3_2: Readonly<Record<1 | 2 | 3 | 4 | 5, Readonly<Record<TbMed507Work, TbMed507WorkRestCell>>>>
+- const TBMED507_TABLE_3_3: Readonly<Record<1 | 2 | 3 | 4 | 5, Readonly<Record<TbMed507Work, TbMed507ContinuousCell>>>>
+- const TBMED507_PROTECTIVE_CLOTHING_ADD_F = { easy: 10, moderateOrHeavy: 20 } as const
+- const TBMED507_WATER_VARIATION_QT_PER_H = 0.25
+- function tbmed507CategoryF(wbgtF: number): TbMed507Category
+- function tbmed507Category(wbgtC: number): TbMed507Category
+- function tbmed507WorkLevel(mW: number): TbMed507Work  // rounds up to next column
+- interface TbMed507Guidance { category: 1|2|3|4|5; flag: 'white'|'green'|'yellow'|'red'|'black'; work: TbMed507Work; workW: number; workRest: readonly [number, number] | null; workRestLabel: string; workMinPerHour: number; waterQtPerH: number; waterLPerH: number; continuousWorkMin: number | null; continuousWaterQtPerH: number; continuousWaterLPerH: number; basis: string }
+- function tbmed507Guidance(category: TbMed507Category, work: TbMed507Work): TbMed507Guidance | null  // null for category 0
+- const US_QUART_L = 0.946352946
+- const US_FL_OZ_ML = 29.5735295625
+- const HYDRATION = { cupMl, cupIntervalMin: [15,20], typicalLPerH: [0.7098,0.9464], maxLPerH: 1.4195, maxLPerDay: 11.356, waterMaxTempC: 15, electrolyteDrinkAfterH: 2, electrolyteMaxPct: 8, hyponatremiaSodiumMmolL: 135, oshaNprmWaterLPerEmployeeH } as const
+- const FLUID_MAX_ML_PER_HOUR: number  // ~1419.53 mL/h
+- const FLUID_MAX_ML_PER_DAY: number  // ~11356.24 mL/day
+- type IloWorkIntensity = 'low' | 'moderate' | 'high'
+- interface IloWaterRow { printedRangeC: string; fromC: number; fromInclusive: boolean; lPerH: Readonly<Record<IloWorkIntensity, number>> }
+- const ILO_2024_TABLE8_WATER: readonly IloWaterRow[]
+- function iloIntensityForWorkClass(workClass: WorkClass): IloWorkIntensity
+- function iloWaterLPerH(wbgtC: number, intensity: IloWorkIntensity): number | null
+- interface WaterRecommendationInput { workW: number; workClass: WorkClass; wbgtC?: number; sweatRateMlPerHour?: number; regulatoryMinMlPerHour?: number; intakeTodayMl?: number; hoursSweating?: number }
+- type WaterBinding = 'niosh_cadence' | 'tbmed507' | 'ilo_2024' | 'sweat_replacement' | 'regulatory_minimum' | 'hourly_cap' | 'daily_cap'
+- interface WaterRecommendation { mlPerHour: number; binding: WaterBinding; components: { nioshCadenceMl: number; tbmed507Ml: number | null; ilo2024Ml: number | null; sweatReplacementMl: number | null; regulatoryMinMl: number | null }; hourlyCapMl: number; dailyRemainingMl: number | null; capped: boolean; electrolytesAdvised: boolean; basis: string }
+- function recommendWaterMlPerHour(input: WaterRecommendationInput): WaterRecommendation
+- const HEAT_ALERT = { forecastMaxC: 35, altForecastMaxC: 32, altRiseOverPrecedingC: 5, precedingDays: 3 } as const
+- interface HeatAlertResult { alert: boolean; trigger: 'forecast_max_35' | 'rise_over_preceding' | null; precedingDaysUsed: number; basis: string }
+- function nioshHeatAlert(forecastMaxC: number, precedingDaysMaxC: readonly number[]): HeatAlertResult  // oldest->newest, last 3 used
+- type OshaNprmTrigger = 'none' | 'initial' | 'high'
+- const OSHA_NPRM = { initialTriggerHiF: 80, highTriggerHiF: 90, returningAbsenceDays: 14 } as const
+- function oshaNprmTriggerHi(hiF: number): OshaNprmTrigger
+- function oshaNprmTriggerWbgt(wbgtC: number, mW: number): OshaNprmTrigger
+- const BRODE_REST_METABOLIC_W = 117
+- function workCapacityNioshPct(wbgtC: number, mW: number): number  // reference only
+- function workCapacityIsoBrodePct(wbgtC: number, mW: number): number  // reference only
+- const ACGIH_HEAT_STRAIN_LIMITS = { sustainedHrBaseBpm: 180, coreTempSelectedAcclimatizedC: 38.5, coreTempUnselectedUnacclimatizedC: 38.0, recoveryHr1MinBpm: 120, shiftWeightLossPct: 1.5, urinarySodium24hMmol: 50, heatStrokeCoreC: 40.0, pregnancyFirstTrimesterSustainedCoreC: 39.0, tlvGoalCoreRiseC: 1.0 } as const
+- function sustainedHrLimitBpm(ageYears: number): number
+New types:
+- ExposureLimitId
+- Iso8996Class
+- TypicalTask
+- AcgihEnsembleId
+- PhsClothingInputs
+- ClothingSpec
+- AcgihAllocation
+- AcgihScreeningCategory
+- AcgihScreeningTable
+- AcgihScreeningCell
+- AllowedWorkInput
+- AllowedWorkBinding
+- AllowedWorkResult
+- AcclimatizationScheduleId
+- AdoshReacclimatizationRow
+- AcclimatizationInput
+- AcclimatizationReason
+- AcclimatizationAssessment
+- HeatIndexBranch
+- HeatIndexDetail
+- NwsHeatIndexCategory
+- OshaHeatIndexRisk
+- DubaiHeatIndexLevel
+- DubaiHeatIndexBand
+- TbMed507Category
+- TbMed507Work
+- TbMed507WorkRestCell
+- TbMed507ContinuousCell
+- TbMed507Guidance
+- IloWorkIntensity
+- IloWaterRow
+- WaterRecommendationInput
+- WaterBinding
+- WaterRecommendation
+- HeatAlertResult
+- OshaNprmTrigger
+
+## twl-regulation
+Files: src\engine\twl.ts, src\engine\regulation.ts, src\engine\twl.test.ts, src\engine\regulation.test.ts
+- twl.ts: export const TWL_CONSTANTS: Readonly<{ tcoreLimitC: 38.2; srMaxKgPerM2PerH: 0.67; lambdaKjPerKg: 2430; lambdaSrWm2PerKgM2H: 675; postureFactor: 0.73; lewisRatioKPerKpa: 16.5; windMinMs: 0.2; windMaxMs: 4; defaultIclClo: 0.35; defaultVapourPermeation: 0.45; validMinWm2: 60; validMaxWm2: 380; psychrometerCoeffPerK: 0.000644; tetens: Readonly<{ aKpa: 0.6105; b: 17.27; cC: 237.3 }>; standardPersonAreaM2: 1.8; scanStepK: 0.05; scanFloorC: 20; bisectionTolK: 1e-10; bisectionMaxIter: 200 }>
+- twl.ts: export const BB2002_BACKSTOP: Readonly<{ dryBulbAboveC: 44; wetBulbAboveC: 32 }>
+- twl.ts: export type TwlVariant = 'physical' | 'alt_1p8'
+- twl.ts: export type TwlFlag = 'WIND_CLAMPED_TO_0.2' | 'WIND_CLAMPED_TO_4.0' | 'NO_ROOT_NET_HEAT_GAIN' | 'NO_ROOT_ABOVE_20C_SKIN' | 'DEWPOINT_AT_OR_ABOVE_SKIN_TEMP_INVALID' | 'BELOW_VALID_RANGE_60' | 'ABOVE_VALID_RANGE_380' | 'BACKSTOP_DB_GT_44C' | 'BACKSTOP_WB_GT_32C' | 'INVALID_INPUT'
+- twl.ts: export interface TwlBaseInput { tdbC: number; windMs: number; pKpa: number; iclClo?: number /*0.35*/; vapourPermeation?: number /*0.45*/; tcoreLimitC?: number /*38.2*/; srMaxKgPerM2PerH?: number /*0.67*/; variant?: TwlVariant /*'physical'*/ }
+- twl.ts: export type TwlHumidityInput = { twbPsychrometricC: number; rhPct?: never; paKpa?: never } | { rhPct: number; twbPsychrometricC?: never; paKpa?: never } | { paKpa: number; twbPsychrometricC?: never; rhPct?: never }
+- twl.ts: export type TwlRadiantInput = { mrtC: number; tgC?: never; globeDiameterM?: never; globeEmissivity?: never } | { tgC: number; globeDiameterM?: number /*0.15*/; globeEmissivity?: number /*0.95*/; mrtC?: never }
+- twl.ts: export type TwlInput = TwlBaseInput & TwlHumidityInput & TwlRadiantInput
+- twl.ts: export interface TwlResult { twlWm2: number; tskC: number; paKpa: number; twbPsychrometricC: number; dewPointC: number; mrtC: number; windUsedMs: number; coreToSkinWm2: number; dryHeatLossWm2: number; evapHeatLossWm2: number; emaxWm2: number; respiratoryWm2: number; sweatRateKgPerM2PerH: number; sweatRateLph: number; sweatToEmaxRatio: number; skinWettedness: number | null; hcWm2K: number; hrWm2K: number; heWm2Kpa: number; operativeTempC: number; fcle: number; fpcl: number; inValidRange: boolean; variant: TwlVariant; flags: TwlFlag[] }
+- twl.ts: export function psatTetensKpa(tC: number): number
+- twl.ts: export function vapourPressureFromWetBulbKpa(tdbC: number, twbC: number, pKpa: number): number
+- twl.ts: export function vapourPressureFromRhKpa(tdbC: number, rhPct: number): number
+- twl.ts: export function psychrometricWetBulbC(tdbC: number, paKpa: number, pKpa: number): number
+- twl.ts: export function dewPointFromVapourPressureC(paKpa: number): number
+- twl.ts: export function globeToMrtIso7726(tgC: number, taC: number, windMs: number, diameterM = 0.15, emissivity = 0.95): number
+- twl.ts: export function computeTwl(input: TwlInput): TwlResult  // throws only on malformed shape; non-finite numbers -> twlWm2 NaN + ['INVALID_INPUT']
+- twl.ts: export type Bb2002BackstopReason = 'DB>44C' | 'WB>32C'
+- twl.ts: export interface Bb2002Backstop { triggered: boolean; reasons: Bb2002BackstopReason[]; basis: string }
+- twl.ts: export function bb2002WithdrawalBackstop(tdbC: number, twbPsychrometricC: number): Bb2002Backstop  // ADVISORY, not ADOSH v4.0
+- twl.ts: export type Bb2002ProtocolZone = 'withdrawal' | 'buffer' | 'acclimatization' | 'unrestricted'
+- twl.ts: export function bb2002ProtocolZone(twlWm2: number): Bb2002ProtocolZone
+- regulation.ts: export type RulePackId = 'abu-dhabi' | 'sharjah' | 'qatar'
+- regulation.ts: export type TwlZoneId = 'high' | 'medium' | 'low' | 'unrestricted'
+- regulation.ts: export type TwlWorkCategory = 'light' | 'heavy'
+- regulation.ts: export interface WorkRestSchedule { readonly workMinPerHour: number; readonly restMinPerHour: number; readonly text: string }
+- regulation.ts: export interface WaterGuidance { readonly minLph: number; readonly maxLph: number | null; readonly text: string }
+- regulation.ts: export interface TwlZone { readonly id: TwlZoneId; readonly minWm2: number | null /*exclusive*/; readonly maxWm2: number | null /*inclusive*/; readonly label: string; readonly level: RiskLevel; readonly controls: readonly string[]; readonly workRest: Readonly<Record<TwlWorkCategory, WorkRestSchedule>>; readonly waterLph: Readonly<Record<TwlWorkCategory, WaterGuidance>>; readonly unacclimatizedAllowed: boolean; readonly loneWorkAllowed: boolean; readonly unacclimatizedLoneWorkAllowed: boolean; readonly ordinaryWorkAllowed: boolean; readonly permitToWork: boolean; readonly basis: string }
+- regulation.ts: export interface MiddayBreakRule { readonly from: string /*'MM-DD' incl*/; readonly to: string /*'MM-DD' incl*/; readonly startHhmm: string /*incl*/; readonly endHhmm: string /*excl*/; readonly appliesTo: string; readonly exemptions: readonly string[]; readonly employerDuties: readonly string[]; readonly basis: string }
+- regulation.ts: export interface AcclimatizationRule { readonly definition: string; readonly daysOffThreshold: number | null; readonly allowanceDays: readonly [number, number] | null; readonly basis: string }
+- regulation.ts: export interface HydrationGuidance { readonly messages: readonly string[]; readonly dailyLRange: readonly [number, number] | null; readonly personalContainerMinL: number | null; readonly practicalCeilingLph: number | null; readonly basis: string }
+- regulation.ts: export interface IncidentNotificationRule { readonly form: string; readonly recipient: string; readonly fatalityWithinHours: number; readonly seriousWithinWorkingDays: number; readonly seriousCriteria: readonly string[]; readonly basis: string }
+- regulation.ts: export interface PenaltyRule { readonly appliesTo: string; readonly text: string; readonly currency: string | null; readonly perWorker: number | null; readonly max: number | null; readonly basis: string }
+- regulation.ts: export interface RulePack { readonly id: RulePackId; readonly name: string; readonly jurisdiction: string; readonly authority: string; readonly instrument: string; readonly version: string; readonly date: string; readonly basis: string; readonly timeZone: string; readonly utcOffsetMinutes: number; readonly middayBreak: MiddayBreakRule | null; readonly twlZones: readonly TwlZone[]; readonly wbgtStopC?: number; readonly wbgtStopBasis?: string; readonly heatProgramTriggerC: number | null; readonly heatProgramBasis: string | null; readonly acclimatization: AcclimatizationRule | null; readonly hydration: HydrationGuidance | null; readonly incidentNotification: IncidentNotificationRule | null; readonly penalties: readonly PenaltyRule[]; readonly workerRights: readonly string[]; readonly notes: readonly string[] }
+- regulation.ts: export const ABU_DHABI_RULE_PACK: RulePack
+- regulation.ts: export const SHARJAH_RULE_PACK: RulePack
+- regulation.ts: export const QATAR_RULE_PACK: RulePack
+- regulation.ts: export const RULE_PACKS: Readonly<Record<RulePackId, RulePack>>
+- regulation.ts: export const DEFAULT_RULE_PACK: RulePack  // === ABU_DHABI_RULE_PACK
+- regulation.ts: export function getRulePack(id: RulePackId): RulePack
+- regulation.ts: export function isMiddayBreak(t: number, pack: RulePack = DEFAULT_RULE_PACK): boolean
+- regulation.ts: export function middayBreakWindow(t: number, pack: RulePack = DEFAULT_RULE_PACK): { startT: number; endT: number } | null
+- regulation.ts: export function heatStressProgramRequired(shiftMaxTaC: number, pack: RulePack = DEFAULT_RULE_PACK): boolean | null
+- regulation.ts: export function twlWorkCategory(workClass: WorkClass): TwlWorkCategory
+- regulation.ts: export function twlZone(twlWm2: number, pack: RulePack = DEFAULT_RULE_PACK): TwlZone | null
+- regulation.ts: export interface RegulatoryFloorInput { t: number; twlWm2: number; outdoorInSun: boolean; acclimatization: AcclimatizationStatus; workClass: WorkClass; wbgtC?: number; pack?: RulePack }
+- regulation.ts: export interface RegulatoryFloor { packId: RulePackId; level: RiskLevel; actions: ActionId[]; zone: TwlZone | null; drivers: RiskDriver[]; workRest: WorkRestSchedule | null; workMinPerHour: number; waterLph: WaterGuidance | null; noLoneWork: boolean; unacclimatizedExcluded: boolean; middayBreakActive: boolean }
+- regulation.ts: export function regulatoryFloor(input: RegulatoryFloorInput): RegulatoryFloor  // driver ids (channel 'regulation'): twl_zone_{high|medium|low|unrestricted}, twl_unavailable, ordinary_work_prohibited, permit_to_work, unacclimatized_excluded, unacclimatized_not_alone, acclimatization_programme, midday_break, midday_break_window, wbgt_unavailable, wbgt_stop_limit; actions ordered midday_break, stop_work, rest_shade_now, acclimatization_plan, rotate_task, shade_breaks, no_lone_work, drink_water, check_sensor
+- regulation.ts: export const ADOSH_ACCLIMATIZATION_SCHEDULE_PCT: Readonly<{ experienced: readonly [50, 60, 80, 100, 100]; new: readonly [20, 40, 60, 80, 100] }>
+- regulation.ts: export function adoshAcclimatizationWorkloadPct(dayNumber: number, experienced: boolean): number
+- regulation.ts: export type ReacclimatizationStep = number | 'reduced_expectations'
+- regulation.ts: export function adoshReacclimatizationSequence(daysAway: number, cause: 'absence' | 'illness'): ReacclimatizationStep[]
+- regulation.ts: export interface HeatIncidentOutcome { fatality: boolean; inpatientHospitalTreatment: boolean; lossOfConsciousnessOrResuscitation: boolean; unableToWorkNextShift: boolean }
+- regulation.ts: export interface HeatIncidentNotification { notifiable: boolean; form: string; recipient: string; withinHours: number | null; withinWorkingDays: number | null; basis: string }
+- regulation.ts: export function heatIncidentNotification(outcome: HeatIncidentOutcome, pack: RulePack = DEFAULT_RULE_PACK): HeatIncidentNotification | null
+New types:
+- TwlVariant
+- TwlFlag
+- TwlBaseInput
+- TwlHumidityInput
+- TwlRadiantInput
+- TwlInput
+- TwlResult
+- Bb2002BackstopReason
+- Bb2002Backstop
+- Bb2002ProtocolZone
+- RulePackId
+- TwlZoneId
+- TwlWorkCategory
+- WorkRestSchedule
+- WaterGuidance
+- TwlZone
+- MiddayBreakRule
+- AcclimatizationRule
+- HydrationGuidance
+- IncidentNotificationRule
+- PenaltyRule
+- RulePack
+- RegulatoryFloorInput
+- RegulatoryFloor
+- ReacclimatizationStep
+- HeatIncidentOutcome
+- HeatIncidentNotification
+
+## physio-clinical
+Files: src\engine\physio.ts, src\engine\clinical.ts, src\engine\physio.test.ts, src\engine\clinical.test.ts
+- physio.ts: const ECTEMP: { readonly A: 1; readonly GAMMA_SD: 0.022; readonly GAMMA2: number /* 0.022 ** 2 */; readonly B0: -7887.1; readonly B1: 384.4286; readonly B2: -4.5714; readonly SIGMA_SD: 18.88; readonly SIGMA2: number /* 18.88 ** 2 */; readonly CT0_DEFAULT: 37.1; readonly V0_DEFAULT: 0; readonly STEP_MIN: 1; readonly VERTEX_CT: 42.0471; readonly VERTEX_HR: 194.962 }
+- physio.ts: const ECTEMP_SIGMOID: { readonly A: 41; readonly K: 193; readonly Q: 0.06; readonly B: 0.89; readonly M: 37.84; readonly NU: 0.07 }
+- physio.ts: const ECTEMP_RULES: { readonly INTERPOLATE_MAX_GAP_MIN: 5; readonly REINIT_GAP_MIN: 30; readonly WARMUP_MIN: 30 }
+- physio.ts: const ECTEMP_DISPLAY: { readonly HALF_WIDTH_C: 0.6; readonly LOA_C: 0.63; readonly MIN_C: 35.5; readonly MAX_C: 42 }
+- physio.ts: type EctempModel = 'quadratic' | 'sigmoid'
+- physio.ts: interface EctempObservation { hrBpm: number; slopeBpmPerC: number }
+- physio.ts: function ectempObservation(ctC: number, model?: EctempModel /* 'quadratic' */): EctempObservation
+- physio.ts: function ectempStep(ctPrevC: number, vPrev: number, hrBpm: number | null, rScale?: number /* 1 */, model?: EctempModel): { ctC: number; variance: number }  // null HR or non-finite/<=0 rScale = time update only; c<=0 guard
+- physio.ts: interface EctempRunOptions { ct0C?: number; v0?: number; rScale?: number | readonly number[]; model?: EctempModel }
+- physio.ts: function ectempRun(hrBpm: readonly (number | null)[], opts?: EctempRunOptions): { ctC: number[]; variance: number[] }  // batch, no gap rules
+- physio.ts: function ectempSteadyStateC(hrBpm: number, model?: EctempModel): number | null  // inverse observation model
+- physio.ts: interface EctempAnchor { ctC: number; variance: number; hrBpm: number; rScale: number }
+- physio.ts: interface EctempTrack extends EctempState { model: EctempModel; initT: number; missingRunMin: number; anchor: EctempAnchor | null }
+- physio.ts: function ectempInit(t: number, ct0C?: number /* 37.1 */, model?: EctempModel, v0?: number /* 0 */): EctempTrack  // call at start of first minute; first update at t+1min
+- physio.ts: function ectempUpdate(state: EctempState | EctempTrack, hrBpm: number | null, t: number, rScale?: number): EctempTrack  // <=5 missing min interpolated, >30 missing min re-init + warm-up restart, out-of-order ignored
+- physio.ts: function ectempWarmupDone(track: Pick<EctempTrack, 'initT'>, t: number): boolean
+- physio.ts: interface EctempBand { centreC: number; halfWidthC: number; lowC: number; highC: number; text: string /* '≈38.2 ± 0.6' */ }
+- physio.ts: function ectempDisplayBand(ctC: number | null, visibility: { channelValid: boolean; warmupDone?: boolean; hrSuppressingMedication?: boolean }): EctempBand | null
+- physio.ts: const PSI_CONST: { readonly CT_MAX_C: 39.5; readonly HR_MAX_BPM: 180; readonly WEIGHT: 5; readonly DISPLAY_MIN: 0; readonly DISPLAY_MAX: 10 }
+- physio.ts: type PsiBand = 'no_little' | 'low' | 'moderate' | 'high' | 'very_high'
+- physio.ts: function psiMoran(ctC: number, hrBpm: number, ct0C: number, hr0Bpm: number): number | null
+- physio.ts: function psiBand(psi: number): PsiBand
+- physio.ts: function psiDisplay(psi: number): number  // clamp 0-10
+- physio.ts: function apsiCritical(ctC: number, ageYears: number, tskChestC?: number | null): { hrCritBpm: number; ctCritC: number }
+- physio.ts: function apsi(ctC: number, hrBpm: number, ctRestC: number, hrRestBpm: number, ageYears: number, tskChestC?: number | null): number | null
+- physio.ts: function psiHrBaseline(seatedPreWorkHrBpm: readonly (number | null)[], shiftHrBpm?: readonly (number | null)[]): number | null
+- physio.ts: const SQI: { readonly HR_MIN: 40; readonly HR_MAX: 200; readonly SEG_S: 10; readonly RATIO_MAX: 2.2; readonly FLAT_MIN_SAMPLES: 10; readonly PSI_MIN: 0.8 }
+- physio.ts: interface HrRawSample { tSec: number; bpm: number | null; contactOk: boolean }
+- physio.ts: type SqiFlag = 'out_of_range' | 'contact_lost' | 'ratio_jump' | 'flatline' | 'low_coverage'
+- physio.ts: interface MinuteSqi { sqi: number; minuteValid: boolean; hrMeanBpm: number | null; rScale: number /* Infinity when invalid */; nValid: number; nExpected: number; flags: SqiFlag[]; implausibleHighHr: boolean }
+- physio.ts: function sqiRScale(sqi: number): number  // exp(psi^-2 - 1), Infinity below 0.80
+- physio.ts: function minuteSqi(samples: readonly HrRawSample[], expectedIntervalS: number): MinuteSqi
+- physio.ts: const PHYSIO_CHANNEL: { readonly WINDOW_MIN: 15; readonly MIN_VALID_MIN: 10; readonly SUSTAIN_MIN: 5; readonly IMPLAUSIBLE_HR_MIN: 2 }
+- physio.ts: const PHYSIO_FLOORS: { readonly ECTEMP_ADVISORY_C: 38; readonly ECTEMP_T1_C: 38.4; readonly ECTEMP_T1_CONSERVATIVE_C: 38; readonly ECTEMP_T2_C: 39; readonly PSI_ADVISORY: 4; readonly PSI_T1: 6; readonly PSI_T2: 8; readonly HR_LIMIT_BASE_BPM: 180; readonly UNKNOWN_AGE_YEARS: 50 }
+- physio.ts: interface PhysioMinute { t: number; valid: boolean; hrBpm: number | null; ctC: number | null; psi: number | null; implausibleHighHr?: boolean }
+- physio.ts: type PhysioUnavailableReason = 'not_consented' | 'hr_suppressing_medication' | 'no_signal' | 'signal_unusable' | 'warmup'
+- physio.ts: interface PhysioChannelStatusInput { t: number; minutes: readonly PhysioMinute[]; initT: number; consented: boolean; physioDisabled: boolean }
+- physio.ts: interface PhysioChannelStatus { channelValid: boolean; reason: PhysioUnavailableReason | null; validMinutesInWindow: number; warmupDone: boolean; signalQuality: SignalQuality }
+- physio.ts: function physioChannelStatus(input: PhysioChannelStatusInput): PhysioChannelStatus
+- physio.ts: interface PhysiologyInput extends PhysioChannelStatusInput { ageYears?: number; conservativeMode: boolean }
+- physio.ts: interface PhysiologyChannelResult extends ChannelResult { channel: 'physiology'; tier: ClinicalTier /* 0-2 */; actions: ActionId[]; status: PhysioChannelStatus; display: EctempBand | null }
+- physio.ts: function physiologyLevel(input: PhysiologyInput): PhysiologyChannelResult
+- physio.ts: interface PhysioMonitorState { track: EctempTrack; ct0C: number; hr0Bpm: number | null; hr0Pending: number[]; minutes: PhysioMinute[] }
+- physio.ts: interface PhysioMinuteInput { hrMeanBpm: number | null; minuteValid: boolean; rScale: number; implausibleHighHr?: boolean }  // MinuteSqi is assignable
+- physio.ts: function physioMonitorInit(t: number, opts?: { ct0C?: number; seatedHr0Bpm?: number | null; model?: EctempModel }): PhysioMonitorState
+- physio.ts: function physioMonitorStep(state: PhysioMonitorState, t: number, minute: PhysioMinuteInput): PhysioMonitorState
+- clinical.ts: const CLINICAL_TIER_LABEL: Record<ClinicalTier, string>
+- clinical.ts: interface SymptomRule { tier: ClinicalTier; observedBy: 'self' | 'buddy'; item: string; label: string; basis: string }
+- clinical.ts: const SYMPTOM_RULES: Record<SymptomId, SymptomRule>
+- clinical.ts: const HYPONATRAEMIA_SYMPTOMS: readonly SymptomId[]  // headache, nausea, swollen_hands, repeated_vomiting, confusion, seizure
+- clinical.ts: const TRIAGE_TIMING: { readonly RECHECK_FIRST_MIN: 15; readonly RECHECK_SECOND_MIN: 30; readonly RECHECK_CONTINUE_EVERY_MIN: 15; readonly NOT_IMPROVING_MIN: 30; readonly CRAMPS_PERSISTENT_MIN: 60; readonly EPISODE_LINK_MAX_GAP_MIN: 60 }
+- clinical.ts: interface TriageContext { riskFlags?: readonly RiskFlagId[]; crampsMedicalRisk?: boolean; overFluidCap?: boolean; fastingNow?: boolean }
+- clinical.ts: interface TriageResult { tier: ClinicalTier; level: RiskLevel; actions: ActionId[]; redFlags: SymptomId[]; rationale: string[]; basis: string[]; recheckAtMin: number | null; hyponatraemiaSuspected: boolean; escalation: 'worsening' | 'not_improving_30min' | null; episodeStartT: number | null }
+- clinical.ts: function triage(checkin: Checkin, history?: readonly Checkin[], ctx?: TriageContext): TriageResult
+- clinical.ts: const PROMPT_TIMEOUT: { readonly BUDDY_AFTER_MIN: 5; readonly SUPERVISOR_AFTER_MIN: 10 }
+- clinical.ts: interface PromptTimeoutResult { notify: Array<'buddy' | 'supervisor'>; overdueMin: number; nextEscalationAtMs: number | null }
+- clinical.ts: function promptTimeout(promptedAtMs: number, nowMs: number, opts: { answered?: boolean; level: RiskLevel; raisedByWarning?: boolean }): PromptTimeoutResult
+- clinical.ts: const UAE_EMERGENCY: { readonly AMBULANCE: '998'; readonly POLICE: '999'; readonly CIVIL_DEFENCE: '997'; readonly COASTGUARD: '996'; readonly SEARCH_RESCUE: '995'; readonly ELECTRICITY: '991'; readonly AD_SMS_PEOPLE_OF_DETERMINATION: '5999'; readonly AD_APP: 'AD999' }
+- clinical.ts: const FIRST_AID: { readonly IMMERSION_WATER_MIN_C: 1; readonly IMMERSION_WATER_MAX_C: 26; readonly TOWEL_ROTATE_MIN_MIN: 1; readonly TOWEL_ROTATE_MAX_MIN: 2; readonly IMMERSION_STOP_WITHOUT_THERMOMETER_MIN: 15; readonly COOLING_DELAY_LIMIT_MIN: 30; readonly FLUIDS_ONLY_IF_FULLY_ALERT: true; readonly NEVER_LEAVE_ALONE: true }
+- clinical.ts: interface FirstAidStep { order: number; id: 'call_998' | 'shade_undress' | 'immerse' | 'douse_or_towels' | 'continue_until_ems' | 'fluids_if_alert'; text: string; basis: string }
+- clinical.ts: const COOLING_PROTOCOL: readonly FirstAidStep[]  // 6 ordered steps
+- clinical.ts: type UrineCode = 'U_OK' | 'U_DRINK_MORE' | 'U_DEHYDRATED' | 'U_VERY_DARK' | 'U_BROWN_RED' | 'U_INVALID'
+- clinical.ts: interface UrineAssessment { code: UrineCode; tier: ClinicalTier | null; escalateIfPersists: ClinicalTier | null; advice: string; basis: string[] }
+- clinical.ts: function urineAssessment(shade: number | null | undefined, brownRedCola?: boolean, previousShade?: number | null): UrineAssessment
+- clinical.ts: const US_QUART_L = 0.946352946; const US_FL_OZ_L = 0.0295735295625
+- clinical.ts: const FLUID: { readonly HOURLY_CAP_L: number /* 1.5*US_QUART_L = 1.4195294189999998 */; readonly DAILY_CAP_L: number /* 12*US_QUART_L = 11.356235351999999 */; readonly CUP_L: number /* 0.2365882365 */; readonly REMINDER_L: 0.25; readonly REMINDER_EVERY_MIN: 20; readonly ELECTROLYTE_AFTER_MIN: 120 }
+- clinical.ts: type FluidFlag = 'OVER_HOURLY_CAP' | 'OVER_DAILY_CAP'
+- clinical.ts: function fluidCapCheck(rolling60L: number, todayL: number, fastingNow?: boolean): { flags: FluidFlag[]; sendDrinkReminders: boolean }
+- clinical.ts: interface FluidContext { fastingNow?: boolean; sweatingSinceMs?: number | null; symptoms?: readonly SymptomId[]; workerId?: string }
+- clinical.ts: interface FluidStatus { rolling60L: number; todayL: number; flags: FluidFlag[]; sendDrinkReminders: boolean; nextReminderAtMs: number | null; reminderMl: number; electrolyteDue: boolean; tier: ClinicalTier; hyponatraemiaSuspected: boolean; actions: ActionId[]; message: string | null; basis: string[] }
+- clinical.ts: function fluidStatus(intakes: readonly FluidIntake[], now: number, ctx?: FluidContext): FluidStatus
+- clinical.ts: interface RiskFlagHandling { conservativeMode: boolean; disablesPhysiology: boolean; ohReview: boolean; handling: string; workerMessage: string; basis: string }
+- clinical.ts: const RISK_FLAG_HANDLING: Record<RiskFlagId, RiskFlagHandling>
+- clinical.ts: const CONSERVATIVE_MODE: { readonly NEW_WORKER_DAYS: 14; readonly RETURNING_AWAY_DAYS: 7; readonly ECTEMP_T1_C: 38; readonly CHECKIN_EVERY_MIN: 30; readonly CHECKIN_FROM_LEVEL: 'caution'; readonly BUDDY_MANDATORY: true }
+- clinical.ts: type ConservativeReason = RiskFlagId | 'new_worker_14d' | 'returning_after_absence' | 'heat_rash_today'
+- clinical.ts: interface ConservativeModeResult { conservative: boolean; physioDisabled: boolean; reasons: ConservativeReason[]; ectempT1C: number; checkinEveryMin: number | null; checkinFromLevel: RiskLevel | null; buddyMandatory: boolean; stricterEnvironment: boolean }
+- clinical.ts: interface ConservativeModeContext { symptomsToday?: readonly SymptomId[] }
+- clinical.ts: function physioDisabled(profile: Pick<WorkerProfile, 'riskFlags'>): boolean
+- clinical.ts: function conservativeMode(profile: Pick<WorkerProfile, 'riskFlags' | 'daysOnSite'> & Partial<Pick<WorkerProfile, 'daysAwayRecent'>>, ctx?: ConservativeModeContext): ConservativeModeResult
+- clinical.ts: interface SymptomsChannelInput { now: number; checkins: readonly Checkin[]; consented: boolean; ctx?: TriageContext; workerId?: string }
+- clinical.ts: interface SymptomsChannelResult extends ChannelResult { channel: 'symptoms'; tier: ClinicalTier; actions: ActionId[]; triage: TriageResult | null }
+- clinical.ts: function symptomsChannel(input: SymptomsChannelInput): SymptomsChannelResult
+- clinical.ts: interface HydrationChannelInput { now: number; checkins: readonly Checkin[]; intakes: readonly FluidIntake[]; consented: boolean; fastingNow?: boolean; sweatingSinceMs?: number | null; workerId?: string }
+- clinical.ts: interface HydrationChannelResult extends ChannelResult { channel: 'hydration'; tier: ClinicalTier; actions: ActionId[]; urine: UrineAssessment | null; fluid: FluidStatus }
+- clinical.ts: function hydrationChannel(input: HydrationChannelInput): HydrationChannelResult
+New types:
+- physio.ts: EctempModel, EctempObservation, EctempRunOptions, EctempAnchor, EctempTrack (extends EctempState), EctempBand, PsiBand, HrRawSample, SqiFlag, MinuteSqi, PhysioMinute, PhysioUnavailableReason, PhysioChannelStatusInput, PhysioChannelStatus, PhysiologyInput, PhysiologyChannelResult (extends ChannelResult), PhysioMonitorState, PhysioMinuteInput
+- clinical.ts: SymptomRule, TriageContext, TriageResult, PromptTimeoutResult, FirstAidStep, UrineCode, UrineAssessment, FluidFlag, FluidContext, FluidStatus, RiskFlagHandling, ConservativeReason, ConservativeModeResult, ConservativeModeContext, SymptomsChannelInput, SymptomsChannelResult (extends ChannelResult), HydrationChannelInput, HydrationChannelResult (extends ChannelResult)
+
+## privacy
+Files: src\engine\privacy.ts, src\engine\privacy.test.ts
+- type FieldClass = 'identity' | 'operational' | 'clinical' | 'personal'
+- interface FieldInfo { label: string; class: FieldClass; description: string }
+- const FIELD_INFO: Readonly<Record<DataField, FieldInfo>>
+- const DATA_FIELDS: readonly DataField[]  // canonical order of the DataField union; project() returns fields in this order
+- const CLINICAL_FIELDS: readonly DataField[]  // ['minutesToLimit','drivers_clinical','hrBpm','ctEstC','psi','riskFlags','symptoms','urineColor']
+- const CLINICAL_DRIVER_CHANNELS: readonly ChannelId[]  // ['physiology','symptoms','hydration']
+- const CONFIDENTIAL_ACTIONS: readonly ActionId[]  // ['occ_health_review']
+- type ConsentScope = Exclude<keyof ConsentState, 'updatedAt'>
+- const CONSENT_SCOPES: readonly ConsentScope[]
+- const FIELD_CONSENT_DEPENDENCY: Readonly<Partial<Record<DataField, ConsentScope>>>  // hrBpm/ctEstC/psi->wearable, riskFlags->healthFlags, urineColor->checkins
+- type AckStatus = 'none' | Alert['status']
+- type UrineColor = NonNullable<Checkin['urineColor']>
+- interface WorkerLocation { siteId: string; label: string; lat?: number; lon?: number }
+- interface WorkerSnapshot { workerId: string; t: number; displayName: string; crewId: string; level: RiskLevel; actions: ActionId[]; workMinPerHour: number; ackStatus: AckStatus; minutesToLimit: number | null; waterMlPerHour: number; drivers: RiskDriver[]; hrBpm: number | null; ctEstC: number | null; psi: number | null; riskFlags: RiskFlagId[]; symptoms: SymptomId[]; urineColor: UrineColor | null; ageYears: number | null; location: WorkerLocation | null; consent: ConsentState }
+- interface OnDeviceReadings { ackStatus?: AckStatus; hrBpm?: number | null; ctEstC?: number | null; psi?: number | null; symptoms?: readonly SymptomId[]; urineColor?: UrineColor | null; location?: WorkerLocation | null }
+- function createWorkerSnapshot(profile: WorkerProfile, assessment: RiskAssessment, readings?: OnDeviceReadings): WorkerSnapshot  // throws if assessment.workerId !== profile.id; leaves out data whose consent is off
+- interface FieldValues { displayName: string; crewId: string; level: RiskLevel; actions: ActionId[]; workMinPerHour: number; ackStatus: AckStatus; minutesToLimit: number | null; waterMlPerHour: number; drivers_nonclinical: RiskDriver[]; drivers_clinical: RiskDriver[]; hrBpm: number | null; ctEstC: number | null; psi: number | null; riskFlags: RiskFlagId[]; symptoms: SymptomId[]; urineColor: UrineColor | null; ageYears: number | null; location: WorkerLocation | null }
+- type ProjectedData = Partial<FieldValues>
+- type ProhibitedPurpose = Extract<Purpose, 'performance_management' | 'disciplinary_action' | 'insurance_underwriting' | 'immigration_or_visa'>
+- type GrantCondition = 'is_self' | 'is_buddy' | 'in_actor_crew' | 'active_case' | 'escalated' | 'medic_sharing_consent'
+- interface Grant { readonly fields: readonly DataField[]; readonly requires: readonly GrantCondition[]; readonly reason: string }
+- interface AccessRule { readonly grants: readonly Grant[]; readonly aggregateMinCell: number | null; readonly reason: string; readonly basis: string }
+- const CONDITION_TEXT: Readonly<Record<GrantCondition, string>>
+- const ROLE_LABELS: Readonly<Record<Role, string>>
+- const PURPOSE_LABELS: Readonly<Record<Purpose, string>>
+- const PROHIBITION_BASIS: Readonly<Record<ProhibitedPurpose, { reason: string; basis: string }>>
+- const DEFAULT_MIN_CELL_SIZE = 5
+- const REGULATOR_MIN_CELL_SIZE = 10
+- const EMPLOYER_MIN_CELL_SIZE = 10
+- const ACCESS_MATRIX: Readonly<Record<Role, Readonly<Record<Purpose, AccessRule>>>>  // deep-frozen; 72 cells, each with reason + basis
+- function isProhibitedPurpose(purpose: Purpose): purpose is ProhibitedPurpose
+- interface AccessRequest { role: Role; actorId: string; purpose: Purpose; fields?: readonly DataField[] }
+- interface ProjectionContext { now: number; escalated: boolean; buddyIds?: readonly string[]; actorCrewIds?: readonly string[] }
+- type AuditDraft = Omit<AuditEntry, 'seq' | 'prevHash' | 'hash'>
+- interface ProjectionResult { decision: 'allowed' | 'denied'; subjectId: string; fields: DataField[]; data: ProjectedData; withheld: DataField[]; reason: string; audit: AuditDraft }
+- function project(snapshot: WorkerSnapshot, request: AccessRequest, ctx: ProjectionContext): ProjectionResult
+- function projectAndLog(log: AuditLog, snapshot: WorkerSnapshot, request: AccessRequest, ctx: ProjectionContext): Promise<ProjectionResult & { entry: AuditEntry }>
+- interface ExplainRequest { role: Role; purpose: Purpose; fields?: readonly DataField[] }
+- interface AccessExplanation { role: Role; purpose: Purpose; prohibited: boolean; summary: string; grants: { fields: DataField[]; conditions: string[]; reason: string }[]; neverReleased: DataField[]; consentGated: { field: DataField; scope: ConsentScope }[]; aggregateMinCell: number | null; basis: string; lines: string[] }
+- function explain(request: ExplainRequest): AccessExplanation
+- function grantConsent(state: ConsentState, scope: ConsentScope, t: number): ConsentState
+- function revokeConsent(state: ConsentState, scope: ConsentScope, t: number): ConsentState
+- interface ConsentNotice { scope: ConsentScope; version: string; title: string; statement: string; dataProcessed: string; whoSees: string; retention: string; withdrawal: string; legalBasis: string }
+- const CONSENT_NOTICE_VERSION = '1.0'
+- const CONSENT_NOTICES: Readonly<Record<ConsentScope, ConsentNotice>>
+- type ConsentCollector = 'self' | 'research_staff' | 'occ_health'
+- type ConsentMethod = 'electronic_affirmative_action' | 'written_signature' | 'witnessed_mark'
+- interface ConsentReceiptInput { subjectId: string; scope: ConsentScope; action: 'granted' | 'revoked'; t: number; language: LangCode; method: ConsentMethod; collectedBy: ConsentCollector; witnessId?: string }
+- interface ConsentReceipt { receiptId: string; subjectId: string; scope: ConsentScope; action: 'granted' | 'revoked'; t: number; noticeVersion: string; title: string; statement: string; language: LangCode; method: ConsentMethod; collectedBy: ConsentCollector; witnessId?: string }
+- function createConsentReceipt(input: ConsentReceiptInput): ConsentReceipt  // frozen; throws for a collector outside ConsentCollector or witnessed_mark without witnessId
+- type ProcessingId = 'core_safety_alerting' | 'wearable_physiology' | 'personalised_thresholds' | 'symptom_checkins' | 'clinical_sharing_on_escalation' | 'aggregate_statistics'
+- interface ProcessingActivity { id: ProcessingId; active: boolean; scope: ConsentScope | null; description: string; fields: DataField[]; legalBasis: string }
+- function activeProcessing(consent: ConsentState): ProcessingActivity[]
+- interface AggregateGroupBy<T> { row: (record: T) => string; col: (record: T) => string; rows?: readonly string[]; cols?: readonly string[]; subject?: (record: T) => string }
+- type PublishedCell = { suppressed: false; count: number } | { suppressed: true }
+- interface AggregateTable { k: number; rows: string[]; cols: string[]; cells: PublishedCell[][]; rowTotals: PublishedCell[]; colTotals: PublishedCell[]; total: PublishedCell; suppressedCells: number }
+- function aggregate<T>(records: readonly T[], groupBy: AggregateGroupBy<T>, k?: number /* default DEFAULT_MIN_CELL_SIZE = 5 */): AggregateTable  // throws RangeError unless k is an integer >= 1
+- const AGGREGATE_CONSENT: Readonly<Partial<Record<Purpose, ConsentScope>>>  // { public_health_statistics: 'aggregateStatistics' }
+- interface AggregateRequest { role: Role; actorId: string; purpose: Purpose; k?: number; dimensions?: readonly DataField[] }
+- interface AggregateContext<T> { now: number; consentOf?: (record: T) => ConsentState | undefined }
+- interface AggregateResult { decision: 'allowed' | 'denied'; k: number | null; table: AggregateTable | null; excludedForConsent: number; reason: string; audit: AuditDraft }
+- function aggregateFor<T>(request: AggregateRequest, records: readonly T[], groupBy: AggregateGroupBy<T>, ctx: AggregateContext<T>): AggregateResult
+- function aggregateAndLog<T>(log: AuditLog, request: AggregateRequest, records: readonly T[], groupBy: AggregateGroupBy<T>, ctx: AggregateContext<T>): Promise<AggregateResult & { entry: AuditEntry }>
+- const GENESIS_HASH: string  // '0'.repeat(64)
+- function canonicalJson(value: unknown): string
+- function sha256Hex(text: string): Promise<string>
+- interface AuditAnchor { seq: number; hash: string }
+- type AuditVerification = { ok: true; length: number; head: string } | { ok: false; brokenAt: number; reason: string }
+- class AuditLog { get length(): number; head(): AuditAnchor; all(): readonly AuditEntry[]; append(draft: AuditDraft): Promise<AuditEntry>; forSubject(subjectId: string): AuditEntry[]; verify(anchor?: AuditAnchor): Promise<AuditVerification>; export(): string; static import(json: string): AuditLog; demoTamper(index: number, patch: Partial<AuditEntry>): AuditLog }
+- const RAW_PHYSIOLOGY_RETENTION_MS: number  // 24 * HOUR_MS = 86_400_000
+- const LEVEL_HISTORY_RETENTION_MS: number  // 30 * DAY_MS = 2_592_000_000
+- function purgeRawPhysiology<T extends { t: number }>(samples: readonly T[], now: number): T[]
+- function purgeLevelHistory<T extends { t: number }>(history: readonly T[], now: number): T[]
+- interface RetentionResult<P, L> { rawPhysiology: P[]; levelHistory: L[]; purged: { rawPhysiology: number; levelHistory: number } }
+- function applyRetention<P extends { t: number }, L extends { t: number }>(store: { rawPhysiology: readonly P[]; levelHistory: readonly L[] }, now: number): RetentionResult<P, L>
+- const SYNC_PAYLOAD_VERSION = 1
+- interface SyncPayload { v: typeof SYNC_PAYLOAD_VERSION; pseudonym: string; crewId: string; level: RiskLevel; actions: ActionId[]; workMinPerHour: number; waterMlPerHour: number; ack: AckStatus; t: number; confidence: RiskAssessment['confidence'] }
+- const SYNC_PAYLOAD_KEYS: readonly (keyof SyncPayload)[]  // ['v','pseudonym','crewId','level','actions','workMinPerHour','waterMlPerHour','ack','t','confidence']
+- function payloadForSync(assessment: RiskAssessment, profile: WorkerProfile, ack?: AckStatus /* default 'none' */): SyncPayload  // throws if assessment.workerId !== profile.id
+- interface SyncInspection { payload: SyncPayload; json: string; bytes: number; keptOnDevice: string[] }
+- function inspectSyncPayload(assessment: RiskAssessment, profile: WorkerProfile, ack?: AckStatus): SyncInspection
+New types:
+- FieldClass
+- FieldInfo
+- ConsentScope
+- AckStatus
+- UrineColor
+- WorkerLocation
+- WorkerSnapshot
+- OnDeviceReadings
+- FieldValues
+- ProjectedData
+- ProhibitedPurpose
+- GrantCondition
+- Grant
+- AccessRule
+- AccessRequest
+- ProjectionContext
+- AuditDraft
+- ProjectionResult
+- ExplainRequest
+- AccessExplanation
+- ConsentNotice
+- ConsentCollector
+- ConsentMethod
+- ConsentReceiptInput
+- ConsentReceipt
+- ProcessingId
+- ProcessingActivity
+- AggregateGroupBy<T>
+- PublishedCell
+- AggregateTable
+- AggregateRequest
+- AggregateContext<T>
+- AggregateResult
+- AuditAnchor
+- AuditVerification
+- RetentionResult<P, L>
+- SyncPayload
+- SyncInspection
+
+## data-layer
+Files: src\data\sites.ts, src\data\weather.ts, src\data\workforce.ts, src\data\weather.test.ts, src\data\workforce.test.ts
+- // ── src/data/sites.ts ──
+- type SiteId = Site['id']
+- interface GridCellInfo { lat: number; lon: number; elevationM: number; cellSelection: 'land' | 'nearest' }
+- interface SiteDataInfo { ifsCell: GridCellInfo; era5Cell: GridCellInfo; metarIcao?: 'OMAA' | 'OMAD' | 'OMAL'; gridNote?: string; radiantBoostRationale: string; wbgtMeterRationale: string; coastalRationale: string }
+- const RADIANT_BOOST_BASIS: string
+- const SITES: readonly Site[]  // musaffah: industrial, coastal, boost 1.5, no meter | kezad: port, coastal, 2.0, meter | ruwais: industrial, coastal, 2.0, meter | alain: inland, not coastal, 1.0, no meter | saadiyat: construction, coastal, 0.5, no meter; lat/lon = the coordinates used for the cached files
+- const SITE_IDS: readonly SiteId[]
+- const SITE_DATA_INFO: Readonly<Record<SiteId, SiteDataInfo>>  // IFS and ERA5 grid cells; KEZAD note: the requested point is water, so land cell 24.710016, 54.694534
+- function isSiteId(id: string): id is SiteId
+- function getSite(id: SiteId): Site
+- // ── src/data/weather.ts ──
+- const OPEN_METEO_ATTRIBUTION: { text: 'Weather data by Open-Meteo.com'; href: 'https://open-meteo.com/'; html: string; licence: 'CC BY 4.0'; licenceUrl: string; changes: string }
+- const COPERNICUS_ATTRIBUTION: string
+- const OPEN_METEO_CITATION: string
+- const IEM_ATTRIBUTION: string
+- const WEATHER_DATA_FOOTER: string
+- const OPEN_METEO_LICENSING_NOTE: string  // free tier is non-commercial; a pilot needs API Standard €29/mo or API Professional €99/mo
+- const OPEN_METEO_FORECAST_URL = 'https://api.open-meteo.com/v1/forecast'
+- const WBGT_VARIABLES: readonly ['temperature_2m','relative_humidity_2m','dew_point_2m','surface_pressure','wind_speed_10m','shortwave_radiation','direct_radiation','diffuse_radiation','direct_normal_irradiance','cloud_cover']
+- type WbgtVariable = (typeof WBGT_VARIABLES)[number]
+- const MAX_FORECAST_DAYS = 16
+- const LIVE_FORECAST_TIMEOUT_MS = 5000
+- const DEFAULT_WIND10_MS = 0.5
+- const FORECAST_STALE_AFTER_MIN = 360
+- const FORECAST_MARGIN_AFTER_MIN = 1440
+- const STALE_WBGT_MARGIN_C = 1
+- const FORECAST_LOW_CONFIDENCE_LEAD_DAYS = 7
+- const SENSOR_MAX_AGE_MIN = 15
+- const SOLAR_CONSTANT_WM2 = 1367
+- type WeatherModel = 'ecmwf_ifs' | 'era5' | 'ecmwf_ifs025' | 'dwd_icon_seamless' | 'ncep_gfs_seamless' | 'era5_land' | 'era5_seamless'
+- type ArchiveModel = 'ecmwf_ifs' | 'era5'
+- type PreviousRunsModel = 'ecmwf_ifs025' | 'dwd_icon_seamless' | 'ncep_gfs_seamless'
+- type LeadDay = 0 | 1 | 2 | 3
+- type ValidationModelKey = 'era5@nearest' | 'era5_land@nearest' | 'era5_seamless@nearest' | 'ecmwf_ifs@nearest'
+- type ValidationPointId = 'omaa' | 'omad' | 'omal'
+- type MetarIcao = 'OMAA' | 'OMAD' | 'OMAL'
+- type GridCell = GridCellInfo
+- interface LatLon { lat: number; lon: number }
+- interface WeatherSeries { locationId: string; source: EnvSource; model: WeatherModel; grid: GridCell | null; leadDays?: LeadDay; obtainedAt?: number; samples: EnvSample[]; droppedHours: number }  // hourly; t = END of the radiation hour
+- interface InstantEnvSample extends EnvSample { radiationWindowMin: 0 }  // radiation is instantaneous at t
+- type CosZenithFn = (t: number, latDeg: number, lonDeg: number) => number
+- class WeatherDataError extends Error { readonly kind: 'schema' | 'network' | 'http' | 'timeout' | 'api'; constructor(kind, message: string) }
+- interface TimeAxisJson / GridJson / SiteJson / ArchiveFileJson / PreviousRunsFileJson / ValidationPointFileJson / DemoDayJson / DemoDaysFileJson / MetarFileJson / WeatherManifest  // raw cached-file schemas, transcribed from data_and_validation.md §8
+- interface DemoDaySummary { date: string; tmaxC: number; tminC: number; tdMeanC: number; tdMaxC: number; rhMinPct: number; rhMaxPct: number; ghiMaxWm2: number; daytimeCloudMeanPct: number; twStullMaxC: number; wbgtShadeProxyDaylightMaxC: number; wbgtShadeProxyMaxHourLocal: string }
+- interface DemoDay { id: string; siteId: SiteId; date: string; tags: string[]; why: string[]; summary: DemoDaySummary; analysis: WeatherSeries /* source 'archive', 24 h */; forecasts: Record<1 | 2 | 3, WeatherSeries> /* source 'cached_forecast', leadDays set */ }
+- interface MetarObservation { t: number; taC: number | null; tdC: number | null; rhPct: number | null; windDirDeg: number | null; windMs: number | null; gustMs: number | null; qnhHpa: number | null; visibilityKm: number | null; cavok: boolean; wx: string | null; sky1: string | null }
+- interface MetarSeries { icao: string; name: string; lat: number; lon: number; elevationM: number; note: string; provider: string; observations: MetarObservation[] }
+- function noaaCosZenith(t: number, latDeg: number, lonDeg: number): number
+- function clearSkyGhiWm2(t: number, latDeg: number, lonDeg: number, ktClear: number): number
+- function instantFromHourMean(meanWm2: number, tEnd: number, latDeg: number, lonDeg: number, cosZenith?: CosZenithFn): number
+- function solarGeometryTime(sample: EnvSample & { radiationWindowMin?: number }): number  // t − 30 min for hourly samples, t for instant samples
+- function parseArchiveFile(json: unknown, model?: ArchiveModel /* default 'ecmwf_ifs' */): WeatherSeries
+- function parsePreviousRunsFile(json: unknown, model?: PreviousRunsModel /* 'ecmwf_ifs025' */, lead?: LeadDay /* 1 */): WeatherSeries
+- function parseValidationPointFile(json: unknown, model?: ValidationModelKey /* 'ecmwf_ifs@nearest' */): WeatherSeries
+- function parseDemoDays(json: unknown): DemoDay[]
+- function parseMetarFile(json: unknown): MetarSeries
+- function parseManifest(json: unknown): WeatherManifest
+- function parseForecastResponse(json: unknown, locationId: string, obtainedAt: number): WeatherSeries
+- function createEnvSampler(hourly: readonly EnvSample[], loc: LatLon, cosZenith?: CosZenithFn): (t: number) => InstantEnvSample | null
+- function sampleAt(hourly: readonly EnvSample[], t: number, loc: LatLon, cosZenith?: CosZenithFn): InstantEnvSample | null
+- function interpolateEnv(hourly: readonly EnvSample[], startT: number, endT: number, loc: LatLon, stepMin?: number /* 1 */, cosZenith?: CosZenithFn): InstantEnvSample[]
+- interface ConservativeProfile { pHpa: number; ktClear: number; taC: readonly (readonly number[])[] /* rows Jun..Sep x 24 local hours */; tdC: readonly (readonly number[])[] }
+- const CONSERVATIVE_PROFILE: Readonly<Record<SiteId, ConservativeProfile>>
+- function conservativeDefaultSample(siteId: SiteId, t: number): InstantEnvSample
+- function deriveConservativeProfile(files: readonly unknown[]): Partial<Record<SiteId, ConservativeProfile>>
+- interface SensorReading { t: number; measuredWbgtC?: number; taC?: number; rhPct?: number; tdC?: number; pHpa?: number; wind10Ms?: number; ghiWm2?: number }
+- interface ResolveEnvironmentInput { siteId: SiteId; now: number; sensor?: SensorReading | null; liveForecast?: WeatherSeries | null; cachedForecast?: WeatherSeries | null; archive?: WeatherSeries | null; cosZenith?: CosZenithFn }
+- interface ResolvedEnvironment { sample: InstantEnvSample; source: EnvSource; ageMin: number | null; stale: boolean; confidence: 'high' | 'medium' | 'low'; wbgtMarginC: number; drivers: RiskDriver[] }
+- function resolveEnvironment(input: ResolveEnvironmentInput): ResolvedEnvironment
+- function forecastConfidence(series: WeatherSeries, validT: number, now: number): 'high' | 'medium' | 'low'
+- type FetchLike = (input: string, init?: { signal?: AbortSignal }) => Promise<FetchResponseLike>
+- interface FetchResponseLike { ok: boolean; status: number; json(): Promise<unknown> }
+- function buildForecastUrl(loc: LatLon, forecastDays?: number /* 7, clamped 1–16 */): string
+- interface LiveForecastOptions { site: Pick<Site, 'id' | 'lat' | 'lon'>; now?: number; forecastDays?: number; timeoutMs?: number; fetch?: FetchLike; signal?: AbortSignal }
+- function fetchLiveForecast(opts: LiveForecastOptions): Promise<WeatherSeries>
+- function archivePeriodFor(siteId: SiteId, t: number): number | '2025-11' | null
+- function previousRunsYearFor(t: number): number | null
+- interface WeatherLoaderOptions { fetch?: FetchLike; baseUrl?: string /* './data/' */ }
+- interface WeatherLoader { manifest(): Promise<WeatherManifest>; archive(siteId: SiteId, period: number | '2025-11', model?: ArchiveModel): Promise<WeatherSeries>; archiveFor(siteId: SiteId, t: number, model?: ArchiveModel): Promise<WeatherSeries | null>; previousRuns(siteId: SiteId, year: number, model?: PreviousRunsModel, lead?: LeadDay): Promise<WeatherSeries>; demoDays(): Promise<DemoDay[]>; validationPoint(pointId: ValidationPointId, model?: ValidationModelKey): Promise<WeatherSeries>; validationPreviousRuns(pointId: ValidationPointId, model?: PreviousRunsModel, lead?: LeadDay): Promise<WeatherSeries>; metar(icao: MetarIcao): Promise<MetarSeries> }
+- function createWeatherLoader(opts?: WeatherLoaderOptions): WeatherLoader
+- // ── src/data/workforce.ts ──
+- type OriginId = 'india' | 'bangladesh' | 'pakistan' | 'egypt' | 'philippines' | 'indonesia' | 'yemen' | 'jordan' | 'sudan' | 'sri_lanka' | 'nepal'  // generator-internal; never stored on a worker
+- const ORIGIN_SHARES_PCT: Readonly<Record<OriginId, number>>
+- const KERALA_SHARE_OF_INDIAN_WORKERS = 0.26
+- function expectedLanguageMix(): Record<LangCode, number>
+- type TaskTemplate = Omit<Task, 'id'> & { key: string }
+- const TASK_LIBRARY: Readonly<Record<Site['kind'], readonly TaskTemplate[]>>  // construction: concrete_pour, rebar_fixing, formwork, scaffolding (very_heavy), finishing (moderate, shade), material_handling | port: lashing, breakbulk_loading (fixed), mobile_equipment (moderate, fixed), yard_inspection (light) | industrial: maintenance, welding (heavy, fr_coveralls + hood), grinding, insulation, inspection_rounds | inland: asphalt_paving, traffic_management, kerb_laying (very_heavy), backfill, landscaping, irrigation_check
+- const SITE_DEFAULT_CLOTHING: Readonly<Record<SiteId, ClothingId>>
+- const COHORT_PARAMS: { readonly ... }  // [ENG] cohort assumptions
+- const OH_REVIEW_AGE_YEARS = 50
+- const OH_REVIEW_BMI = 30
+- const DEFAULT_ROSTER_EPOCH: number  // 2025-06-01 06:00 local
+- type DemoPersonaId = 'new_arrival' | 'veteran_welder' | 'beta_blocker' | 'fasting' | 'declines_consent'
+- interface DemoPersona { id: DemoPersonaId; workerId: string; taskId: string; title: string; story: string; demonstrates: string[] }
+- const DEMO_CREW_ID = 'musaffah-demo'
+- function buildDemoCrew(rosterEpoch?: number): { crew: Crew; workers: WorkerProfile[]; personas: DemoPersona[] }  // personas: W-D2A1 new_arrival (ne, day 2), W-D2B2 veteran_welder (ml, FR + hood welding task), W-D2C3 beta_blocker (ar, wearable + hr_suppressing_medication), W-D2D4 fasting (bn), W-D2E5 declines_consent (tl); crewmates W-D2F6 (hi), W-D307 (ur)
+- interface WorkforceOptions { seed?: string | number; crewsPerSite?: number; sites?: readonly Site[]; includeDemoCrew?: boolean; rosterEpoch?: number }
+- interface Workforce { seed: string | number; crews: Crew[]; workers: WorkerProfile[]; personas: DemoPersona[] }
+- const DEFAULT_WORKFORCE_SEED = 'zill-workforce-v1'
+- function generateWorkforce(opts?: WorkforceOptions): Workforce  // default: demo crew + 3 crews per site, 6–10 workers each (126 workers with the default seed)
+- const WORK_CLASSES: readonly WorkClass[]
+New types:
+- SiteId, GridCellInfo, SiteDataInfo (sites.ts)
+- WeatherSeries, InstantEnvSample, LatLon, GridCell, CosZenithFn, WeatherDataError (weather.ts)
+- WbgtVariable, WeatherModel, ArchiveModel, PreviousRunsModel, LeadDay, ValidationModelKey, ValidationPointId, MetarIcao (weather.ts)
+- DemoDay, DemoDaySummary, MetarObservation, MetarSeries, ConservativeProfile (weather.ts)
+- SensorReading, ResolveEnvironmentInput, ResolvedEnvironment (weather.ts)
+- FetchLike, FetchResponseLike, LiveForecastOptions, WeatherLoaderOptions, WeatherLoader (weather.ts)
+- TimeAxisJson, GridJson, SiteJson, ArchiveFileJson, PreviousRunsFileJson, ValidationPointFileJson, DemoDayJson, DemoDaysFileJson, MetarFileJson, WeatherManifest (weather.ts: raw cached-file schemas)
+- OriginId, TaskTemplate, DemoPersonaId, DemoPersona, WorkforceOptions, Workforce (workforce.ts)
+
+## i18n
+Files: src\i18n\messages.ts, src\i18n\index.ts, src\i18n\speech.ts, src\i18n\i18n.test.ts
+- IMPORT NOTE: everything except speech is importable from 'src/i18n' (index.ts re-exports messages.ts). Speech/vibration must be imported from 'src/i18n/speech'. index.ts does not re-export speech, which avoids an import cycle.
+- --- messages.ts (re-exported by index.ts) ---
+- type ConsentScope = { [K in keyof ConsentState]: ConsentState[K] extends boolean ? K : never }[keyof ConsentState]  // 'wearable'|'healthFlags'|'checkins'|'shareWithMedicOnEscalation'|'aggregateStatistics'
+- interface Catalog { level: Record<RiskLevel,{name:string;meaning:string}>; action: Record<ActionId,string>; action_with: {rest_shade_now /*{min}*/; drink_water /*{ml}*/; drink_water_every /*{ml},{min}*/; shade_breaks /*{work},{rest}*/; midday_break /*{from},{to}*/: string}; symptom: Record<SymptomId,{self:string;buddy:string}>; checkin: {self_intro;buddy_intro;trend_question;better;same;worse: string}; urine: {question;ok;drink_more;dark: string}; emergency: {title;call_998;cool_first;shade;immerse;douse;towels;keep_cooling;stay;fluids: string}; ui: {status;next_break /*{min}*/;break_now;drank_water;feel_unwell;im_ok;checkin;yes;no;privacy;what_i_share;who_saw;offline;offline_note;battery_saver;language;acknowledge;help_coming;buddy;buddy_alert /*{name}*/;get_help;slow_down_drinking;listen;data_stays;flags_private;strain_estimate;not_medical;translation_draft: string}; consent: Record<ConsentScope,{title:string;explain:string}>; consent_info: {intro;voluntary;change_anytime: string}; flag: Record<RiskFlagId,{name:string;explain:string}> }
+- type MessageKey = dotted leaf paths of Catalog, 152 keys, e.g. 'level.stop.name' | 'action.drink_water' | 'action_with.shade_breaks' | 'symptom.dizziness.buddy' | 'emergency.call_998' | 'ui.next_break' | 'consent.wearable.explain' | 'consent_info.voluntary' | 'flag.fasting.explain'
+- const SOURCE_LANG: LangCode  // 'en'
+- const CATALOGS: Readonly<Record<LangCode, Catalog>>  // deep-frozen
+- function flattenCatalog(catalog: Catalog): Readonly<Record<MessageKey, string>>
+- const MESSAGE_KEYS: readonly MessageKey[]
+- const ACTION_IDS: readonly ActionId[]
+- const SYMPTOM_IDS: readonly SymptomId[]
+- const RISK_FLAG_IDS: readonly RiskFlagId[]
+- const CONSENT_SCOPES: readonly ConsentScope[]
+- const EMERGENCY_SCRIPT: readonly MessageKey[]  // title, call_998, cool_first, shade, immerse, douse, towels, keep_cooling, stay, fluids
+- const COMPREHENSION_CRITERION: Readonly<{ standard: string; minCorrectPct: number /*85*/; maxCriticalConfusionPct: number /*5*/; method: string /*ISO 9186-1:2014*/ }>
+- type ReviewStep = 'native_speaker_review' | 'back_translation' | 'occupational_health_review' | 'comprehension_test' | 'authenticated_translation'
+- interface TranslationReview { readonly stage: 'source' | 'machine_assisted_draft'; readonly pending: readonly ReviewStep[]; readonly note: string }
+- const reviewStatus: Readonly<Record<LangCode, TranslationReview>>
+- function isDeployable(lang: LangCode): boolean  // false for every language today
+- --- index.ts ---
+- type ScriptCode = 'Latn' | 'Arab' | 'Deva' | 'Beng' | 'Mlym'
+- type NumberingSystem = 'latn' | 'arab' | 'arabext' | 'deva' | 'beng'
+- type TextDirection = 'ltr' | 'rtl'
+- interface LanguageMeta { readonly code: LangCode; readonly nativeName: string; readonly englishName: string; readonly script: ScriptCode; readonly rtl: boolean; readonly bcp47: string; readonly voiceTags: readonly string[]; readonly nativeDigits: NumberingSystem; readonly adphcSupported: boolean; readonly fontFamily: string; readonly basis: string }
+- const LANGUAGES: Readonly<Record<LangCode, LanguageMeta>>  // bcp47: en-AE, ar-AE, hi-IN, ur-PK, ml-IN, bn-BD, fil-PH (tl), ne-NP
+- const LANG_CODES: readonly LangCode[]  // picker order ['ar','en','hi','ur','bn','ml','tl','ne']
+- function isLangCode(value: unknown): value is LangCode
+- function normalizeLang(tag: string | null | undefined): LangCode | null  // 'fil-PH'->'tl', 'en_US'->'en'
+- function detectLang(preferred: readonly string[] | null | undefined, fallback?: LangCode): LangCode  // pass navigator.languages
+- function dirFor(lang: LangCode): TextDirection
+- function isRtl(lang: LangCode): boolean
+- type DigitStyle = 'latin' | 'native'
+- interface NumberFormatOptions { digits?: DigitStyle; minimumFractionDigits?: number; maximumFractionDigits?: number; useGrouping?: boolean }
+- function formatNumber(lang: LangCode, value: number, opts?: NumberFormatOptions): string
+- type MessageParams = Readonly<Record<string, string | number>>
+- interface FormatOptions { digits?: DigitStyle /*default 'latin'*/; isolate?: boolean /*FSI/PDI around string params; default = rtl*/ }
+- function templateParams(template: string): string[]  // throws SyntaxError on malformed template
+- function formatMessage(template: string, lang: LangCode, params?: MessageParams, opts?: FormatOptions): string  // never throws
+- interface Translation { readonly text: string; readonly lang: LangCode; readonly dir: TextDirection; readonly fallback: boolean }
+- function translate(lang: LangCode, key: MessageKey, params?: MessageParams, opts?: FormatOptions): Translation
+- function t(lang: LangCode, key: MessageKey, params?: MessageParams, opts?: FormatOptions): string
+- function levelName(lang: LangCode, level: RiskLevel): string
+- function levelMeaning(lang: LangCode, level: RiskLevel): string
+- function symptomQuestion(lang: LangCode, symptom: SymptomId, who?: 'self' | 'buddy'): string
+- function consentText(lang: LangCode, scope: ConsentScope): { title: string; explain: string }
+- function riskFlagText(lang: LangCode, flag: RiskFlagId): { name: string; explain: string }
+- function emergencySteps(lang: LangCode, opts?: FormatOptions): string[]
+- interface ActionParams { min?: number; ml?: number; work?: number; rest?: number; workMinPerHour?: number; from?: string; to?: string }
+- function actionText(lang: LangCode, action: ActionId, params?: ActionParams, opts?: FormatOptions): string  // picks the action_with variant when its params are given; work rounds down, rest rounds up
+- --- speech.ts ---
+- interface VoiceLike { readonly name: string; readonly lang: string; readonly localService: boolean; readonly default: boolean }
+- const DEFAULT_SPEECH_RATE = 0.9
+- const SPOKEN_FALLBACK: Readonly<Partial<Record<LangCode, LangCode>>>  // { ur: 'hi', hi: 'ur' }
+- const VIBRATION_PATTERNS: Readonly<Record<RiskLevel, readonly number[]>>  // safe [], caution [200,100,200], high [400,150,400,150,400], stop 4x700, emergency 5x1000
+- function voiceScore(voice: VoiceLike, lang: LangCode): number
+- function pickVoice<V extends VoiceLike>(voices: readonly V[], lang: LangCode): V | null
+- function isSpeechSupported(): boolean
+- function availableVoices(): readonly SpeechSynthesisVoice[]
+- function hasVoice(lang: LangCode): boolean
+- function loadVoices(timeoutMs?: number): Promise<number>
+- function splitForSpeech(text: string, maxChars?: number): string[]
+- interface SpeakOptions { rate?: number; pitch?: number; volume?: number; interrupt?: boolean; onEnd?: () => void }
+- function speak(text: string, lang: LangCode, opts?: SpeakOptions): boolean  // false = no API/voice -> UI shows text + vibration
+- function cancel(): void
+- interface SpokenMessage { readonly text: string; readonly spoken: boolean; readonly spokenLang: LangCode | null }
+- function speakMessage(lang: LangCode, key: MessageKey, params?: MessageParams, opts?: SpeakOptions & FormatOptions): SpokenMessage
+- function vibrate(level: RiskLevel): boolean
+- function stopVibration(): void
+- interface AnnounceResult { readonly vibrated: boolean; readonly spoken: boolean }
+- function announce(text: string, lang: LangCode, level: RiskLevel, opts?: SpeakOptions): AnnounceResult
+New types:
+- ConsentScope (messages.ts): the boolean keys of ConsentState
+- Catalog (messages.ts)
+- MessageKey (messages.ts)
+- ReviewStep (messages.ts)
+- TranslationReview (messages.ts)
+- ScriptCode (index.ts)
+- NumberingSystem (index.ts)
+- TextDirection (index.ts)
+- LanguageMeta (index.ts)
+- DigitStyle (index.ts)
+- NumberFormatOptions (index.ts)
+- MessageParams (index.ts)
+- FormatOptions (index.ts)
+- Translation (index.ts)
+- ActionParams (index.ts)
+- VoiceLike (speech.ts)
+- SpeakOptions (speech.ts)
+- SpokenMessage (speech.ts)
+- AnnounceResult (speech.ts)
+
+## ui-system
+Files: src\index.css, src\ui\router.ts, src\ui\App.tsx, src\ui\views\Placeholder.tsx, src\ui\components\index.ts, src\ui\components\cx.ts, src\ui\components\format.ts, src\ui\components\levels.ts, src\ui\components\actions.ts, src\ui\components\ZillMark.tsx, src\ui\components\Button.tsx, src\ui\components\Badge.tsx, src\ui\components\Card.tsx, src\ui\components\Tooltip.tsx, src\ui\components\ProvenanceTag.tsx, src\ui\components\LevelPill.tsx, src\ui\components\LevelCard.tsx, src\ui\components\ActionChip.tsx, src\ui\components\Stat.tsx, src\ui\components\Section.tsx, src\ui\components\Tabs.tsx, src\ui\components\Toggle.tsx, src\ui\components\PhoneFrame.tsx, src\ui\components\EmptyState.tsx, src\ui\components\KeyValue.tsx, src\ui\components\Sparkline.tsx, src\ui\components\Timeline.tsx, src\ui\components\Meter.tsx, src\ui\components\CountdownRing.tsx, src\ui\components\DataTable.tsx, src\ui\components\logic.test.ts
+- // ---- src/ui/router.ts ----
+- type ViewId = 'overview' | 'supervisor' | 'worker' | 'medic' | 'regulator' | 'governance' | 'lab' | 'evidence'
+- type RouteId = ViewId | 'not_found'
+- interface ViewMeta { id: ViewId; pattern: string; label: string; title: string; purpose: string }
+- interface RouteParamsMap { overview: undefined; supervisor: undefined; worker: { id: string }; medic: undefined; regulator: undefined; governance: undefined; lab: undefined; evidence: undefined }
+- type QueryInput = Readonly<Record<string, string | number | boolean | null | undefined>>
+- interface Route { id: RouteId; pattern: string | null; path: string; params: Readonly<Record<string, string>>; query: Readonly<Record<string, string>> }
+- const VIEW_META: Readonly<Record<ViewId, ViewMeta>>  // labels/titles/purposes transcribed from ARCHITECTURE.md §9
+- const VIEW_ORDER: readonly ViewId[]
+- const VIEWS: readonly ViewMeta[]
+- const DEFAULT_WORKER_ID = 'demo'
+- function matchPattern(pattern: string, path: string): Record<string, string> | null
+- function parseHash(hash: string): Route  // '' | '#' | '#/' | non-route anchor -> overview; unknown route path -> not_found
+- function pathFor<K extends ViewId>(id: K, ...args: RouteParamsMap[K] extends undefined ? [params?: undefined, query?: QueryInput] : [params: RouteParamsMap[K], query?: QueryInput]): string  // e.g. pathFor('worker', { id }) -> '/worker/<encoded id>'
+- function toHref(to: string): string  // '/supervisor' | 'supervisor' | '#/supervisor' -> '#/supervisor' (query kept)
+- function navigate(to: string, options?: { replace?: boolean }): void
+- function useRoute(): Route
+- interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> { to: string; current?: boolean; ref?: Ref<HTMLAnchorElement> }
+- function Link(props: LinkProps): ReactElement  // sets aria-current='page'
+- // ---- src/ui/App.tsx ----
+- interface ViewProps { route: Route }
+- interface AppProps { views?: Partial<Record<ViewId, ComponentType<ViewProps>>>; status?: ReactNode | ((route: Route) => ReactNode); defaultWorkerId?: string }  // status renders on the dark ink top bar
+- function App(props: AppProps): React.JSX.Element
+- // ---- src/ui/views/Placeholder.tsx ----
+- interface PlaceholderProps { route: Route; title: string; purpose: string; icon?: LucideIcon; showGallery?: boolean }
+- function Placeholder(props: PlaceholderProps): React.JSX.Element
+- // ---- src/ui/components (all re-exported from src/ui/components/index.ts) ----
+- function cx(...parts: ReadonlyArray<string | false | null | undefined | 0>): string
+- const NO_DATA = '—'
+- function formatNumber(value: number | null | undefined, precision?: number /*0*/, locale?: string /*'en-US'*/): string  // U+2212 minus; non-finite -> NO_DATA
+- function formatSigned(value: number, precision?: number, locale?: string): string  // '+1.2' | '−0.8' | '0'
+- function formatClock(minutes: number): string  // 'm:ss' or 'h:mm:ss', seconds floored
+- function formatMinutes(minutes: number | null | undefined): string  // '<1 min' | '12 min' | '1 h 05 min', floored
+- interface LevelStyle { icon: LucideIcon; text: string; tint: string; softBorder: string; border: string; solid: string; onSolid: string; mark: string; track: string }  // all full Tailwind class names; mark/track are currentColor (text-*) classes for SVG
+- const LEVEL_STYLES: Readonly<Record<RiskLevel, LevelStyle>>  // icons: safe=ShieldCheck, caution=Droplet, high=TriangleExclamationPoint, stop=Hand, emergency=Siren
+- const DEFAULT_LEVEL_LABELS: Readonly<Record<RiskLevel, string>>  // 'Safe','Caution','High risk','Stop work','Emergency'
+- const ACTION_ICONS: Readonly<Record<ActionId, LucideIcon>>  // exhaustive over all 22 ActionIds
+- interface ZillMarkProps { size?: number; title?: string; className?: string }
+- function ZillMark(props: ZillMarkProps): React.JSX.Element
+- type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'emergency' | 'inverse'
+- type ButtonSize = 'sm' | 'md' | 'lg' | 'xl'  // 32/40/48/56 px
+- interface ButtonStyleOptions { variant?: ButtonVariant; size?: ButtonSize; fullWidth?: boolean; iconOnly?: boolean }
+- function buttonClasses(options?: ButtonStyleOptions): string
+- interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>, ButtonStyleOptions { icon?: LucideIcon; iconEnd?: LucideIcon; loading?: boolean; ref?: Ref<HTMLButtonElement> }
+- function Button(props: ButtonProps): React.JSX.Element  // default type='button'
+- type BadgeTone = 'neutral' | 'brand' | 'info' | 'outline' | 'inverse'
+- interface BadgeProps extends HTMLAttributes<HTMLSpanElement> { tone?: BadgeTone; size?: 'sm' | 'md'; icon?: LucideIcon }
+- function Badge(props: BadgeProps): React.JSX.Element
+- interface CardProps extends HTMLAttributes<HTMLElement> { as?: 'div' | 'section' | 'article' | 'aside' | 'li'; padding?: 'none' | 'sm' | 'md' | 'lg'; level?: RiskLevel }
+- function Card(props: CardProps): React.JSX.Element
+- interface CardHeaderProps { title: ReactNode; description?: ReactNode; icon?: LucideIcon; actions?: ReactNode; as?: 'h2' | 'h3' | 'h4'; id?: string; className?: string }
+- function CardHeader(props: CardHeaderProps): React.JSX.Element
+- interface TooltipProps { content: ReactNode; children: ReactElement<{ 'aria-describedby'?: string }>; side?: 'top' | 'bottom'; align?: 'center' | 'start' | 'end'; delayMs?: number; className?: string }
+- function Tooltip(props: TooltipProps): React.JSX.Element
+- interface InfoTipProps { content: ReactNode; label?: string; side?: 'top' | 'bottom'; align?: 'center' | 'start' | 'end'; className?: string }
+- function InfoTip(props: InfoTipProps): React.JSX.Element  // use for rule `basis` strings
+- type ProvenanceKind = 'reference' | 'real_weather' | 'archived_forecast' | 'simulated' | 'projection' | 'engineering_default'
+- const PROVENANCE_LABELS: Readonly<Record<ProvenanceKind, string>>  // 'Reference-validated','Real weather','Archived forecast','Simulated cohort','Model projection','Engineering default'
+- const PROVENANCE_ICONS: Readonly<Record<ProvenanceKind, LucideIcon>>
+- interface ProvenanceTagProps { kind: ProvenanceKind; detail?: ReactNode; label?: string; size?: 'sm' | 'md'; className?: string }
+- function ProvenanceTag(props: ProvenanceTagProps): React.JSX.Element
+- interface LevelPillProps { level: RiskLevel; label?: string; size?: 'sm' | 'md' | 'lg'; variant?: 'tint' | 'solid'; className?: string }
+- function LevelPill(props: LevelPillProps): React.JSX.Element
+- interface LevelCardProps { level: RiskLevel; label?: string; headline: ReactNode; reason?: ReactNode; children?: ReactNode; size?: 'md' | 'lg'; headingLevel?: 2 | 3; live?: 'off' | 'polite' | 'assertive'; className?: string }
+- function LevelCard(props: LevelCardProps): React.JSX.Element  // aria-live assertive for stop/emergency by default
+- interface ActionChipProps { action: ActionId; label: string; description?: ReactNode; level?: RiskLevel; size?: 'sm' | 'md' | 'lg'; done?: boolean; doneLabel?: string; onClick?: () => void; className?: string }
+- function ActionChip(props: ActionChipProps): React.JSX.Element  // button when onClick; aria-pressed only when done is set
+- interface StatDelta { value: number; label: string; good: 'up' | 'down' | 'none'; unit?: string; precision?: number }
+- interface StatProps { label: string; value: number | string | null; unit?: string; precision?: number; delta?: StatDelta; provenance?: ProvenanceKind; provenanceDetail?: ReactNode; level?: RiskLevel; levelLabel?: string; info?: ReactNode; hint?: ReactNode; trend?: ReadonlyArray<number | null>; size?: 'sm' | 'md' | 'lg'; framed?: boolean; className?: string }
+- function Stat(props: StatProps): React.JSX.Element
+- interface SectionProps { title: ReactNode; description?: ReactNode; actions?: ReactNode; headingLevel?: 2 | 3; id?: string; provenance?: ProvenanceKind; provenanceDetail?: ReactNode; children?: ReactNode; className?: string }
+- function Section(props: SectionProps): React.JSX.Element
+- interface TabItem { id: string; label: ReactNode; icon?: LucideIcon; badge?: ReactNode; disabled?: boolean }
+- interface TabsProps { items: readonly TabItem[]; label: string; value?: string; defaultValue?: string; onValueChange?: (id: string) => void; variant?: 'underline' | 'pill'; size?: 'md' | 'lg'; children?: (activeId: string) => ReactNode; className?: string; panelClassName?: string }
+- function Tabs(props: TabsProps): React.JSX.Element
+- interface ToggleProps { checked: boolean; onCheckedChange: (checked: boolean) => void; label: ReactNode; description?: ReactNode; disabled?: boolean; size?: 'md' | 'lg'; hideLabel?: boolean; id?: string; className?: string }
+- function Toggle(props: ToggleProps): React.JSX.Element
+- interface PhoneFrameProps { children: ReactNode; responsive?: boolean; caption?: ReactNode; label?: string; className?: string }
+- function PhoneFrame(props: PhoneFrameProps): React.JSX.Element  // responsive: full-bleed < md, framed 390x(<=844) from md
+- interface EmptyStateProps { icon?: LucideIcon; title: ReactNode; description?: ReactNode; action?: ReactNode; tone?: 'neutral' | 'unavailable'; size?: 'sm' | 'md'; className?: string }
+- function EmptyState(props: EmptyStateProps): React.JSX.Element
+- interface KeyValueItem { id?: string; label: ReactNode; value: ReactNode; unit?: string; hint?: ReactNode; provenance?: ProvenanceKind }
+- interface KeyValueProps { items: readonly KeyValueItem[]; layout?: 'rows' | 'grid'; columns?: 2 | 3 | 4; dense?: boolean; className?: string }
+- function KeyValue(props: KeyValueProps): React.JSX.Element
+- interface SparklineThreshold { value: number; level?: RiskLevel; label?: string }
+- interface SparklineProps { values: ReadonlyArray<number | null>; label: string; unit?: string; precision?: number; width?: number; height?: number; fluid?: boolean; domain?: readonly [number, number]; thresholds?: readonly SparklineThreshold[]; projectionFrom?: number; area?: boolean; level?: RiskLevel; showEndDot?: boolean; pointLabels?: ReadonlyArray<string>; interactive?: boolean; className?: string }
+- function Sparkline(props: SparklineProps): React.JSX.Element  // null = gap, projected tail dashed
+- interface TimelineItem { id: string; t?: number; time?: string; title: ReactNode; description?: ReactNode; level?: RiskLevel; levelLabel?: string; icon?: LucideIcon; meta?: ReactNode }  // t epoch ms -> Abu Dhabi HH:mm via formatLocalHhmm
+- interface TimelineProps { items: readonly TimelineItem[]; label?: string; dense?: boolean; empty?: ReactNode; className?: string }
+- function Timeline(props: TimelineProps): React.JSX.Element
+- interface MeterThreshold { value: number; level: RiskLevel; label?: string }
+- type MeterDirection = 'higher-is-worse' | 'higher-is-better'
+- function levelForValue(value: number, thresholds: readonly MeterThreshold[], direction?: MeterDirection /*'higher-is-worse'*/, baseLevel?: RiskLevel /*'safe'*/): RiskLevel  // inclusive protective edges; non-finite -> most severe
+- interface MeterProps { value: number | null; label: string; min?: number; max?: number; unit?: string; precision?: number; thresholds?: readonly MeterThreshold[]; direction?: MeterDirection; baseLevel?: RiskLevel; tone?: 'level' | 'brand'; showLevel?: boolean; levelLabels?: Partial<Record<RiskLevel, string>>; showThresholdLabels?: boolean; hideLabel?: boolean; info?: ReactNode; size?: 'sm' | 'md'; className?: string }
+- function Meter(props: MeterProps): React.JSX.Element  // role='meter'
+- interface CountdownRingProps { remainingMin: number | null; totalMin: number; label: string; level?: RiskLevel; size?: number; strokeWidth?: number; format?: 'clock' | 'minutes'; formatTime?: (remainingMin: number) => string; caption?: ReactNode; ariaLabel?: string; className?: string }
+- function CountdownRing(props: CountdownRingProps): React.JSX.Element  // role='timer', aria-live off
+- type SortValue = number | string | null | undefined
+- interface DataTableColumn<T> { id: string; header: ReactNode; cell: (row: T) => ReactNode; sortValue?: (row: T) => SortValue; align?: 'start' | 'center' | 'end'; numeric?: boolean; hideBelow?: 'sm' | 'md' | 'lg'; className?: string }
+- type SortDirection = 'asc' | 'desc'
+- interface SortState { columnId: string; direction: SortDirection }
+- function sortRows<T>(rows: readonly T[], columns: readonly DataTableColumn<T>[], sort: SortState | null): T[]  // stable; missing values last both directions; natural strings
+- interface DataTableProps<T> { columns: readonly DataTableColumn<T>[]; rows: readonly T[]; rowKey: (row: T) => string; caption: ReactNode; hideCaption?: boolean; initialSort?: SortState; sort?: SortState | null; onSortChange?: (sort: SortState) => void; empty?: ReactNode; dense?: boolean; stickyHeader?: boolean; maxHeight?: number | string; rowClassName?: (row: T) => string | undefined; className?: string }
+- function DataTable<T>(props: DataTableProps<T>): React.JSX.Element
+- // ---- src/index.css (new @theme tokens; existing tokens untouched) ----
+- colors: canvas #f8fafc, surface #ffffff, line #e2e8f0, line-strong #cbd5e1, muted #475569, subtle #64748b, shade-dark #115e59, shade-bg #f0fdfa, shade-tint #ccfbf1 (=> bg-canvas, text-muted, border-line, bg-shade-bg ...)
+- --font-mono; --animate-zill-pulse (emergency halo, 0.5 Hz); --animate-zill-fade-in; base :focus-visible 2px teal outline; global prefers-reduced-motion kill-switch; color-scheme: light
+New types:
+- ViewId, RouteId, ViewMeta, RouteParamsMap, QueryInput, Route, LinkProps (src/ui/router.ts)
+- ViewProps { route: Route }, AppProps { views?, status?, defaultWorkerId? } (src/ui/App.tsx)
+- PlaceholderProps (src/ui/views/Placeholder.tsx)
+- LevelStyle: per-RiskLevel Tailwind classes plus pictogram (components/levels.ts)
+- ProvenanceKind = 'reference' | 'real_weather' | 'archived_forecast' | 'simulated' | 'projection' | 'engineering_default' (components/ProvenanceTag.tsx)
+- ButtonVariant, ButtonSize, ButtonStyleOptions, BadgeTone
+- MeterThreshold, MeterDirection, SparklineThreshold, StatDelta, TabItem, TimelineItem, KeyValueItem
+- DataTableColumn<T>, SortDirection, SortState, SortValue
+- Props interfaces: ZillMarkProps, ButtonProps, BadgeProps, CardProps, CardHeaderProps, TooltipProps, InfoTipProps, ProvenanceTagProps, LevelPillProps, LevelCardProps, ActionChipProps, StatProps, SectionProps, TabsProps, ToggleProps, PhoneFrameProps, EmptyStateProps, KeyValueProps, SparklineProps, TimelineProps, MeterProps, CountdownRingProps, DataTableProps<T>

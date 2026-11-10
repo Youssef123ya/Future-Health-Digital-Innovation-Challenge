@@ -1,0 +1,127 @@
+@import "tailwindcss";
+
+/* Zill design tokens. Risk levels are always conveyed by colour + pictogram + text (never colour alone). */
+@theme {
+  --color-ink: #0b1220;
+  --color-shade: #0f766e;
+  --color-shade-light: #14b8a6;
+  --color-sun: #f59e0b;
+
+  --color-safe: #15803d;
+  --color-safe-fill: #16a34a;
+  --color-safe-bg: #dcfce7;
+  --color-caution: #92400e;
+  --color-caution-fill: #f59e0b;
+  --color-caution-bg: #fef3c7;
+  --color-high: #9a3412;
+  --color-high-fill: #ea580c;
+  --color-high-bg: #ffedd5;
+  --color-stop: #991b1b;
+  --color-stop-fill: #dc2626;
+  --color-stop-bg: #fee2e2;
+  --color-emergency: #3b0764;
+  --color-emergency-fill: #7e22ce;
+  --color-emergency-bg: #f3e8ff;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Arabic",
+    "Noto Naskh Arabic", "Noto Nastaliq Urdu", "Noto Sans Devanagari", "Noto Sans Malayalam", "Noto Sans Bengali",
+    Arial, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: #f8fafc;
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * Design-system extensions (UI shell).
+ * Neutrals follow Tailwind slate so every text pairing meets WCAG 2.2 SC 1.4.3 (AA, >= 4.5:1) on surface and canvas:
+ * ink 18.7:1, muted (slate-600) 7.6:1, subtle (slate-500) 4.8:1 on white (4.6:1 on canvas).
+ * The brand amber ("sun") is the same colour as the caution fill, so it is reserved for the logo and is never used as UI
+ * chrome: a risk colour must never appear without its pictogram and label (WCAG 2.2 SC 1.4.1 Use of Color).
+ */
+@theme {
+  --color-canvas: #f8fafc;
+  --color-surface: #ffffff;
+  --color-line: #e2e8f0;
+  --color-line-strong: #cbd5e1;
+  --color-muted: #475569;
+  --color-subtle: #64748b;
+  --color-shade-dark: #115e59;
+  --color-shade-bg: #f0fdfa;
+  --color-shade-tint: #ccfbf1;
+
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  /* Emergency pictogram halo: a slow 0.5 Hz expanding ring, never a flash (WCAG 2.2 SC 2.3.1). [ENG] */
+  --animate-zill-pulse: zill-pulse 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+  --animate-zill-fade-in: zill-fade-in 160ms ease-out;
+
+  @keyframes zill-pulse {
+    0% {
+      transform: scale(1);
+      opacity: 0.6;
+    }
+    80%,
+    100% {
+      transform: scale(1.55);
+      opacity: 0;
+    }
+  }
+
+  @keyframes zill-fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(-2px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  /*
+   * One visible focus indicator for every interactive element (WCAG 2.2 SC 2.4.7 Focus Visible, SC 2.4.13 Focus
+   * Appearance): a 2 px teal-700 outline (5.5:1 on white) offset from the control. :where() keeps specificity at zero so
+   * component utilities (e.g. the light outline on the dark top bar) can override it.
+   */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-shade);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--color-shade-tint);
+    color: var(--color-ink);
+  }
+}
+
+/* Honour the operating-system "reduce motion" setting everywhere (WCAG 2.2 SC 2.3.3 Animation from Interactions). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

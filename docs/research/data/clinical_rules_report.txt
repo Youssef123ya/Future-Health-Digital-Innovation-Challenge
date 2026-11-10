@@ -1,0 +1,28 @@
+no_symptoms                          -> T0_continue_with_precautions
+thirst_only                          -> T0_continue_with_precautions
+rash_only                            -> T1_rest_cool_notify_supervisor
+cramps_only                          -> T1_rest_cool_notify_supervisor
+cramps_60min                         -> T2_first_aider_now
+cramps_heart_disease                 -> T2_first_aider_now
+headache_dizzy                       -> T2_first_aider_now
+fainted_now_alert                    -> T2_first_aider_now
+fainted_and_confused                 -> T3_emergency_998_now
+buddy_slurred_speech                 -> T3_emergency_998_now
+repeated_vomiting                    -> T3_emergency_998_now
+brown_urine                          -> T2_first_aider_now
+overdrink_symptoms                   -> T2_first_aider_now
+overdrink_plus_confusion             -> T3_emergency_998_now
+chest_pain                           -> T3_emergency_998_now
+heat_exhaustion_not_improving_30     -> T3_emergency_998_now
+heat_exhaustion_improving_30         -> T2_first_aider_now
+cramps_worsening                     -> T3_emergency_998_now
+urine: [(1, 'U_OK'), (2, 'U_OK'), (3, 'U_OK'), (4, 'U_DRINK_MORE'), (5, 'U_DEHYDRATED'), (6, 'U_DEHYDRATED'), (7, 'U_VERY_DARK'), (8, 'U_VERY_DARK'), (None, 'U_BROWN_RED')]
+caps: hourly 1.4195 L  daily 11.356 L  cup 0.2366 L
+physio {'ectemp': 37.6, 'psi': 3.0, 'hr_sustained_5min': 120, 'age': 35, 'channel_valid': True, 'conservative_mode': False} -> {'floor': None, 'reasons': []}
+physio {'ectemp': 38.1, 'psi': 4.5, 'hr_sustained_5min': 130, 'age': 35, 'channel_valid': True, 'conservative_mode': False} -> {'floor': None, 'reasons': ['ECTEMP_GE_38.0_advisory_prompt_checkin', 'PSI_MODERATE_advisory']}
+physio {'ectemp': 38.45, 'psi': 6.4, 'hr_sustained_5min': 150, 'age': 35, 'channel_valid': True, 'conservative_mode': False} -> {'floor': 'T1_rest_cool_notify_supervisor', 'reasons': ['ECTEMP_GE_38.4', 'PSI_HIGH', 'HR_SUSTAINED_GT_180_MINUS_AGE']}
+physio {'ectemp': 38.1, 'psi': 5.0, 'hr_sustained_5min': 130, 'age': 35, 'channel_valid': True, 'conservative_mode': True} -> {'floor': 'T1_rest_cool_notify_supervisor', 'reasons': ['ECTEMP_GE_38.0', 'PSI_MODERATE_advisory']}
+physio {'ectemp': 39.05, 'psi': 8.6, 'hr_sustained_5min': 165, 'age': 35, 'channel_valid': True, 'conservative_mode': False} -> {'floor': 'T2_first_aider_now', 'reasons': ['ECTEMP_GE_39.0', 'PSI_VERY_HIGH', 'HR_SUSTAINED_GT_180_MINUS_AGE']}
+physio {'ectemp': 39.5, 'psi': 9.5, 'hr_sustained_5min': 170, 'age': 35, 'channel_valid': False, 'conservative_mode': False} -> {'floor': None, 'reasons': ['PHYSIO_INVALID_ignored']}
+physio {'ectemp': 37.9, 'psi': 5.5, 'hr_sustained_5min': 150, 'age': 40, 'channel_valid': True, 'conservative_mode': False} -> {'floor': 'T1_rest_cool_notify_supervisor', 'reasons': ['PSI_MODERATE_advisory', 'HR_SUSTAINED_GT_180_MINUS_AGE']}
+fusion [(2, None, None, 2), (0, 1, None, 1), (1, None, 3, 3), (2, 0, 0, 2), (0, None, 0, 0)]
