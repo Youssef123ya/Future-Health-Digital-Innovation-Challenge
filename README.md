@@ -3,6 +3,9 @@
 **Worker-first heat-strain early warning for outdoor and industrial workers in Abu Dhabi.**
 Future Health Digital Innovation Challenge — Challenge 07: Climate-Resilient Worker Health.
 
+**Live demo:** https://youssef123ya.github.io/Future-Health-Digital-Innovation-Challenge/ (runs in the browser with
+built-in demo data; rebuilt on every push to `main`).
+
 > Prototype under active development. Not a medical device. Simulated results are projections under stated
 > assumptions, not measured health outcomes.
 
