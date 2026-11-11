@@ -24,6 +24,15 @@ import { getSite, isSiteId } from '../data/sites'
 import { GAGGE, createGaggeState, gaggeStep, gaggeWaterLossG, type GaggeParams, type GaggeState } from './gagge'
 import type { Rng } from './rng'
 
+/**
+ * Version of the ground-truth model's defaults (reported next to WORLDSIM_VERSION in cohort reports, because the
+ * worldsim stamp hashes only explicit truth overrides, not changed defaults). 1.0.0: v0.1. 1.1.0 (wave 2c): sweat-paced
+ * spontaneous drinking with a habitual floor of 0.4 × the baseline; a followed reminder replaces that minute's drink.
+ * 1.2.0 (wave 2d): habitual floor calibrated to the observed hot-shift intake (0.87, {@link DRINK_CALIBRATION}); a
+ * reminder left on screen is followed at most once per 20 min (behaviour.reminderRefollowMin, {@link drinkDecisionDetail}).
+ */
+export const TRUTH_MODEL_VERSION = '1.2.0'
+
 // ─────────────────────────────── Parameters ───────────────────────────────
 
 const DEFAULT_PARAMS = {
@@ -70,7 +79,8 @@ const DEFAULT_PARAMS = {
     /**
      * Individual drinking baseline, mL/h: median 450 — the intake observed over hot outdoor shifts, Bates & Schneider
      * 2008 (J Occup Med Toxicol 3:21): 5.44 L per 12-h shift; σ_ln 0.3 [ASSUMPTION]. It sets the worker's habitual
-     * (non-sweating) floor through behaviour.habitualDrinkFraction; in the heat the sweat-replacement term drives intake.
+     * floor through behaviour.habitualDrinkFraction (calibrated so that the simulated ban-only hot shift reproduces this
+     * same 5.44 L: {@link DRINK_CALIBRATION}); in the heat the sweat-replacement term adds to it when it is larger.
      */
     drinkBaselineMedianMlPerH: 450,
     drinkBaselineSigmaLn: 0.3,
@@ -325,12 +335,23 @@ const DEFAULT_PARAMS = {
     /** Population compliance with drink reminders [ASSUMPTION; swept 0.5 / 0.7 / 0.9 in SIMULATION.md §5]. */
     reminderCompliance: 0.7,
     /**
-     * Habitual drinking floor when the worker is not sweating (e.g. resting in a cooled cabin), as a fraction of the
-     * individual baseline: 0.4 × 450 ≈ 180 mL/h median ≈ the IOM (2004) adequate beverage intake for men (≈ 3.0 L/day,
-     * ≈ 81 % of the 3.7 L total-water AI) spread over ≈ 16 waking hours (≈ 190 mL/h) [ASSUMPTION]. The 450 mL/h
-     * observation is an intake over hot shifts, so it is not applied to hours of cooled rest.
+     * A worker follows at most one drink reminder per this many minutes: a reminder that stays displayed after a
+     * followed one — because the drink went unlogged (behaviour.drinkLogging) or the device does not clear it — is not
+     * drunk again every minute it stays on screen. 20 min = the device's own reminder interval (engine/clinical.ts
+     * FLUID.REMINDER_EVERY_MIN), so a device that clears the reminder on the logged drink is never overridden
+     * [ASSUMPTION; wave 2d].
      */
-    habitualDrinkFraction: 0.4,
+    reminderRefollowMin: 20,
+    /**
+     * Habitual drinking floor at the worksite — drinking not paced by the current sweat rate (habit, breaks, meals) —
+     * as a fraction of the individual baseline: 0.87 × 450 ≈ 390 mL/h median. CALIBRATED (wave 2d) against the hot-shift
+     * observation the baseline itself cites (Bates & Schneider 2008: 5.44 L per 12-h UAE summer shift), never against
+     * any Zill outcome: method, calibration set and achieved value in {@link DRINK_CALIBRATION}. The previous 0.4 (the
+     * IOM 2004 beverage AI ≈ 3.0 L/day over ≈ 16 waking h) under-predicted that observation by 26 % (4.01 L); the v0.1
+     * model used 1.0 (the back-test keeps 1.0 and 0.4 as sensitivity variants) [ASSUMPTION: the observed hot-shift
+     * intake applies to rest at the worksite, cooled rest included].
+     */
+    habitualDrinkFraction: 0.87,
     /** Drinking-rate multiplier on breaks, and thirst gain per % above the thirst threshold [ASSUMPTION]. */
     breakDrinkFactor: 2,
     thirstGainPerPct: 0.5,
@@ -1257,18 +1278,55 @@ export interface DrinkContext {
   onBreak?: boolean
   /** Volume asked for by the reminder, mL (default TRUTH_PARAMS.behaviour.reminderMl). */
   reminderMl?: number
+  /**
+   * Minutes since this worker last followed a reminder (absent = never): within behaviour.reminderRefollowMin a reminder
+   * still on screen is not followed again (the worker drinks spontaneously instead).
+   */
+  minutesSinceFollowedReminder?: number
 }
+
+/** Result of {@link drinkDecisionDetail}: the water drunk this minute and whether it was a followed reminder. */
+export interface DrinkOutcome {
+  ml: number
+  followedReminder: boolean
+}
+
+/**
+ * Calibration of TRUTH_PARAMS.behaviour.habitualDrinkFraction (wave 2d). The method was fixed before any re-run, only
+ * the midday-ban-only arm was simulated (no Zill arm was run during the calibration), and the target is an independent
+ * field observation, never a Zill outcome. Recipe and results: docs/dev/wave2d-sim.md §1; reproduce with
+ * `npx tsx scripts/validate/drink-calibration.ts --mode=calibrate` (or --mode=eval / --mode=terciles).
+ */
+export const DRINK_CALIBRATION = Object.freeze({
+  parameter: 'behaviour.habitualDrinkFraction',
+  value: 0.87,
+  target: Object.freeze({
+    litresPer12hShift: 5.44,
+    basis: 'Bates & Schneider 2008 (J Occup Med Toxicol 3:21): mean fluid intake over 12-h summer shifts of UAE construction workers — the observation behind traits.drinkBaselineMedianMlPerH',
+  }),
+  statistic: 'mean true intake (truth.intakeMl) per worker-shift in the midday-ban-only arm (worldsim 1.3.0: listed order within task windows, midday and statutory breaks), shift 05:00–17:00',
+  calibrationSet:
+    'every hot-tercile site-day of Jun–Sep 2025 at the five sites (200 site-days; terciles of shift-mean outdoor WBGT per site, as backtest.selectCohortDays), generated workforce seed zill-workforce-v1 with 3 crews per site, seed zill-cohort-2025: 4,760 worker-shifts',
+  method: 'regula falsi on habitualDrinkFraction alone (0.4 → 4.01 L, 1.0 → 5.93 L, 0.846 → 5.36 L, 0.8675 → 5.437 L: within 0.01 L), rounded to 0.87; every other parameter unchanged',
+  achieved: Object.freeze({ litresPer12hShift: 5.45, mediumCohortHotDaysLitres: 5.56, waterLossLitresPer12hShift: 4.4 }),
+  whyTheFloor:
+    "the observed intake exceeds the model's own ban-only hot-shift water loss (4.40 L), so voluntary sweat replacement within its literature range (50–80 %) cannot reach it with the 0.4 floor — every worker at 80 % gives 4.47 L, at 100 % 5.02 L (same calibration set); the gap is drinking not paced by the current sweat rate (habit, breaks, meals), and the observed intake also covers urine output, which the model treats as excretion of any surplus. The replacement fraction keeps its literature value; the floor, whose earlier basis (a daily adequate intake) was not a worksite observation, is the calibrated parameter",
+  caveat:
+    'simulated ban-only workers work about 6 h of the 12-h shift (crew jobs shorter than the shift, task windows), probably less than the observed workers, so matching the total intake likely over-states drinking: that lowers dehydration in every arm and narrows, never widens, the simulated dehydration benefit of Zill',
+})
 
 /** Basis of {@link drinkDecision} / {@link spontaneousDrinkRateMlPerH} (quoted in docs and the Lab). */
 export const DRINK_MODEL_BASIS =
-  'Spontaneous drinking tracks sweat loss: target = max(habitual floor, replacement fraction × recent sweat rate). ' +
+  'Spontaneous drinking: target = max(habitual floor, replacement fraction × recent sweat rate), raised by thirst and at the start of a break. ' +
   'Observed voluntary intake in the heat replaces only ≈ 50–80 % of sweat loss (involuntary dehydration: Greenleaf 1992, ' +
   'Med Sci Sports Exerc 24:645; Sawka et al. 2007 ACSM position stand; citations recalled, UNVERIFIED) — the individual replacement fraction ~ N(0.6, 0.15) — ' +
   'whereas intake guidance (NIOSH 2016: 1 cup every 15–20 min; TB MED 507 2022 Table 3-2 by work intensity and heat ' +
-  'category) is what reminders ask for. The habitual floor (IOM 2004 beverage AI ≈ 3.0 L/day over ≈ 16 waking h) applies ' +
-  'when the worker is not sweating, e.g. in a cooled cabin; the hot-shift baseline (Bates & Schneider 2008, 5.44 L/12 h) ' +
-  'is not applied to hours of cooled rest [ASSUMPTION]. A followed reminder is the drink of that minute (it replaces the ' +
-  'spontaneous one, never adds to it).'
+  'category) is what reminders ask for. The habitual floor (drinking not paced by the current sweat rate: habit, breaks, meals) is ' +
+  'CALIBRATED so that the simulated midday-ban-only hot shift reproduces the observed UAE summer intake (Bates & Schneider 2008, ' +
+  '5.44 L per 12-h shift): habitualDrinkFraction 0.87, 5.45 L achieved (wave 2d) [ASSUMPTION: the floor applies at rest anywhere on site]. ' +
+  'A followed reminder is the drink of that minute (it replaces the spontaneous one, never adds to it); the worker responds to ' +
+  'every reminder the device shows, at work, at rest or idle, at most once per 20-min reminder interval (a reminder left on ' +
+  'screen is not drunk again every minute) [ASSUMPTION].'
 
 /**
  * Spontaneous (unprompted) drinking rate, mL/h: max(habitualDrinkFraction × individual baseline, individual replacement
@@ -1286,16 +1344,23 @@ export function spontaneousDrinkRateMlPerH(state: TruthState, traits: HiddenTrai
  * Water drunk this minute, mL (pass it as the next step's `drankMl`): a followed reminder (probability
  * reminderCompliance × the individual factor) is that minute's drink — the reminder volume, replacing the spontaneous
  * drink rather than adding to it; otherwise one 250-mL drink with probability rate/60/cup at the
- * {@link spontaneousDrinkRateMlPerH} rate. Always two uniforms per call (common random numbers across policies).
- * Basis: {@link DRINK_MODEL_BASIS}; TRUTH_PARAMS.behaviour [ASSUMPTION].
+ * {@link spontaneousDrinkRateMlPerH} rate. A reminder is not followed again within behaviour.reminderRefollowMin of the
+ * last followed one (`ctx.minutesSinceFollowedReminder`). Always two uniforms per call (common random numbers across
+ * policies). Basis: {@link DRINK_MODEL_BASIS}; TRUTH_PARAMS.behaviour [ASSUMPTION].
  */
-export function drinkDecision(state: TruthState, traits: HiddenTraits, ctx: DrinkContext, rng: Rng): number {
+export function drinkDecisionDetail(state: TruthState, traits: HiddenTraits, ctx: DrinkContext, rng: Rng): DrinkOutcome {
   const B = state.params.behaviour
   const u1 = rng.next(), u2 = rng.next()
-  if (!ctx.canDrink) return 0
-  if (ctx.reminder && u1 < clamp01(B.reminderCompliance * traits.complianceFactor)) return ctx.reminderMl ?? B.reminderMl
+  if (!ctx.canDrink) return { ml: 0, followedReminder: false }
+  const followable = ctx.reminder && !((ctx.minutesSinceFollowedReminder ?? Number.POSITIVE_INFINITY) < B.reminderRefollowMin)
+  if (followable && u1 < clamp01(B.reminderCompliance * traits.complianceFactor)) return { ml: ctx.reminderMl ?? B.reminderMl, followedReminder: true }
   const rate = spontaneousDrinkRateMlPerH(state, traits, ctx.onBreak === true)
-  return u2 < Math.min(1, rate / 60 / B.cupMl) ? B.cupMl : 0
+  return { ml: u2 < Math.min(1, rate / 60 / B.cupMl) ? B.cupMl : 0, followedReminder: false }
+}
+
+/** {@link drinkDecisionDetail}'s volume (same draws, same result). */
+export function drinkDecision(state: TruthState, traits: HiddenTraits, ctx: DrinkContext, rng: Rng): number {
+  return drinkDecisionDetail(state, traits, ctx, rng).ml
 }
 
 /** What the worker answers to a prompted check-in. */

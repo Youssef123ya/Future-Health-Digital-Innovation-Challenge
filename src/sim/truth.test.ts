@@ -12,9 +12,11 @@ import { createRng } from './rng'
 import {
   TRUTH_PARAMS,
   TRUTH_UNIFORMS_PER_MINUTE,
+  DRINK_CALIBRATION,
   DRINK_MODEL_BASIS,
   createWearableChain,
   drinkDecision,
+  drinkDecisionDetail,
   humanMrtFromFluxesC,
   initTruth,
   respondToCheckin,
@@ -462,15 +464,17 @@ describe('drinkDecision', () => {
   }
 
   it('spontaneous rate: habitual floor when not sweating, sweat replacement in the heat, thirst and break gains (known answers)', () => {
-    expect(B.habitualDrinkFraction).toBe(0.4)
-    const floor = 0.4 * tr.baselineDrinkMlPerH
-    expect(spontaneousDrinkRateMlPerH(withSweat(0), tr)).toBeCloseTo(floor, 9)
-    expect(spontaneousDrinkRateMlPerH(withSweat(0), tr, true)).toBeCloseTo(2 * floor, 9)
-    const hot = { ...tr, sweatReplacementFraction: 0.6 }
+    expect(B.habitualDrinkFraction).toBe(0.87)
+    // A worker with the median baseline (450 mL/h) and replacement fraction 0.6: floor 0.87 × 450 = 391.5 mL/h.
+    const hot = { ...tr, baselineDrinkMlPerH: 450, sweatReplacementFraction: 0.6 }
+    const floor = 391.5
+    expect(spontaneousDrinkRateMlPerH(withSweat(0), hot)).toBeCloseTo(floor, 9)
+    expect(spontaneousDrinkRateMlPerH(withSweat(0), hot, true)).toBeCloseTo(2 * floor, 9)
     expect(spontaneousDrinkRateMlPerH(withSweat(1000), hot)).toBeCloseTo(600, 9)
     // Thirst: 3 % dehydration is 2 % above the 1 % threshold → × (1 + 0.5 × 2) = × 2.
     expect(spontaneousDrinkRateMlPerH(withSweat(1000, 3), hot)).toBeCloseTo(1200, 9)
-    // Below the floor the sweat term does not matter.
+    // Below the floor the sweat term does not matter (0.6 × 600 = 360 < 391.5).
+    expect(spontaneousDrinkRateMlPerH(withSweat(600), hot)).toBeCloseTo(floor, 9)
     expect(spontaneousDrinkRateMlPerH(withSweat(10), hot)).toBeCloseTo(floor, 9)
     expect(DRINK_MODEL_BASIS).toMatch(/50–80 %/)
     expect(DRINK_MODEL_BASIS).toMatch(/TB MED 507/)
@@ -489,8 +493,34 @@ describe('drinkDecision', () => {
     expect(drinkDecision(withSweat(1e6, 0, never), tr, { reminder: true, canDrink: true }, createRng(3))).toBe(B.cupMl)
   })
 
+  it('a reminder still on screen is not followed again within 20 min of the last followed one (known answers)', () => {
+    expect(B.reminderRefollowMin).toBe(20)
+    const always = initTruth(p, tr, T0, { params: withTruthParams({ behaviour: { reminderCompliance: 100 } }) })
+    const thirsty = withSweat(1e6, 0, always)
+    const at = (minutesSinceFollowedReminder?: number) =>
+      drinkDecisionDetail(thirsty, tr, { reminder: true, canDrink: true, reminderMl: 300, ...(minutesSinceFollowedReminder === undefined ? {} : { minutesSinceFollowedReminder }) }, createRng(3))
+    expect(at()).toEqual({ ml: 300, followedReminder: true })
+    expect(at(Number.POSITIVE_INFINITY)).toEqual({ ml: 300, followedReminder: true })
+    expect(at(20)).toEqual({ ml: 300, followedReminder: true })
+    // Within the interval the minute is an ordinary spontaneous minute (here a certain 250-mL drink).
+    expect(at(19.99)).toEqual({ ml: B.cupMl, followedReminder: false })
+    expect(at(0)).toEqual({ ml: B.cupMl, followedReminder: false })
+    // A spontaneous drink is never a followed reminder; no drink when drinking is not possible.
+    expect(drinkDecisionDetail(thirsty, tr, { reminder: false, canDrink: true }, createRng(3))).toEqual({ ml: B.cupMl, followedReminder: false })
+    expect(drinkDecisionDetail(thirsty, tr, { reminder: true, canDrink: false }, createRng(3))).toEqual({ ml: 0, followedReminder: false })
+  })
+
+  it('drinkDecision is drinkDecisionDetail’s volume (same draws, same result)', () => {
+    const ctxs = [{ reminder: true, canDrink: true }, { reminder: false, canDrink: true, onBreak: true }, { reminder: true, canDrink: true, minutesSinceFollowedReminder: 5 }]
+    for (const ctx of ctxs) {
+      const a = createRng(21)
+      const b = createRng(21)
+      for (let i = 0; i < 500; i++) expect(drinkDecision(withSweat(800, 1.5), tr, ctx, a)).toBe(drinkDecisionDetail(withSweat(800, 1.5), tr, ctx, b).ml)
+    }
+  })
+
   it('always draws exactly two uniforms (common random numbers across policies)', () => {
-    for (const ctx of [{ reminder: true, canDrink: true }, { reminder: false, canDrink: true }, { reminder: true, canDrink: false }]) {
+    for (const ctx of [{ reminder: true, canDrink: true }, { reminder: false, canDrink: true }, { reminder: true, canDrink: false }, { reminder: true, canDrink: true, minutesSinceFollowedReminder: 3 }]) {
       const a = createRng(11)
       drinkDecision(s0, tr, ctx, a)
       const b = createRng(11)
@@ -500,8 +530,21 @@ describe('drinkDecision', () => {
     }
   })
 
+  it('the habitual floor is the calibrated value, with its target, statistic, set, method and achieved value', () => {
+    expect(DRINK_CALIBRATION.parameter).toBe('behaviour.habitualDrinkFraction')
+    expect(B.habitualDrinkFraction).toBe(DRINK_CALIBRATION.value)
+    expect(DRINK_CALIBRATION.target.litresPer12hShift).toBe(5.44)
+    expect(DRINK_CALIBRATION.target.basis).toMatch(/Bates & Schneider 2008/)
+    expect(Math.abs(DRINK_CALIBRATION.achieved.litresPer12hShift - DRINK_CALIBRATION.target.litresPer12hShift)).toBeLessThan(0.05)
+    for (const k of ['statistic', 'calibrationSet', 'method', 'whyTheFloor', 'caveat'] as const) expect(DRINK_CALIBRATION[k].length).toBeGreaterThan(40)
+    expect(DRINK_CALIBRATION.calibrationSet).toMatch(/hot-tercile/)
+    expect(DRINK_MODEL_BASIS).toMatch(/5\.44 L/)
+    expect(DRINK_MODEL_BASIS).toMatch(/CALIBRATED/)
+    expect(Object.isFrozen(DRINK_CALIBRATION.achieved)).toBe(true)
+  })
+
   it('cooled rest drinks at the habitual floor; hot work at the replacement fraction of sweat loss (statistical)', () => {
-    const floor = 0.4 * tr.baselineDrinkMlPerH
+    const floor = B.habitualDrinkFraction * tr.baselineDrinkMlPerH
     const rest = meanPerHour(withSweat(0), { reminder: false, canDrink: true }, 20_000, 4)
     expect(rest).toBeGreaterThan(floor * 0.85)
     expect(rest).toBeLessThan(floor * 1.15)

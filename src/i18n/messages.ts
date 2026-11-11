@@ -270,6 +270,12 @@ export interface DriverPhrases {
   work_bout: string
   drinks_counted: string
   drink_to_restart: string
+  // task hold (engine-owned resume), monitored mode, drink-restricted water limit (engine/risk.ts, wave 2d)
+  rule_hold: string
+  heat_hold: string
+  monitored: string
+  monitor_off: string
+  fasting_no_restart: string
 }
 
 /**
@@ -310,6 +316,12 @@ const DRIVER_PHRASE = {
   // engine/risk.ts: hydration (worker device only) and the day plan
   phs_water_credit: 'drinks_counted',
   phs_drink_to_restart: 'drink_to_restart',
+  phs_no_drink_no_restart: 'fasting_no_restart',
+  // engine/risk.ts: task hold and monitored mode (wave 2d)
+  resume_hold_regulation: 'rule_hold',
+  resume_hold_environment: 'heat_hold',
+  wbgt_screen_monitored: 'monitored',
+  monitoring_fallback_tables: 'monitor_off',
   work_rest_planned: 'work_rest',
   // engine/risk.ts: state and fusion
   clinical_latch: 'level_stays',
@@ -738,6 +750,11 @@ const EN: Catalog = {
     work_bout: 'Only a short work time is left before your next rest.',
     drinks_counted: 'The water you log is counted in your heat limit.',
     drink_to_restart: 'Drink water, log it, and rest before you start hot work again.',
+    rule_hold: 'Rest until the heat rules allow this work again.',
+    heat_hold: 'Rest until the heat limit allows this work again.',
+    monitored: 'Heat over the table limit: your own heat check and band are used.',
+    monitor_off: 'Personal heat check is off: keep to the normal work and rest times.',
+    fasting_no_restart: 'Fasting: your water limit is used up. No more hot work this shift.',
   }),
 }
 
@@ -1029,6 +1046,11 @@ const AR: Catalog = {
     work_bout: 'بقي وقت عمل قصير فقط قبل استراحتك التالية.',
     drinks_counted: 'الماء الذي تسجله يُحسب في حدك الحراري.',
     drink_to_restart: 'اشرب الماء وسجّله واسترح قبل أن تبدأ العمل في الحر مرة أخرى.',
+    rule_hold: 'استرح حتى تسمح قواعد الحر بهذا العمل مرة أخرى.',
+    heat_hold: 'استرح حتى يسمح حد الحرارة بهذا العمل مرة أخرى.',
+    monitored: 'الحرارة فوق حد الجدول: يُستخدم فحص الحرارة الخاص بك والسوار.',
+    monitor_off: 'فحص الحرارة الشخصي متوقف: التزم بأوقات العمل والراحة العادية.',
+    fasting_no_restart: 'صيام: نفد حد الماء لديك. لا مزيد من العمل في الحر في هذه الوردية.',
   }),
 }
 
@@ -1338,6 +1360,11 @@ const UR: Catalog = {
     work_bout: 'اگلے آرام سے پہلے کام کا تھوڑا سا وقت باقی ہے۔',
     drinks_counted: 'جو پانی آپ درج کرتے ہیں وہ آپ کی گرمی کی حد میں شمار ہوتا ہے۔',
     drink_to_restart: 'پانی پئیں، اسے درج کریں اور گرمی میں دوبارہ کام شروع کرنے سے پہلے آرام کریں۔',
+    rule_hold: 'آرام کریں جب تک گرمی کے قواعد اس کام کی دوبارہ اجازت نہ دیں۔',
+    heat_hold: 'آرام کریں جب تک گرمی کی حد اس کام کی دوبارہ اجازت نہ دے۔',
+    monitored: 'گرمی جدول کی حد سے زیادہ ہے: آپ کی اپنی گرمی کی جانچ اور بینڈ استعمال ہو رہے ہیں۔',
+    monitor_off: 'ذاتی گرمی کی جانچ بند ہے: کام اور آرام کے عام اوقات کی پابندی کریں۔',
+    fasting_no_restart: 'روزہ: آپ کی پانی کی حد پوری ہو گئی ہے۔ اس شفٹ میں گرمی میں مزید کام نہیں۔',
   }),
 }
 
@@ -1644,6 +1671,11 @@ const HI: Catalog = {
     work_bout: 'अगले आराम से पहले काम का थोड़ा ही समय बचा है।',
     drinks_counted: 'आप जो पानी दर्ज करते हैं, वह आपकी गर्मी की सीमा में गिना जाता है।',
     drink_to_restart: 'पानी पिएँ, उसे दर्ज करें और गर्मी में फिर से काम शुरू करने से पहले आराम करें।',
+    rule_hold: 'आराम करें, जब तक गर्मी के नियम इस काम की फिर से अनुमति न दें।',
+    heat_hold: 'आराम करें, जब तक गर्मी की सीमा इस काम की फिर से अनुमति न दे।',
+    monitored: 'गर्मी तालिका की सीमा से ऊपर है: आपकी अपनी गर्मी की जाँच और बैंड इस्तेमाल हो रहे हैं।',
+    monitor_off: 'निजी गर्मी जाँच बंद है: काम और आराम के सामान्य समय का पालन करें।',
+    fasting_no_restart: 'रोज़ा / उपवास: आपकी पानी की सीमा पूरी हो गई है। इस शिफ्ट में गर्मी में और काम नहीं।',
   }),
 }
 
@@ -1962,6 +1994,11 @@ const NE: Catalog = {
     work_bout: 'अर्को आरामभन्दा पहिले कामको थोरै समय मात्र बाँकी छ।',
     drinks_counted: 'तपाईंले दर्ता गरेको पानी तपाईंको गर्मी सीमामा गनिन्छ।',
     drink_to_restart: 'पानी पिउनुहोस्, दर्ता गर्नुहोस् र गर्मीमा फेरि काम सुरु गर्नुअघि आराम गर्नुहोस्।',
+    rule_hold: 'गर्मीका नियमले यो काम फेरि अनुमति नदिएसम्म आराम गर्नुहोस्।',
+    heat_hold: 'गर्मीको सीमाले यो काम फेरि अनुमति नदिएसम्म आराम गर्नुहोस्।',
+    monitored: 'गर्मी तालिकाको सीमाभन्दा माथि छ: तपाईंको आफ्नै गर्मी जाँच र ब्यान्ड प्रयोग भइरहेका छन्।',
+    monitor_off: 'व्यक्तिगत गर्मी जाँच बन्द छ: काम र आरामको सामान्य समय पालना गर्नुहोस्।',
+    fasting_no_restart: 'उपवास / रोजा: तपाईंको पानीको सीमा सकियो। यो सिफ्टमा गर्मीमा थप काम छैन।',
   }),
 }
 
@@ -2271,6 +2308,11 @@ const BN: Catalog = {
     work_bout: 'পরের বিশ্রামের আগে কাজের অল্প সময়ই বাকি আছে।',
     drinks_counted: 'আপনি যে পানি লিখে রাখেন, তা আপনার গরমের সীমায় গোনা হয়।',
     drink_to_restart: 'পানি পান করুন, তা লিখে রাখুন এবং গরমে আবার কাজ শুরু করার আগে বিশ্রাম নিন।',
+    rule_hold: 'গরমের নিয়ম এই কাজ আবার অনুমতি না দেওয়া পর্যন্ত বিশ্রাম নিন।',
+    heat_hold: 'গরমের সীমা এই কাজ আবার অনুমতি না দেওয়া পর্যন্ত বিশ্রাম নিন।',
+    monitored: 'গরম তালিকার সীমার উপরে: আপনার নিজের গরমের পরীক্ষা ও ব্যান্ড ব্যবহার হচ্ছে।',
+    monitor_off: 'ব্যক্তিগত গরমের পরীক্ষা বন্ধ: কাজ ও বিশ্রামের সাধারণ সময় মেনে চলুন।',
+    fasting_no_restart: 'রোজা: আপনার পানির সীমা শেষ। এই শিফটে গরমে আর কাজ নয়।',
   }),
 }
 
@@ -2590,6 +2632,11 @@ const ML: Catalog = {
     work_bout: 'അടുത്ത വിശ്രമത്തിന് മുമ്പ് കുറച്ച് ജോലി സമയം മാത്രമേ ബാക്കിയുള്ളൂ.',
     drinks_counted: 'നിങ്ങൾ രേഖപ്പെടുത്തുന്ന വെള്ളം നിങ്ങളുടെ ചൂട് പരിധിയിൽ കണക്കാക്കുന്നു.',
     drink_to_restart: 'വെള്ളം കുടിക്കുക, അത് രേഖപ്പെടുത്തുക, ചൂടിൽ വീണ്ടും ജോലി തുടങ്ങുന്നതിന് മുമ്പ് വിശ്രമിക്കുക.',
+    rule_hold: 'ചൂട് നിയമങ്ങൾ ഈ ജോലി വീണ്ടും അനുവദിക്കുന്നതുവരെ വിശ്രമിക്കുക.',
+    heat_hold: 'ചൂട് പരിധി ഈ ജോലി വീണ്ടും അനുവദിക്കുന്നതുവരെ വിശ്രമിക്കുക.',
+    monitored: 'ചൂട് പട്ടികയിലെ പരിധിക്ക് മുകളിലാണ്: നിങ്ങളുടെ സ്വന്തം ചൂട് പരിശോധനയും ബാൻഡും ഉപയോഗിക്കുന്നു.',
+    monitor_off: 'വ്യക്തിഗത ചൂട് പരിശോധന നിർത്തി: ജോലിയുടെയും വിശ്രമത്തിന്റെയും സാധാരണ സമയം പാലിക്കുക.',
+    fasting_no_restart: 'നോമ്പ്: നിങ്ങളുടെ വെള്ളത്തിന്റെ പരിധി തീർന്നു. ഈ ഷിഫ്റ്റിൽ ഇനി ചൂടിൽ ജോലി ഇല്ല.',
   }),
 }
 
@@ -2896,6 +2943,11 @@ const TL: Catalog = {
     work_bout: 'Kaunting oras na lang ng trabaho bago ang susunod mong pahinga.',
     drinks_counted: 'Binibilang sa limitasyon mo sa init ang tubig na itinatala mo.',
     drink_to_restart: 'Uminom ng tubig, itala ito, at magpahinga bago ka muling magtrabaho sa init.',
+    rule_hold: 'Magpahinga hanggang payagan muli ng mga patakaran sa init ang trabahong ito.',
+    heat_hold: 'Magpahinga hanggang payagan muli ng limitasyon sa init ang trabahong ito.',
+    monitored: 'Lampas sa limitasyon ng talahanayan ang init: ginagamit ang sarili mong heat check at band.',
+    monitor_off: 'Nakapatay ang personal na heat check: sundin ang karaniwang oras ng trabaho at pahinga.',
+    fasting_no_restart: 'Nag-aayuno: ubos na ang limitasyon mo sa tubig. Wala nang mainit na trabaho ngayong shift.',
   }),
 }
 
@@ -3074,4 +3126,261 @@ export const reviewStatus: Readonly<Record<LangCode, TranslationReview>> = Objec
 export function isDeployable(lang: LangCode): boolean {
   const status = reviewStatus[lang] as TranslationReview | undefined
   return status !== undefined && status.pending.length === 0
+}
+
+// ─────────────────────────────── Console phrases (supervisor, first aider, occupational health) ───────────────────────────────
+
+/**
+ * Short console texts (supervisor board, first aider, occupational health) that the engine and the selectors produce
+ * in English: the pooled supervisor phrases (engine/privacy.ts `POOLED_DRIVERS`, English equal, tested), the alert frame
+ * and basis labels, the designed-suppression label, the generic alert reasons (engine/alerts.ts `reason.*` keys), the
+ * first aider's location words and the no-data notice. Kept apart from the worker-facing {@link Catalog}, so its
+ * completeness tests are unchanged. Every phrase is plain and non-clinical and never names a personal reason; the same
+ * review status applies ({@link reviewStatus}): English is the source, every other language a machine-assisted draft.
+ * Basis: wave 2d governance brief task 2 (localise 'Site heat' / 'Site rule' and every hard-coded English selector
+ * label); ARCHITECTURE §1 principle 5 (supervisors see what to do, never the personal reason).
+ */
+export interface ConsolePhrases {
+  /** Pooled: the worker may not return to heat work now, whatever the reason (privacy.ts `not_cleared_for_heat_work`). */
+  not_cleared: string
+  /** Pooled: the worker's device sets their work and rest (privacy.ts `device_directed_rest`). */
+  device_rest: string
+  /** Frame label of an exposure alert driven by site heat (environment channel). */
+  frame_heat: string
+  /** Frame label of an exposure alert driven by a site rule (regulation channel). */
+  frame_rule: string
+  /** Basis label of an exposure alert (a shared site condition). */
+  basis_exposure: string
+  /** Basis label of an individual alert (about this worker; never says which personal channel). */
+  basis_individual: string
+  /**
+   * Designed suppression (ANSI/ISA-18.2): the action is already in force (through the plan or the worker's device), so
+   * the alert was logged and not notified. One wording for both causes (the device cause can reveal wearable consent).
+   */
+  suppressed: string
+  /** engine/alerts.ts `reason.heat_exposure`. */
+  reason_heat_exposure: string
+  /** engine/alerts.ts `reason.regulation`. */
+  reason_regulation: string
+  /** engine/alerts.ts `reason.projection`. */
+  reason_projection: string
+  /** engine/alerts.ts `reason.personal_check`. */
+  reason_personal_check: string
+  /** engine/alerts.ts `reason.first_aid_check`. */
+  reason_first_aid_check: string
+  /** engine/alerts.ts `reason.emergency`. */
+  reason_emergency: string
+  /** Shown instead of a reason that fails the clinical-text filter (state/selectors.ts). */
+  reason_withheld: string
+  /** First aider's location words (state/selectors.ts `LOCATION_TEXT`). */
+  location_sun: string
+  location_shade: string
+  location_indoor_cool: string
+  /** The worker is not on a task (first aider's location label). */
+  no_task: string
+  /** No assessment from the worker's device yet. */
+  no_data: string
+}
+
+const CONSOLE_EN: ConsolePhrases = {
+  not_cleared: 'Not cleared for heat work now: assign cooler work; the device will say when to return.',
+  device_rest: "Device-directed rest: follow the work and rest times on the worker's device.",
+  frame_heat: 'Site heat',
+  frame_rule: 'Site rule',
+  basis_exposure: 'Site condition',
+  basis_individual: 'This worker',
+  suppressed: 'Action already in force: logged, not notified',
+  reason_heat_exposure: 'Heat exposure is above the limit for this work',
+  reason_regulation: 'A heat-work regulation applies now',
+  reason_projection: 'Heat-strain model limit approaching at the current work rate',
+  reason_personal_check: 'Personal check flagged on the worker’s device',
+  reason_first_aid_check: 'First-aid check needed',
+  reason_emergency: 'Emergency response needed now',
+  reason_withheld: 'Reason kept on the worker’s device',
+  location_sun: 'in the sun',
+  location_shade: 'in shade',
+  location_indoor_cool: 'in the cooled rest area',
+  no_task: 'not on a task',
+  no_data: 'No assessment from the worker device yet (or the engine does not run under this policy).',
+}
+
+const CONSOLE_AR: ConsolePhrases = {
+  not_cleared: 'غير مسموح بالعمل في الحر الآن: كلّفه بعمل أبرد؛ سيخبره الجهاز متى يعود.',
+  device_rest: 'راحة يحددها الجهاز: اتبع أوقات العمل والراحة على جهاز العامل.',
+  frame_heat: 'حرارة الموقع',
+  frame_rule: 'قاعدة الموقع',
+  basis_exposure: 'حالة الموقع',
+  basis_individual: 'هذا العامل',
+  suppressed: 'الإجراء مطبّق بالفعل: مسجّل دون إشعار',
+  reason_heat_exposure: 'التعرض للحرارة فوق الحد لهذا العمل',
+  reason_regulation: 'تنطبق الآن قاعدة تنظيمية للعمل في الحر',
+  reason_projection: 'يقترب حد نموذج الإجهاد الحراري بمعدل العمل الحالي',
+  reason_personal_check: 'فحص شخصي مُشار إليه على جهاز العامل',
+  reason_first_aid_check: 'مطلوب فحص إسعاف أولي',
+  reason_emergency: 'مطلوب استجابة طارئة الآن',
+  reason_withheld: 'السبب محفوظ على جهاز العامل',
+  location_sun: 'في الشمس',
+  location_shade: 'في الظل',
+  location_indoor_cool: 'في منطقة الراحة المبرّدة',
+  no_task: 'بلا مهمة حالياً',
+  no_data: 'لا يوجد تقييم من جهاز العامل بعد (أو لا يعمل المحرك ضمن هذه السياسة).',
+}
+
+const CONSOLE_HI: ConsolePhrases = {
+  not_cleared: 'अभी गर्मी में काम की अनुमति नहीं: ठंडी जगह का काम दें; लौटने का समय डिवाइस बताएगा।',
+  device_rest: 'डिवाइस से तय आराम: कर्मचारी के डिवाइस पर दिए काम और आराम के समय का पालन करें।',
+  frame_heat: 'साइट की गर्मी',
+  frame_rule: 'साइट का नियम',
+  basis_exposure: 'साइट की स्थिति',
+  basis_individual: 'यह कर्मचारी',
+  suppressed: 'कार्रवाई पहले से लागू: दर्ज, सूचना नहीं भेजी',
+  reason_heat_exposure: 'इस काम के लिए गर्मी का संपर्क सीमा से ऊपर है',
+  reason_regulation: 'अभी गर्मी में काम का एक नियम लागू है',
+  reason_projection: 'मौजूदा काम की गति पर गर्मी-तनाव मॉडल की सीमा नज़दीक है',
+  reason_personal_check: 'कर्मचारी के डिवाइस पर निजी जाँच चिह्नित',
+  reason_first_aid_check: 'प्राथमिक उपचार जाँच ज़रूरी',
+  reason_emergency: 'अभी आपातकालीन कार्रवाई ज़रूरी',
+  reason_withheld: 'कारण कर्मचारी के डिवाइस पर रखा गया है',
+  location_sun: 'धूप में',
+  location_shade: 'छाँव में',
+  location_indoor_cool: 'ठंडे आराम क्षेत्र में',
+  no_task: 'किसी काम पर नहीं',
+  no_data: 'कर्मचारी के डिवाइस से अभी कोई आकलन नहीं (या इस नीति में इंजन नहीं चलता)।',
+}
+
+const CONSOLE_UR: ConsolePhrases = {
+  not_cleared: 'ابھی گرمی میں کام کی اجازت نہیں: ٹھنڈی جگہ کا کام دیں؛ واپسی کا وقت ڈیوائس بتائے گی۔',
+  device_rest: 'ڈیوائس کا مقرر کردہ آرام: کارکن کی ڈیوائس پر دیے گئے کام اور آرام کے اوقات پر عمل کریں۔',
+  frame_heat: 'سائٹ کی گرمی',
+  frame_rule: 'سائٹ کا اصول',
+  basis_exposure: 'سائٹ کی حالت',
+  basis_individual: 'یہ کارکن',
+  suppressed: 'کارروائی پہلے سے نافذ ہے: درج، اطلاع نہیں بھیجی گئی',
+  reason_heat_exposure: 'اس کام کے لیے گرمی کا سامنا حد سے زیادہ ہے',
+  reason_regulation: 'ابھی گرمی میں کام کا ایک ضابطہ لاگو ہے',
+  reason_projection: 'موجودہ کام کی رفتار پر گرمی کے دباؤ کے ماڈل کی حد قریب ہے',
+  reason_personal_check: 'کارکن کی ڈیوائس پر ذاتی جانچ کی نشاندہی',
+  reason_first_aid_check: 'ابتدائی طبی امداد کی جانچ ضروری ہے',
+  reason_emergency: 'ابھی ہنگامی کارروائی ضروری ہے',
+  reason_withheld: 'وجہ کارکن کی ڈیوائس پر محفوظ ہے',
+  location_sun: 'دھوپ میں',
+  location_shade: 'سائے میں',
+  location_indoor_cool: 'ٹھنڈے آرام کے علاقے میں',
+  no_task: 'کسی کام پر نہیں',
+  no_data: 'کارکن کی ڈیوائس سے ابھی کوئی جائزہ نہیں (یا اس پالیسی میں انجن نہیں چلتا)۔',
+}
+
+const CONSOLE_ML: ConsolePhrases = {
+  not_cleared: 'ഇപ്പോൾ ചൂടിലെ ജോലിക്ക് അനുമതിയില്ല: തണുത്ത ജോലി നൽകുക; എപ്പോൾ മടങ്ങാമെന്ന് ഉപകരണം പറയും.',
+  device_rest: 'ഉപകരണം നിശ്ചയിക്കുന്ന വിശ്രമം: തൊഴിലാളിയുടെ ഉപകരണത്തിലെ ജോലി, വിശ്രമ സമയങ്ങൾ പാലിക്കുക.',
+  frame_heat: 'സൈറ്റിലെ ചൂട്',
+  frame_rule: 'സൈറ്റ് നിയമം',
+  basis_exposure: 'സൈറ്റിലെ സാഹചര്യം',
+  basis_individual: 'ഈ തൊഴിലാളി',
+  suppressed: 'നടപടി ഇതിനകം പ്രാബല്യത്തിൽ: രേഖപ്പെടുത്തി, അറിയിപ്പില്ല',
+  reason_heat_exposure: 'ഈ ജോലിക്ക് ചൂടിന്റെ സമ്പർക്കം പരിധിക്ക് മുകളിലാണ്',
+  reason_regulation: 'ചൂടിലെ ജോലിക്കുള്ള ഒരു ചട്ടം ഇപ്പോൾ ബാധകമാണ്',
+  reason_projection: 'ഇപ്പോഴത്തെ ജോലി വേഗത്തിൽ ചൂട്-സമ്മർദ്ദ മാതൃകയുടെ പരിധി അടുക്കുന്നു',
+  reason_personal_check: 'തൊഴിലാളിയുടെ ഉപകരണത്തിൽ വ്യക്തിഗത പരിശോധന സൂചിപ്പിച്ചു',
+  reason_first_aid_check: 'പ്രഥമശുശ്രൂഷ പരിശോധന ആവശ്യമാണ്',
+  reason_emergency: 'ഇപ്പോൾ അടിയന്തര നടപടി ആവശ്യമാണ്',
+  reason_withheld: 'കാരണം തൊഴിലാളിയുടെ ഉപകരണത്തിൽ സൂക്ഷിച്ചിരിക്കുന്നു',
+  location_sun: 'വെയിലിൽ',
+  location_shade: 'തണലിൽ',
+  location_indoor_cool: 'തണുപ്പിച്ച വിശ്രമ സ്ഥലത്ത്',
+  no_task: 'ഒരു ജോലിയിലുമില്ല',
+  no_data: 'തൊഴിലാളിയുടെ ഉപകരണത്തിൽ നിന്ന് ഇതുവരെ വിലയിരുത്തലില്ല (അല്ലെങ്കിൽ ഈ നയത്തിൽ എഞ്ചിൻ പ്രവർത്തിക്കുന്നില്ല).',
+}
+
+const CONSOLE_BN: ConsolePhrases = {
+  not_cleared: 'এখন গরমে কাজের অনুমতি নেই: ঠান্ডা জায়গার কাজ দিন; কখন ফিরবে তা যন্ত্র জানাবে।',
+  device_rest: 'যন্ত্র-নির্ধারিত বিশ্রাম: কর্মীর যন্ত্রে দেওয়া কাজ ও বিশ্রামের সময় মেনে চলুন।',
+  frame_heat: 'সাইটের গরম',
+  frame_rule: 'সাইটের নিয়ম',
+  basis_exposure: 'সাইটের অবস্থা',
+  basis_individual: 'এই কর্মী',
+  suppressed: 'ব্যবস্থা আগেই কার্যকর: নথিভুক্ত, বিজ্ঞপ্তি পাঠানো হয়নি',
+  reason_heat_exposure: 'এই কাজের জন্য গরমের সংস্পর্শ সীমার উপরে',
+  reason_regulation: 'এখন গরমে কাজের একটি নিয়ম প্রযোজ্য',
+  reason_projection: 'বর্তমান কাজের গতিতে তাপ-চাপ মডেলের সীমা কাছে আসছে',
+  reason_personal_check: 'কর্মীর যন্ত্রে ব্যক্তিগত পরীক্ষা চিহ্নিত',
+  reason_first_aid_check: 'প্রাথমিক চিকিৎসা পরীক্ষা দরকার',
+  reason_emergency: 'এখনই জরুরি সাড়া দরকার',
+  reason_withheld: 'কারণ কর্মীর যন্ত্রে রাখা আছে',
+  location_sun: 'রোদে',
+  location_shade: 'ছায়ায়',
+  location_indoor_cool: 'ঠান্ডা বিশ্রাম এলাকায়',
+  no_task: 'কোনো কাজে নেই',
+  no_data: 'কর্মীর যন্ত্র থেকে এখনো কোনো মূল্যায়ন নেই (অথবা এই নীতিতে ইঞ্জিন চলে না)।',
+}
+
+const CONSOLE_TL: ConsolePhrases = {
+  not_cleared: 'Hindi pa puwede sa trabaho sa init: magbigay ng mas malamig na trabaho; sasabihin ng device kung kailan babalik.',
+  device_rest: 'Pahingang itinakda ng device: sundin ang oras ng trabaho at pahinga sa device ng manggagawa.',
+  frame_heat: 'Init sa site',
+  frame_rule: 'Patakaran ng site',
+  basis_exposure: 'Kondisyon ng site',
+  basis_individual: 'Ang manggagawang ito',
+  suppressed: 'Umiiral na ang aksyon: naitala, walang abiso',
+  reason_heat_exposure: 'Lampas sa limitasyon ang init para sa trabahong ito',
+  reason_regulation: 'May patakaran sa trabaho sa init na umiiral ngayon',
+  reason_projection: 'Malapit na ang limitasyon ng heat-strain model sa kasalukuyang bilis ng trabaho',
+  reason_personal_check: 'May personal na check na naka-flag sa device ng manggagawa',
+  reason_first_aid_check: 'Kailangan ng first-aid check',
+  reason_emergency: 'Kailangan ng emergency response ngayon',
+  reason_withheld: 'Nasa device ng manggagawa ang dahilan',
+  location_sun: 'nasa araw',
+  location_shade: 'nasa lilim',
+  location_indoor_cool: 'nasa malamig na pahingahan',
+  no_task: 'walang gawain',
+  no_data: 'Wala pang assessment mula sa device ng manggagawa (o hindi tumatakbo ang engine sa patakarang ito).',
+}
+
+const CONSOLE_NE: ConsolePhrases = {
+  not_cleared: 'अहिले गर्मीमा काम गर्न अनुमति छैन: चिसो ठाउँको काम दिनुहोस्; फर्कने समय उपकरणले बताउनेछ।',
+  device_rest: 'उपकरणले तोकेको आराम: कामदारको उपकरणमा दिइएको काम र आरामको समय पालना गर्नुहोस्।',
+  frame_heat: 'साइटको गर्मी',
+  frame_rule: 'साइटको नियम',
+  basis_exposure: 'साइटको अवस्था',
+  basis_individual: 'यो कामदार',
+  suppressed: 'कारबाही पहिल्यै लागू छ: दर्ता गरियो, सूचना पठाइएन',
+  reason_heat_exposure: 'यस कामका लागि गर्मीको सम्पर्क सीमाभन्दा माथि छ',
+  reason_regulation: 'अहिले गर्मीमा कामको एउटा नियम लागू छ',
+  reason_projection: 'हालको कामको गतिमा ताप-तनाव मोडेलको सीमा नजिकिँदैछ',
+  reason_personal_check: 'कामदारको उपकरणमा व्यक्तिगत जाँच संकेत गरिएको',
+  reason_first_aid_check: 'प्राथमिक उपचार जाँच आवश्यक',
+  reason_emergency: 'अहिले आपतकालीन प्रतिक्रिया आवश्यक',
+  reason_withheld: 'कारण कामदारको उपकरणमा राखिएको छ',
+  location_sun: 'घाममा',
+  location_shade: 'छायाँमा',
+  location_indoor_cool: 'चिसो आराम क्षेत्रमा',
+  no_task: 'कुनै काममा छैन',
+  no_data: 'कामदारको उपकरणबाट अहिलेसम्म कुनै मूल्याङ्कन छैन (वा यो नीतिमा इन्जिन चल्दैन)।',
+}
+
+/** Console phrases by language ({@link ConsolePhrases}); frozen at module load. */
+export const CONSOLE_PHRASES: Readonly<Record<LangCode, Readonly<ConsolePhrases>>> = deepFreeze({
+  en: CONSOLE_EN,
+  ar: CONSOLE_AR,
+  hi: CONSOLE_HI,
+  ur: CONSOLE_UR,
+  ml: CONSOLE_ML,
+  bn: CONSOLE_BN,
+  tl: CONSOLE_TL,
+  ne: CONSOLE_NE,
+})
+
+/** A console phrase id. */
+export type ConsolePhraseId = keyof ConsolePhrases
+
+/** Every console phrase id, in source (English) order. */
+export const CONSOLE_PHRASE_IDS: readonly ConsolePhraseId[] = Object.freeze(Object.keys(CONSOLE_EN) as ConsolePhraseId[])
+
+/**
+ * A console phrase in `lang`, falling back to the English source when the language has no usable entry [ENG,
+ * fail-safe: a console never shows a blank]. Pure. Basis: see {@link ConsolePhrases}.
+ */
+export function consolePhrase(lang: LangCode, id: ConsolePhraseId): string {
+  const text = (CONSOLE_PHRASES as Partial<Record<string, Readonly<ConsolePhrases>>>)[lang]?.[id]
+  return typeof text === 'string' && text.trim() !== '' ? text : CONSOLE_EN[id]
 }

@@ -17,11 +17,26 @@
  *   first aider, supervisor or occupational-health nurse), after which PHS restarts from a conservative post-rest
  *   state (phs_iso7933.md §11.4: rest never "earns back" exposure unless clinically reviewed);
  * - water-loss limit with logged drinking: the ISO 7933 drink-allowed D_max (5 % of body mass of sweat, which implies
- *   ≈ 40 % replacement) becomes max(5 %, 3 % + credited logged intake), never below ISO; a reached water-loss limit
- *   restarts after the reviewed recovery once the net loss is ≤ 2 % of body mass ({@link RISK_THRESHOLDS}.hydrationCredit);
+ *   ≈ 40 % replacement) becomes min(7.5 %, max(5 %, 3 % + credited logged intake)), never below ISO and never above
+ *   the ISO 7933:2004 mean D_max; a reached water-loss limit restarts after the reviewed recovery once the net loss is
+ *   ≤ 2 % of body mass ({@link RISK_THRESHOLDS}.hydrationCredit); a drink logged in a step never releases a hold or
+ *   skips the reviewed recovery in that step;
  * - projection hold: a projection-driven stop (< 15 min to a limit) stays until the engine's resume check projects
  *   ≥ 25 min for the task the worker returns to (15 + a 10-min minimum bout: an ANSI/ISA-18.2 deadband), with a rest
- *   estimate and a "task not feasible now" flag ({@link RISK_THRESHOLDS}.resume); the release skips the dwell;
+ *   estimate and a "task not feasible now" flag ({@link RISK_THRESHOLDS}.resume); the release skips the dwell; a task to
+ *   resume outside the model's scope is never released by the check (the normal dwell applies);
+ * - task hold: a stop that the current task drives through the regulation channel (ADOSH TWL-zone exclusion or
+ *   withdrawal, a WBGT stop limit, the midday break) or the environment channel (table stop, acclimatisation budget) —
+ *   or that the task to resume meets while a resting worker's device already shows stop — stays while the worker rests,
+ *   until the task to resume, assessed at the current conditions, is free of those stops and passes the ISO 7933 resume
+ *   check (the engine owns every resume decision; the midday break releases at its end; an exhausted budget not this
+ *   shift; a failing resume check hands over to the projection hold) ({@link RISK_THRESHOLDS}.taskHold);
+ * - monitored mode (WorkerContext.planBasis 'monitored', occupational-health sign-off): for an acclimatised worker in
+ *   standard mode with valid wearable monitoring and an applicable ISO 7933 model, the WBGT tables are a screen (ISO
+ *   7243:2017; ACGIH TLV decision flow; NIOSH 2016): the environment level is capped at caution and the projection
+ *   and physiology channels enforce; any lapse falls back to the tables in the same step ({@link RISK_THRESHOLDS}.monitoring);
+ * - drink reminders follow heat exposure: hot work (and 30 min after it), or rest/idle outside a cooled area at
+ *   WBGT_eff ≥ 25.6 °C (clinical.FLUID; TB MED 507 heat category 1);
  * - acclimatisation exposure budget: hot-work minutes today against maxExposureFraction × 480 min [ENG].
  *
  * Rest areas (ARCHITECTURE.md §5): the rest term of the 1-h TWA is the site's rest area — an air-conditioned cabin
@@ -77,6 +92,7 @@ import {
 } from './limits'
 import {
   DEFAULT_RULE_PACK,
+  middayBreakWindow,
   regulatoryFloor,
   stricterWorkRest,
   twlWorkCategory,
@@ -110,12 +126,17 @@ import {
   FLUID,
   SYMPTOM_RULES,
   conservativeMode,
+  drinkReminderExposure,
   hydrationChannel,
   physioDisabled,
   symptomsChannel,
   type ConservativeModeResult,
+  type DrinkReminder,
+  type HeatExposure,
 } from './clinical'
 import { DAY_MS, DUBAI_OFFSET_MS, HOUR_MS, MINUTE_MS } from './time'
+// Type-only (erased at runtime: planner.ts imports this module).
+import type { PlanBasis } from './planner'
 
 // ═════════════════════════════════════ Public types ═════════════════════════════════════
 
@@ -136,6 +157,24 @@ export interface WorkerEnvStatus {
   /** Data-quality drivers (channel 'environment'), merged into the assessment. */
   drivers: RiskDriver[]
 }
+
+/**
+ * Basis of the day plan and of the environment channel (planner.ts PlanBasis, re-exported): 'tables' (default) — the
+ * NIOSH/ACGIH WBGT work/rest tables enforce; 'monitored' — a site opt-in with occupational-health sign-off where, for a
+ * worker whose monitoring is valid ({@link RISK_THRESHOLDS}.monitoring), the tables are a screen and the worker's own
+ * ISO 7933 projection and the physiological strain criteria enforce (ISO 7243:2017 clause 1 / Annex A: above the
+ * reference value, reduce the stress or analyse in detail with ISO 7933; ACGIH TLV decision flow: detailed analysis
+ * and/or physiological monitoring above the screen; NIOSH 2016 §8: physiological monitoring above the REL).
+ */
+export type { PlanBasis }
+
+/**
+ * Why monitored mode is not in force for a worker planned under it (worker device only: it can reveal consent or
+ * health status): 'status' — not acclimatised or in the stricter personal mode; 'consent' — no wearable consent, no
+ * wearable, or heart-rate rules off for this worker; 'model' — ISO 7933 not applicable, clothing values unverified or
+ * inputs outside its validity range; 'data' — the wearable signal is not valid (warm-up, or too few valid minutes).
+ */
+export type MonitoringFallbackReason = 'consent' | 'data' | 'model' | 'status'
 
 /** Everything the engine needs about the worker's situation at `now`. */
 export interface WorkerContext {
@@ -162,12 +201,19 @@ export interface WorkerContext {
    */
   restArea?: Site['restArea']
   /**
-   * The task the worker returns to after rest (the device knows the assignment), used by the resume check of a
-   * projection hold ({@link RISK_THRESHOLDS}.resume). Absent or null → the current task, else the last task seen this
-   * shift (kept in {@link WorkerEngineState.lastTask}) [protective]. Its location is the current one when it is the
-   * current task, the last one seen for the last task, else sun/shade from `Task.inSun`.
+   * The task the worker returns to after rest (the device knows the assignment), used by the resume checks of a
+   * projection hold ({@link RISK_THRESHOLDS}.resume) and of a task hold (regulation/environment stops). Absent or null →
+   * the current task, else the last task seen this shift (kept in {@link WorkerEngineState.lastTask}) [protective]. Its
+   * location is the current one when it is the current task, the last one seen for the last task, else sun/shade from
+   * `Task.inSun`.
    */
   resumeTask?: Task | null
+  /**
+   * The day plan's basis ({@link PlanBasis}); absent → 'tables' (bit-identical to the engine before monitored mode).
+   * 'monitored' takes effect per worker and per step only while the monitoring conditions hold
+   * ({@link RISK_THRESHOLDS}.monitoring); otherwise the tables apply in the same step.
+   */
+  planBasis?: PlanBasis
   /**
    * Work minutes per hour the day plan allows for the current task this hour (planner.ts PlanBlock.workMinPerHour,
    * which includes the planner's ISO 7933 screen). When present, assessment.workMinPerHour = min(own allowance,
@@ -295,6 +341,44 @@ export interface ProjectionHold {
   checkKey: string | null
 }
 
+/** A channel whose task-dependent stop holds the worker at rest (see {@link TaskHold}). */
+export type TaskHoldChannel = 'regulation' | 'environment'
+
+/**
+ * What a task hold waits for (driver text and release rule): 'midday_break' — the calendar ban on outdoor work in the
+ * sun (release at its end); 'heat_zone' — an ADOSH TWL-zone rule (unacclimatised exclusion, or no ordinary work in the
+ * zone); 'wbgt_stop' — a pack's WBGT stop-work limit; 'exposure_limit' — the WBGT table stop (allowed work fraction
+ * < 0.25); 'exposure_budget' — today's acclimatisation exposure budget is used up (no release this shift).
+ */
+export type TaskHoldCause = 'midday_break' | 'heat_zone' | 'wbgt_stop' | 'exposure_limit' | 'exposure_budget'
+
+/**
+ * A regulation- or environment-channel stop driven by the current task (or met by the task to resume of a resting
+ * worker whose device already shows stop), held while the worker rests until the task to resume — assessed at the
+ * current conditions, its location and clothing — is free of those stops and passes the ISO 7933 resume check (the
+ * engine owns the resume decision; it replaces the simulator's resumeTaskAllowed of worldsim 1.2.0). While the worker is
+ * at a task the hold follows that task's live stops and forces nothing; at a task free of them it ends (normal dwell).
+ * Plain data, part of {@link WorkerEngineState}.
+ */
+export interface TaskHold {
+  /** When the hold engaged. */
+  since: number
+  /** The task worked when the stop engaged. */
+  taskId: string | null
+  /** Channels that stop the task to resume at the last check (the channels held at stop). */
+  heldBy: TaskHoldChannel[]
+  /** What the hold waits for, at the last check. */
+  causes: TaskHoldCause[]
+  /** Time of the last check (null before the first). */
+  checkedT: number | null
+  /** The task the last check assessed (null = no task to resume). */
+  checkedTaskId: string | null
+  /** Earliest time a release can happen: the midday-break end, the next step, or null (no release this shift). */
+  nextCheckT: number | null
+  /** No release this shift for the task to resume (acclimatisation budget used up): a non-hot task is needed. */
+  infeasible: boolean
+}
+
 /** The task released by the last resume check (bout countdown on the worker screen). */
 export interface ResumeBout {
   taskId: string | null
@@ -307,23 +391,67 @@ export interface DwellTrack {
   pending: { level: RiskLevel; since: number } | null
 }
 
+/** A channel that holds the worker at rest until its resume check passes. */
+export type ResumeHolder = 'projection' | TaskHoldChannel
+
 /**
- * Resume state for the worker's own screen ({@link WorkerStepDetail.resume}); null when there is no hold, no release
- * this step and no bout countdown.
+ * Resume state for the worker's own screen and the simulator ({@link WorkerStepDetail.resume}); null when there is no
+ * hold, no release this step and no bout countdown. The engine owns every resume decision: a resting worker may resume
+ * when `held` is false (the displayed level then follows the other channels).
  */
 export interface ResumeDetail {
-  /** A projection hold is active after this step. */
+  /** A projection or task hold is active after this step (heldBy is not empty). */
   held: boolean
-  /** The task the resume check projects (the hold) or the task released (the countdown); null = no task. */
+  /** The holds active after this step: 'projection' (ISO 7933 resume check), 'regulation' and/or 'environment' (task hold). */
+  heldBy: ResumeHolder[]
+  /** The task the resume checks assess (a hold) or the task released (the countdown); null = no task. */
   taskId: string | null
-  /** True when the resume check passed (the release step and the countdown that follows). */
+  /** True when the resume checks passed (the release step and the countdown that follows). */
   ready: boolean
   /** "About N min of work left before the next rest": floor(minutes to the limit − 15) while 15–45 min after a release. */
   boutMin: number | null
-  /** Estimated rest before the check passes (5-min increments up to 60 min; 0 at the release); null when unknown. */
+  /** Estimated rest before the projection check passes (5-min increments up to 60 min; 0 at the release); null when unknown. */
   estRestMin: number | null
-  /** Even 60 min of rest would not pass the check: a lighter or cooler task is needed. */
+  /** No release now for the task to resume: even 60 min of rest would not pass the projection check, or today's acclimatisation budget is used up. */
   infeasibleNow: boolean
+  /**
+   * Earliest time of the next check that could release the holds (the later of the active holds): the next projection
+   * cycle, the midday-break end, or the next step; null when no release is possible this shift for the task to resume.
+   */
+  nextCheckT: number | null
+}
+
+/**
+ * The environment channel's basis for the worker's own screen, the UI and the simulator ({@link WorkerStepDetail.environment}).
+ * `enforced` says whether the NIOSH/ACGIH table work/rest cycle limits work minutes this step.
+ */
+export interface EnvironmentDetail {
+  /** The plan basis in the context ('tables' when absent). */
+  basis: PlanBasis
+  /** Monitored mode is in force this step (basis 'monitored' and every monitoring condition holds). */
+  monitored: boolean
+  /** The table work/rest cycle is enforced (always under 'tables'; under 'monitored' while monitoring is not valid). */
+  enforced: boolean
+  /** The table cycle's work minutes per hour when the tables limit work (allowed fraction < 1), else null. Shown as a guide while monitored. */
+  workMinPerHour: number | null
+  /** Why monitored mode is not in force for a worker planned under it (worker device only); null otherwise. */
+  fallbackReason: MonitoringFallbackReason | null
+}
+
+/**
+ * Drink reminders this step ({@link WorkerStepDetail.drink}): reminders follow heat exposure (clinical.drinkReminderExposure).
+ * The simulator's reminder is `reminder === 'drink'`.
+ */
+export interface DrinkReminderDetail {
+  /** Heat exposure for reminders: hot work (or within 30 min after it), or rest/idle outside a cooled area at WBGT_eff ≥ 25.6 °C. */
+  exposed: boolean
+  exposure: HeatExposure
+  /** 'drink': a 250 mL reminder is due now; 'shade': fasting while exposed — rest-in-shade guidance instead; null: none. */
+  reminder: DrinkReminder
+  /** When the next 250 mL reminder is due while exposed (≤ now = due now); null while reminders are suppressed. */
+  nextReminderAtMs: number | null
+  /** WBGT_eff at the worker's location in their resting clothing (+ data margin), °C — the rest/idle exposure input. */
+  locationWbgtEffC: number
 }
 
 /**
@@ -337,10 +465,17 @@ export interface PhsWaterDetail {
   creditedIntakeL: number
   /** Net loss as % of body mass: sweat − max(credit, 0.4 × sweat) with drinking allowed; sweat − credit when restricted. */
   netLossPctBM: number
-  /** The water-loss threshold applied: max(5 %, 3 % + credit) of body mass, or the ISO 3 % while drinking is restricted. */
+  /**
+   * The water-loss threshold applied: min(7.5 %, max(5 %, 3 % + credit)) of body mass, or the ISO 3 % while drinking is
+   * restricted.
+   */
   thresholdL: number
   /** Drinking restricted (fasting now or earlier this exposure): the ISO 7933 drink = 0 criterion applies unchanged. */
   restricted: boolean
+  /** The credit raises the threshold above the ISO 7933 5 % (electrolytes are then recommended). */
+  extended: boolean
+  /** The threshold is at the 7.5 % ceiling (ISO 7933:2004 mean D_max): more logged drinking no longer extends it. */
+  capped: boolean
 }
 
 /** Plain, serialisable per-worker state. */
@@ -379,8 +514,23 @@ export interface WorkerEngineState {
   lastTask: { task: Task; location: WorkerLocation } | null
   /** The task released by the last resume check, for the bout countdown (null otherwise). */
   resumeBout: ResumeBout | null
-  /** Dwell track of the fused level without the projection channel: a resume release drops to it at once. */
+  /**
+   * Dwell track of the fused level without the projection channel and without a task hold's forced stop (the live
+   * regulation and environment levels): a resume release (projection or task hold) drops to it at once.
+   */
   dwellExProjection: DwellTrack
+  /**
+   * Dwell track of the fused level without a task hold's forced stop (the live regulation and environment levels; the
+   * projection channel included): a task-hold release drops to it at once, so the projection's and the other channels'
+   * own dwell still applies. Missing in older states (then the fused track: protective).
+   */
+  dwellExTaskHold: DwellTrack
+  /** A regulation/environment stop driven by the task, held until its resume check passes (null otherwise; reset at a new shift). */
+  taskHold: TaskHold | null
+  /** Last step at which monitored mode was in force this shift (null if never): a later lapse shows the fallback driver. */
+  monitorValidT: number | null
+  /** Last hot-work minute this shift (drink reminders continue 30 min after it; null if none). */
+  lastHotWorkT: number | null
 }
 
 /** Engine options (defaults in {@link RISK_THRESHOLDS}). */
@@ -438,10 +588,14 @@ export interface WorkerStepDetail {
   phsRestartedAt: number | null
   /** Water balance behind the water-loss limit (worker device only; null before the first PHS state). */
   water: PhsWaterDetail | null
-  /** Projection hold, resume check and bout countdown (null when none of them applies). */
+  /** Projection and task holds, resume checks and bout countdown (null when none of them applies). */
   resume: ResumeDetail | null
   /** The day plan's work minutes per hour lowered the work minutes (WorkerContext.plannedWorkMinPerHour). */
   plannedCapApplied: boolean
+  /** The environment channel's basis: tables or monitored mode, whether the table cycle is enforced, and why not monitored. */
+  environment: EnvironmentDetail
+  /** Heat exposure and drink reminders this step. */
+  drink: DrinkReminderDetail
 }
 
 /** Result of one engine step. */
@@ -514,8 +668,15 @@ export const RISK_THRESHOLDS = {
     isoImpliedReplacement: 0.4,
     /** A reached water-loss limit may restart (after the reviewed recovery) once the net loss is ≤ 2 % of body mass [ENG]. */
     restartNetLossFraction: 0.02,
+    /**
+     * Ceiling of the credited threshold: 7.5 % of body mass, the ISO 7933:2004 mean-subject D_max (D_max50)
+     * [ASSUMPTION, protective: beyond it the sodium losses and the 8-h validity of the D_max values are not covered].
+     */
+    maxLossFraction: PHS_D_MAX_BODY_MASS_FRACTION.mean2004,
+    /** Only drinks logged within 15 min of the drink time (either side) count toward the credit [ENG: no back-dated or pre-logged credit]. */
+    maxLogDelayMin: 15,
     basis:
-      'ISO 7933:2023 Annex B (D_max 5 % of body mass with drinking, 3 % without); the 5 % drink-allowed limit implies ≈ 40 % replacement (5 % sweat ≈ 3 % net); ACSM 2007 fluid replacement position stand (avoid > 2 % body-mass loss; 3 % net as the limit here); TB MED 507 (2022) hourly cap 1.5 qt; [ENG] credit 0.8 × Σ_hours min(logged, hourly cap) since the shift start — self-report may over-state intake; threshold max(5 %, 3 % + credit), never below ISO; no further intake assumed in projections; restart at net loss ≤ 2 % (1 % deadband below the 3 % criterion)',
+      'ISO 7933:2023 Annex B (D_max 5 % of body mass with drinking, 3 % without); the 5 % drink-allowed limit implies ≈ 40 % replacement (5 % sweat ≈ 3 % net); ACSM 2007 fluid replacement position stand (avoid > 2 % body-mass loss; 3 % net as the limit here); TB MED 507 (2022) hourly cap 1.5 qt; ISO 7933:2004 D_max50 7.5 % of body mass as the ceiling [ASSUMPTION, protective: sodium losses and the 8-h D_max validity are not covered beyond it]; [ENG] credit 0.8 × Σ_hours min(logged, hourly cap) since the shift start over drinks logged within 15 min of the drink time — self-report may over-state intake; threshold min(7.5 %, max(5 %, 3 % + credit)), never below ISO; electrolytes recommended while the credit extends it beyond 5 %; no further intake assumed in projections; a drink logged in a step counts from the next step for releases and the limit check; restart at net loss ≤ 2 % (1 % deadband below the 3 % criterion)',
   },
   resume: {
     /**
@@ -536,6 +697,25 @@ export const RISK_THRESHOLDS = {
     estimateEveryMin: 15,
     basis:
       'ANSI/ISA-18.2 alarm management (deadband between alarm set and clear); ARCHITECTURE.md §6 (de-escalate after a dwell plus a hysteresis margin); ISO 7933:2023 projection at the task to resume; [ENG] minimum work bout 10 min, rest estimate in 5-min steps up to 60 min, the resume check replaces the dwell for the projection channel',
+    /** The resume check never passes for a task outside the ISO 7933 scope (vapour barrier): the hold ends without the release shortcut (normal dwell). */
+    outOfScopeBasis: 'Safety review 2c (LOW): never released without a passing projection or the dwell [ENG, protective]; ISO 7933:2023 scope',
+  },
+  taskHold: {
+    /**
+     * The task hold's resume check runs every step against the task to resume at the current conditions (no margin on
+     * the regulation/environment stops: they are deterministic at constant conditions, so a release cannot flap; the
+     * ISO 7933 resume check of the release adds the minimum work bout) [ENG].
+     */
+    checkEveryStep: true,
+    basis:
+      'Engine-owned resume (wave 2d; replaces the simulator check of worldsim 1.2.0): a regulation-channel stop (ADOSH-SF TG v4.0 Table 1 TWL-zone exclusion of unacclimatised workers or no ordinary work, a pack WBGT stop limit, the MoHRE midday break) or an environment-channel stop (WBGT table stop: allowed work fraction < 0.25; acclimatisation exposure budget) driven by the current task — or met by the task to resume of a resting worker whose device already shows stop — is held while the worker rests, until the task to resume, at the current conditions, its location and clothing, is free of those stops and passes the ISO 7933 resume check (RISK_THRESHOLDS.resume: ≥ 25 min; a failing check hands over to a projection hold); midday break → released at its end; budget used up → no release this shift (rotate task); the release is the hysteresis of that hold (ANSI/ISA-18.2) and skips only its own dwell (held channels count at most HIGH in the other tracks), the other channels keep their 10-min dwell (ARCHITECTURE.md §6); at a task the hold follows the live stops of that task and ends without the shortcut (the normal dwell is the anti-chatter deadband) [ENG]',
+  },
+  monitoring: {
+    /** Recent-data window for valid monitoring: at least minValidInWindow SQI-valid minutes in the last recentWindowMin [ENG]. */
+    recentWindowMin: 5,
+    minValidInWindow: 4,
+    basis:
+      'ISO 7243:2017 (WBGT reference values are a screen: above them reduce the stress or carry out a detailed analysis with ISO 7933); ACGIH TLV Heat Stress decision flow (detailed analysis and/or physiological monitoring above the screen); NIOSH 2016 §8 (physiological monitoring above the REL); [ENG] monitoring valid only while: plan basis monitored (occupational-health sign-off); acclimatised and not in the stricter personal mode; wearable consented, worn and heart-rate rules on; the physiology channel valid (30-min warm-up, ≥ 10 of 15 valid minutes) and ≥ 4 of the last 5 minutes SQI-valid; ISO 7933 applicable, verified clothing values and inputs within its validity range; then the environment level is capped at caution and the table cycle is a guide; any lapse restores the table level in the same step',
   },
 } as const
 
@@ -581,8 +761,12 @@ export const RISK_DRIVER_IDS = [
   'wbgt_method_not_applicable',
   'rest_area_cooled',
   'rest_area_shade_only',
+  'wbgt_screen_monitored',
+  'monitoring_fallback_tables',
+  'resume_hold_environment',
   // regulation (engine-applied)
   'stricter_work_rest',
+  'resume_hold_regulation',
   // projection
   'phs_minutes_to_limit',
   'phs_limit_reached',
@@ -600,6 +784,7 @@ export const RISK_DRIVER_IDS = [
   'phs_no_drinking',
   'phs_water_credit',
   'phs_drink_to_restart',
+  'phs_no_drink_no_restart',
   // plan (engine-applied)
   'work_rest_planned',
   // stateful and fusion
@@ -772,16 +957,33 @@ function dwellStep(track: DwellTrack, computed: RiskLevel, now: number, dwellMs:
 }
 
 /**
+ * A resume release on a dwell track: the displayed level drops at once to max(computed, the reference track's displayed
+ * level) — the reference track never saw the released hold's stop — carrying its pending dwell when the computed level
+ * is lower still. Never raises the level. Pure.
+ */
+function releaseTrack(track: DwellTrack, computed: RiskLevel, ref: DwellTrack, now: number): DwellTrack {
+  const target = maxLevel(computed, ref.displayed.level)
+  if (RISK_ORDER[target] >= RISK_ORDER[track.displayed.level]) return track
+  return {
+    displayed: { level: target, since: now },
+    pending: RISK_ORDER[computed] < RISK_ORDER[target] && ref.pending !== null ? { level: maxLevel(ref.pending.level, computed), since: ref.pending.since } : null,
+  }
+}
+
+/**
  * Credited fluid intake, litres (RISK_THRESHOLDS.hydrationCredit): 0.8 × Σ over local clock hours of
- * min(logged that hour, FLUID.HOURLY_CAP_L), over intakes with fromT ≤ t ≤ toT (and of `workerId` when given).
- * Non-positive or non-finite volumes are ignored. Pure.
+ * min(logged that hour, FLUID.HOURLY_CAP_L), over intakes with fromT ≤ t ≤ toT (and of `workerId` when given) that were
+ * logged within 15 min of the drink time (|loggedAt − t| ≤ maxLogDelayMin: neither back-dated nor logged ahead; absent
+ * loggedAt = logged at t; a non-finite loggedAt is not credited). Non-positive or non-finite volumes are ignored. Pure.
  */
 export function creditedIntakeL(intakes: readonly FluidIntake[], fromT: number, toT: number, workerId?: string): number {
   const H = RISK_THRESHOLDS.hydrationCredit
+  const maxDelayMs = H.maxLogDelayMin * MINUTE_MS
   const perHour = new Map<number, number>()
   for (const x of intakes) {
     if (workerId !== undefined && x.workerId !== workerId) continue
     if (!(x.t >= fromT && x.t <= toT) || !(x.ml > 0) || !Number.isFinite(x.ml)) continue
+    if (x.loggedAt !== undefined && !(Math.abs(x.loggedAt - x.t) <= maxDelayMs)) continue
     const hour = Math.floor((x.t + DUBAI_OFFSET_MS) / HOUR_MS)
     perHour.set(hour, (perHour.get(hour) ?? 0) + x.ml / 1000)
   }
@@ -802,14 +1004,18 @@ interface WaterStatus {
   thresholdG: number
   netG: number
   restartMaxNetG: number
+  /** The credit raises the threshold above ISO (drinking allowed). */
+  extended: boolean
+  /** The credited threshold is at the 7.5 % ceiling. */
+  capped: boolean
   /** Passed to minutesToLimit when the threshold is above ISO (drinking allowed); undefined = exactly ISO 7933. */
   lossOpts: PhsProjectionOptions | undefined
 }
 
 /**
  * Water-loss threshold and net loss for a PHS state (RISK_THRESHOLDS.hydrationCredit): drinking allowed → threshold
- * max(5 % BM, 3 % BM + credit), net = loss − max(credit, 0.4 × loss); drinking restricted (drink = 0 now or earlier
- * this exposure) → the ISO 3 % threshold, net = loss − credit. With no credit the threshold is exactly ISO 7933.
+ * min(7.5 % BM, max(5 % BM, 3 % BM + credit)), net = loss − max(credit, 0.4 × loss); drinking restricted (drink = 0 now
+ * or earlier this exposure) → the ISO 3 % threshold, net = loss − credit. With no credit the threshold is exactly ISO 7933.
  */
 function waterStatus(phs: PhsState, input: PhsInput, creditL: number): WaterStatus {
   const H = RISK_THRESHOLDS.hydrationCredit
@@ -818,11 +1024,12 @@ function waterStatus(phs: PhsState, input: PhsInput, creditL: number): WaterStat
   // phs.ts waterLossG: ΣSW·2.67·A_Du/1.8/60 (ISO 7933:2004 NOTE), same operand order so thresholds agree exactly.
   const sweatG = (phs.evapLoadWm2Min * 2.67 * phsDuBoisAreaM2(massKg, input.heightM)) / 1.8 / 60
   const isoG = PHS_D_MAX_BODY_MASS_FRACTION.percentile95 * massKg * 1000
+  const capG = H.maxLossFraction * massKg * 1000
   const creditG = creditL * 1000
-  const thresholdG = restricted
-    ? PHS_D_MAX_BODY_MASS_FRACTION.drinkRestricted * massKg * 1000
-    : Math.max(isoG, H.netLossFraction * massKg * 1000 + creditG)
+  const creditedG = H.netLossFraction * massKg * 1000 + creditG
+  const thresholdG = restricted ? PHS_D_MAX_BODY_MASS_FRACTION.drinkRestricted * massKg * 1000 : Math.min(capG, Math.max(isoG, creditedG))
   const netG = sweatG - (restricted ? creditG : Math.max(creditG, H.isoImpliedReplacement * sweatG))
+  const extended = !restricted && thresholdG > isoG
   return {
     restricted,
     massKg,
@@ -832,7 +1039,9 @@ function waterStatus(phs: PhsState, input: PhsInput, creditL: number): WaterStat
     thresholdG,
     netG,
     restartMaxNetG: H.restartNetLossFraction * massKg * 1000,
-    lossOpts: !restricted && thresholdG > isoG ? { lossThresholdG: thresholdG } : undefined,
+    extended,
+    capped: !restricted && creditedG >= capG,
+    lossOpts: extended ? { lossThresholdG: thresholdG } : undefined,
   }
 }
 
@@ -929,6 +1138,10 @@ export function createWorkerEngine(profile: WorkerProfile, shiftStartT: number, 
     lastTask: null,
     resumeBout: null,
     dwellExProjection: { displayed: { level: 'safe', since: shiftStartT }, pending: null },
+    dwellExTaskHold: { displayed: { level: 'safe', since: shiftStartT }, pending: null },
+    taskHold: null,
+    monitorValidT: null,
+    lastHotWorkT: null,
   }
 }
 
@@ -938,6 +1151,12 @@ interface EnvironmentEval {
   result: ChannelResult
   actions: ActionId[]
   allowed: AllowedWorkResult
+  /** The table level (before the monitored-mode cap; the acclimatisation budget stop is in `result.level` only). */
+  tableLevel: RiskLevel
+  /** Monitored mode capped the table level at caution this step. */
+  capped: boolean
+  /** Today's acclimatisation budget is used up for this (hot) task. */
+  budgetExhausted: boolean
   workW: number
   workClass: WorkClass
   wbgtWorkEffC: number
@@ -1033,6 +1252,9 @@ function isSunWork(ctx: WorkerContext): boolean {
  * ≥ 1 °C margin safe; f ≥ 1 within 1 °C or f ≥ 0.75 caution; 0.25–0.75 high; < 0.25 stop.
  * Acclimatisation budget: hot-work minutes today ≥ maxExposureFraction × 480 min (only while a ramp limits the day,
  * fraction < 1) → stop for hot work with 'acclimatization_plan' + 'rotate_task' [ENG].
+ * Monitored mode (`monitored`, see {@link RISK_THRESHOLDS}.monitoring): the table result is still computed and shown,
+ * but above the table limit (f < 1) the level is capped at caution with 'wbgt_screen_monitored' and the work/rest
+ * cycle is an 'info' guide without 'shade_breaks'; the acclimatisation budget stop is unchanged.
  * Driver texts never name REL/RAL or the reason for a stricter personal limit (privacy, ARCHITECTURE.md §5).
  */
 function evaluateEnvironment(
@@ -1041,6 +1263,7 @@ function evaluateEnvironment(
   acclim: AcclimatizationAssessment,
   cons: ConservativeModeResult,
   hotWorkMinToday: number,
+  monitored = false,
 ): EnvironmentEval {
   const task = ctx.task
   const heat = ctx.heat
@@ -1055,7 +1278,10 @@ function evaluateEnvironment(
   const wbgtRestEffC = wbgtEffectiveC(rest.wbgtC, clothing, false) + marginC
   const limit = selectExposureLimit(acclim.status, cons.conservative)
   const allowed = allowedWorkFraction({ workW, restW: REST_METABOLIC_W, wbgtWorkEffC, wbgtRestEffC, limit })
-  let level = environmentLevel(allowed.f, allowed.marginC)
+  const tableLevel = environmentLevel(allowed.f, allowed.marginC)
+  // Monitored mode: above the table limit the tables are a screen (ISO 7243:2017; ACGIH TLV; NIOSH 2016) [ENG cap].
+  const capped = monitored && allowed.f < 1 && RISK_ORDER[tableLevel] > RISK_ORDER.caution
+  let level: RiskLevel = capped ? 'caution' : tableLevel
   const drivers: RiskDriver[] = []
   const actions: ActionId[] = []
   // Both limits are cited so the basis does not reveal which one applies (privacy, ARCHITECTURE.md §5).
@@ -1076,7 +1302,14 @@ function evaluateEnvironment(
       makeDriver('wbgt_within_limit', 'environment', `Effective WBGT ${wbgtWorkEffC.toFixed(1)} °C is ${allowed.marginC.toFixed(1)} °C under the personal exposure limit for ${what}`, 'info', limitBasis, wbgtWorkEffC, '°C'),
     )
   }
-  if (allowed.f < 1) {
+  const screened = monitored && allowed.f < 1
+  if (screened) {
+    // The table cycle is a guide while monitoring is valid; the projection and physiology channels enforce.
+    drivers.push(
+      makeDriver('wbgt_screen_monitored', 'environment', 'WBGT is above the table limit: your own heat-strain projection (ISO 7933) and wearable monitoring are in use', 'raises', RISK_THRESHOLDS.monitoring.basis),
+      makeDriver('work_rest_cycle', 'environment', `Work/rest guide: about ${Math.floor(allowed.workMinPerHour)} min work per hour, rest ${restWhere} the remainder`, 'info', `${LIMITS_BASIS.allowedWork}; ${RISK_THRESHOLDS.monitoring.basis}`, allowed.workMinPerHour, 'min/h'),
+    )
+  } else if (allowed.f < 1) {
     drivers.push(
       makeDriver('work_rest_cycle', 'environment', `Work at most ${Math.floor(allowed.workMinPerHour)} min per hour, rest ${restWhere} the remainder`, 'raises', LIMITS_BASIS.allowedWork, allowed.workMinPerHour, 'min/h'),
     )
@@ -1119,10 +1352,12 @@ function evaluateEnvironment(
   }
 
   let budgetMin: number | null = null
+  let budgetExhausted = false
   if (acclim.maxExposureFraction < 1) {
     budgetMin = acclim.maxExposureFraction * RISK_THRESHOLDS.environment.budgetShiftMin
     const budgetBasis = `${acclim.basis}; budget = maxExposureFraction × 480 min [ENG]`
     if (isHotWork(ctx) && hotWorkMinToday >= budgetMin) {
+      budgetExhausted = true
       level = maxLevel(level, 'stop')
       drivers.push(
         makeDriver('acclimatization_budget_exhausted', 'environment', `Today's heat-exposure allowance (${Math.round(budgetMin)} min) is used up: no more hot work today`, 'raises', budgetBasis, hotWorkMinToday, 'min'),
@@ -1137,7 +1372,7 @@ function evaluateEnvironment(
 
   if (level === 'caution') {
     actions.push('drink_water')
-    if (allowed.f < 1) actions.push('shade_breaks')
+    if (allowed.f < 1 && !screened) actions.push('shade_breaks')
   } else if (level === 'high') {
     actions.push('shade_breaks', 'drink_water', 'rotate_task')
   } else if (atLeast(level, 'stop')) {
@@ -1148,6 +1383,9 @@ function evaluateEnvironment(
     result: { channel: 'environment', level, available: true, drivers },
     actions,
     allowed,
+    tableLevel,
+    capped,
+    budgetExhausted,
     workW,
     workClass,
     wbgtWorkEffC,
@@ -1266,14 +1504,14 @@ function resumeTargetOf(ctx: WorkerContext, last: WorkerEngineState['lastTask'])
  * Resume check (RISK_THRESHOLDS.resume): project the task to resume from a PHS state at its metabolic rate, clothing
  * and location; it passes when no limit is reached within highFromMin + minBoutMin (25) min. The water-loss threshold
  * is held at its current value (no further intake assumed; protective). A target outside the model's scope (vapour
- * barrier) cannot be checked and passes [ENG — the projection channel is unavailable for that clothing and the
- * environment channel's monitoring advice applies].
+ * barrier) cannot be checked: `unchecked`, never `ok` — the hold then ends without the release shortcut, so the fused
+ * level follows the normal 10-min dwell [ENG, protective: never released without a passing projection or the dwell].
  */
-function resumePasses(s: PhsState, target: PhsInputs, lossOpts: PhsProjectionOptions | undefined): { ok: boolean; minutes: number | null } {
-  if (!target.applicable) return { ok: true, minutes: null }
+function resumePasses(s: PhsState, target: PhsInputs, lossOpts: PhsProjectionOptions | undefined): { ok: boolean; minutes: number | null; unchecked: boolean } {
+  if (!target.applicable) return { ok: false, minutes: null, unchecked: true }
   const need = RISK_THRESHOLDS.projection.highFromMin + RISK_THRESHOLDS.resume.minBoutMin
   const p = minutesToLimit(s, target.input, need, PHS_OPTS, lossOpts)
-  return { ok: p.minutes === null || p.minutes >= need, minutes: p.minutes }
+  return { ok: p.minutes === null || p.minutes >= need, minutes: p.minutes, unchecked: false }
 }
 
 /**
@@ -1288,6 +1526,168 @@ function restEstimateMin(phs: PhsState, target: PhsInputs, restIn: PhsInputs, lo
     if (resumePasses(s, target, lossOpts).ok) return m
   }
   return null
+}
+
+// ═════════════════════════════════════ Monitored mode and the task hold ═════════════════════════════════════
+
+/**
+ * SQI-valid physiology minutes in (now − windowMin, now], one record per minute with the last given winning (as
+ * physio.ts windowMinutes); a missing minute is not valid.
+ */
+function recentValidMinutes(minutes: PhysioMonitorState['minutes'], now: number, windowMin: number): number {
+  const hi = Math.round(now / MINUTE_MS)
+  const byKey = new Map<number, boolean>()
+  for (const m of minutes) {
+    const k = Math.round(m.t / MINUTE_MS)
+    if (k > hi - windowMin && k <= hi) byKey.set(k, m.valid)
+  }
+  let n = 0
+  for (const v of byKey.values()) if (v) n++
+  return n
+}
+
+/** Activity-independent monitored-mode failures (RISK_THRESHOLDS.monitoring); true = the condition fails. */
+interface MonitoringChecks {
+  /** Not acclimatised, or in the stricter personal (conservative) mode. */
+  status: boolean
+  /** No wearable consent, no wearable, or heart-rate rules off for this worker. */
+  consent: boolean
+  /** Physiology channel not valid (warm-up, < 10 of 15 valid minutes) or < 4 of the last 5 minutes SQI-valid. */
+  data: boolean
+}
+
+/**
+ * Monitored mode for one activity (RISK_THRESHOLDS.monitoring): null when every condition holds (monitoring valid),
+ * else the first failing reason in the order status → consent → model → data. `modelOk`: ISO 7933 applicable to the
+ * activity, verified clothing values and inputs within the validity range ({@link phsModelOk}).
+ */
+function monitoringReason(f: MonitoringChecks, modelOk: boolean): MonitoringFallbackReason | null {
+  if (f.status) return 'status'
+  if (f.consent) return 'consent'
+  if (!modelOk) return 'model'
+  if (f.data) return 'data'
+  return null
+}
+
+/** ISO 7933 usable for monitored mode: in scope (not a vapour barrier), verified clothing values, inputs within validity. */
+function phsModelOk(p: PhsInputs, withinLimits?: boolean): boolean {
+  return p.applicable && p.verified && (withinLimits ?? phsValidity(p.input, PHS_OPTS.model).withinLimits)
+}
+
+/** Worker-device text of the monitored-mode fallback (the reason may reveal consent or health status: never for supervisors). */
+const MONITORING_FALLBACK_TEXT: Record<MonitoringFallbackReason, string> = {
+  status: 'Monitored mode does not apply to you now (personal heat plan): the table work/rest limits apply again',
+  consent: 'Wearable monitoring is off (consent, wearable or setting): the table work/rest limits apply again',
+  model: 'The heat-strain model does not cover this work or clothing: the table work/rest limits apply again',
+  data: 'Wearable data is not valid (too few good minutes): the table work/rest limits apply again',
+}
+
+/** TWL at a location (W/m²): sun and shade from the site heat; a cooled indoor space at the COOLED_REST cabin. */
+function twlAt(heat: SiteHeat, location: WorkerLocation): number {
+  return location === 'sun' ? heat.twlWm2 : location === 'shade' ? heat.twlShadeWm2 : cooledTwlWm2(heat)
+}
+
+/**
+ * Regulation channel inputs for an activity: the pack's floor at the activity's location (TWL and WBGT there), outdoor
+ * in the sun only for a task in the sun, ADOSH acclimatisation per TG v4.0 Table 1 note b exactly.
+ */
+function floorFor(
+  ctx: WorkerContext,
+  task: Task | null,
+  location: WorkerLocation,
+  workClass: WorkClass,
+  acclim: AcclimatizationAssessment,
+  pack: RulePack,
+): RegulatoryFloor {
+  return regulatoryFloor({
+    t: ctx.now,
+    twlWm2: twlAt(ctx.heat, location),
+    outdoorInSun: task !== null && location === 'sun',
+    // ADOSH-SF TG v4.0 Table 1 note b exactly (new, or > 14 days off, during the first 7 days back). The stricter RAL
+    // and the acclimatisation ramp of an 'acclimatizing' worker stay in the environment channel.
+    acclimatization: acclim.adoshUnacclimatized ? 'unacclimatized' : 'acclimatized',
+    workClass,
+    wbgtC: locationWbgtC(ctx.heat, location),
+    pack,
+  })
+}
+
+/** The regulation/environment stops of one activity and what they wait for. */
+interface StopCauses {
+  heldBy: TaskHoldChannel[]
+  causes: TaskHoldCause[]
+}
+
+/** The regulation/environment stops of one activity and what they wait for (the task hold's check). */
+function stopCausesOf(env: EnvironmentEval, floor: RegulatoryFloor): StopCauses {
+  const heldBy: TaskHoldChannel[] = []
+  const causes: TaskHoldCause[] = []
+  if (atLeast(floor.level, 'stop')) {
+    heldBy.push('regulation')
+    const ids = new Set(floor.drivers.map((d) => d.id))
+    if (ids.has('unacclimatized_excluded') || ids.has('ordinary_work_prohibited')) causes.push('heat_zone')
+    if (ids.has('wbgt_stop_limit')) causes.push('wbgt_stop')
+    if (ids.has('midday_break')) causes.push('midday_break')
+    // [ENG] fail-safe: a regulation stop not recognised above is held like a zone rule (released only by the check).
+    if (causes.length === 0) causes.push('heat_zone')
+  }
+  if (atLeast(env.result.level, 'stop')) {
+    heldBy.push('environment')
+    if (env.budgetExhausted) causes.push('exposure_budget')
+    if (!env.budgetExhausted || (atLeast(env.tableLevel, 'stop') && !env.capped)) causes.push('exposure_limit')
+  }
+  return { heldBy, causes }
+}
+
+/**
+ * Earliest time a task hold can release (TaskHold.nextCheckT): null when today's acclimatisation budget is used up
+ * (no release this shift for that task); the midday-break end while the break holds; otherwise the next step.
+ */
+function taskHoldNextCheckT(causes: readonly TaskHoldCause[], now: number, pack: RulePack): number | null {
+  if (causes.includes('exposure_budget')) return null
+  let t = now + MINUTE_MS
+  if (causes.includes('midday_break')) t = Math.max(t, middayBreakWindow(now, pack)?.endT ?? t)
+  return t
+}
+
+/**
+ * Drivers and actions of a task hold for one held channel (the live channel computed for the current activity is below
+ * stop). Texts carry no individual number (supervisor-safe: CLINICAL_TEXT_PATTERN); the budget case re-uses the
+ * environment channel's 'acclimatization_budget_exhausted' driver of the task to resume.
+ */
+function taskHoldDrivers(hold: TaskHold, ch: TaskHoldChannel, pack: RulePack, targetEnv: EnvironmentEval | null): { drivers: RiskDriver[]; actions: ActionId[] } {
+  const TH = RISK_THRESHOLDS.taskHold
+  const c = hold.causes
+  if (ch === 'regulation') {
+    if (c.includes('heat_zone')) {
+      return {
+        drivers: [makeDriver('resume_hold_regulation', 'regulation', 'Rest before going back to this task: the heat-zone rules do not allow it now', 'raises', `${pack.basis}; ${TH.basis}`)],
+        actions: ['rest_shade_now', 'rotate_task'],
+      }
+    }
+    if (c.includes('wbgt_stop')) {
+      return {
+        drivers: [makeDriver('resume_hold_regulation', 'regulation', 'Rest before going back to this task: WBGT is above the stop-work limit', 'raises', `${pack.wbgtStopBasis ?? pack.basis}; ${TH.basis}`)],
+        actions: ['rest_shade_now'],
+      }
+    }
+    const rule = pack.middayBreak
+    return {
+      drivers: [makeDriver('resume_hold_regulation', 'regulation', `Midday work ban: rest until it ends at ${rule?.endHhmm ?? 'the end of the ban'}`, 'raises', `${rule?.basis ?? pack.basis}; ${TH.basis}`)],
+      actions: ['midday_break', 'rest_shade_now'],
+    }
+  }
+  const drivers: RiskDriver[] = []
+  const actions: ActionId[] = ['rest_shade_now', 'rotate_task']
+  if (c.includes('exposure_budget')) {
+    const d = targetEnv?.result.drivers.find((x) => x.id === 'acclimatization_budget_exhausted')
+    drivers.push(d ? { ...d } : makeDriver('acclimatization_budget_exhausted', 'environment', "Today's heat-exposure allowance is used up: no more hot work today", 'raises', LIMITS_BASIS.acclimatization))
+    actions.push('acclimatization_plan')
+  }
+  if (c.includes('exposure_limit')) {
+    drivers.push(makeDriver('resume_hold_environment', 'environment', 'Rest before going back to this task: the heat-exposure limit does not allow it now', 'raises', `${LIMITS_BASIS.allowedWork}; ${TH.basis}`))
+  }
+  return { drivers, actions }
 }
 
 // ═════════════════════════════════════ The step ═════════════════════════════════════
@@ -1397,8 +1797,13 @@ export function stepWorkerEngine(
   let resumeBout: ResumeBout | null = state.resumeBout ?? null
   // A state serialised before the track existed starts from the fused track (protective: no early drop).
   let dwellOthers: DwellTrack = state.dwellExProjection ?? { displayed: state.displayed, pending: state.pending }
+  let dwellExTask: DwellTrack = state.dwellExTaskHold ?? { displayed: state.displayed, pending: state.pending }
+  let taskHold: TaskHold | null = state.taskHold ?? null
+  let monitorValidT: number | null = state.monitorValidT ?? null
+  let lastHotWorkT: number | null = state.lastHotWorkT ?? null
   const gapMin = (now - state.lastT) / MINUTE_MS
-  if (gapMin >= o.newShiftGapMin) {
+  const newShift = gapMin >= o.newShiftGapMin
+  if (newShift) {
     shiftStartT = now
     phs = null
     phsT = now
@@ -1409,8 +1814,11 @@ export function stepWorkerEngine(
     hold = null
     lastTask = null
     resumeBout = null
+    taskHold = null
+    monitorValidT = null
+    lastHotWorkT = null
   }
-  // The task to resume after a projection hold is resolved before this step's task becomes the last one seen.
+  // The task to resume after a hold is resolved before this step's task becomes the last one seen.
   const resumeTarget = resumeTargetOf(ctx, lastTask)
   if (ctx.task !== null) lastTask = { task: ctx.task, location: ctx.location }
   const dayStartT = localDayStart(now)
@@ -1426,7 +1834,15 @@ export function stepWorkerEngine(
   if (inputs.checkin) checkins = addCheckin(checkins, inputs.checkin)
   checkins = checkins.filter((c) => c.t > now - RISK_THRESHOLDS.steps.checkinHistoryH * HOUR_MS)
   let intakes = state.intakes
-  if (inputs.intake) intakes = [...intakes, inputs.intake].sort((a, b) => a.t - b.t)
+  // A log without loggedAt is stamped with the step that receives it [ENG, protective: the engine runs on the worker's
+  // device, so the receiving step is the logging time; a drink entered later with an earlier time, or ahead of time,
+  // then earns no water-loss credit unless its time is within 15 min of that step: RISK_THRESHOLDS.hydrationCredit].
+  const newIntake: FluidIntake | null = inputs.intake
+    ? inputs.intake.loggedAt === undefined
+      ? { ...inputs.intake, loggedAt: now }
+      : inputs.intake
+    : null
+  if (newIntake) intakes = [...intakes, newIntake].sort((a, b) => a.t - b.t)
   intakes = intakes.filter((x) => x.t > now - RISK_THRESHOLDS.steps.intakeHistoryH * HOUR_MS)
 
   // ── 2. Worker status ──
@@ -1451,10 +1867,21 @@ export function stepWorkerEngine(
   // ── 4. Hot-work minutes; hydration and symptoms (independent of PHS, needed by the recovery review) ──
   const elapsedMin = Math.max(0, (now - Math.max(state.lastT, shiftStartT)) / MINUTE_MS)
   const stepMin = Math.min(elapsedMin, o.maxCatchUpMin)
-  if (isHotWork(ctx)) {
+  const hotWorkNow = isHotWork(ctx)
+  if (hotWorkNow) {
     hotWorkMinToday += Math.min(stepMin, (now - dayStartT) / MINUTE_MS)
     if (sweatingSinceT === null) sweatingSinceT = now
+    lastHotWorkT = now
   }
+  // Drink reminders follow heat exposure (clinical.drinkReminderExposure): hot work and the 30 min after it, or rest/idle
+  // outside a cooled area at WBGT_eff ≥ 25.6 °C at the worker's location (resting clothing, data margin: protective).
+  const locationWbgtEffC = wbgtEffectiveC(locationWbgtC(ctx.heat, ctx.location), clothingFor(null, profile), false) + envMarginC(ctx)
+  const exposure = drinkReminderExposure({
+    hotWorkNow,
+    minutesSinceHotWork: lastHotWorkT === null ? null : (now - lastHotWorkT) / MINUTE_MS,
+    restingOutsideCooled: ctx.task === null && ctx.location !== 'indoor_cool',
+    wbgtC: locationWbgtEffC,
+  })
   const hyd = hydrationChannel({
     now,
     checkins,
@@ -1463,6 +1890,7 @@ export function stepWorkerEngine(
     fastingNow: fasting,
     sweatingSinceMs: sweatingSinceT,
     workerId: profile.id,
+    exposed: exposure !== null,
   })
   const sym = symptomsChannel({
     now,
@@ -1498,6 +1926,14 @@ export function stepWorkerEngine(
   // (they are hydration data, as in clinical.hydrationChannel); without consent the limit is exactly ISO 7933.
   const water = waterStatus(phs, phsIn.input, checkinsConsented ? creditedIntakeL(intakes, shiftStartT, now, profile.id) : 0)
   const lossOpts = water.lossOpts
+  // A drink logged in this step counts from the next step for every release decision (projection hold, reviewed restart)
+  // and for the limit check, so it never releases a hold or skips the reviewed recovery in the step it is logged
+  // (RISK_THRESHOLDS.hydrationCredit); the projection shown this step already uses the new credit.
+  const waterGate =
+    newIntake !== null && checkinsConsented
+      ? waterStatus(phs, phsIn.input, creditedIntakeL(intakes.filter((x) => x !== newIntake), shiftStartT, now, profile.id))
+      : water
+  const gateLossOpts = waterGate.lossOpts
 
   // Reviewed recovery of a limit reached in an earlier step (RISK_THRESHOLDS.recovery; phs_iso7933.md §11.4).
   // A logged drink that raises the water-loss threshold forces a fresh projection (the countdown would be stale).
@@ -1507,12 +1943,13 @@ export function stepWorkerEngine(
   // Would the post-rest state still be blocked? (horizon 0: only an already-reached limit is reported.) Rectal: the
   // model's own t_re ≥ 38 °C. Water, drinking restricted: the ISO no-drink limit is never restored this shift — also
   // when the 0.6 rule set it before the 3 % mark itself is crossed, which a horizon-0 check cannot see. Water, drinking
-  // allowed: once the water-loss limit is or was involved, restart only at a net loss ≤ 2 % of body mass.
+  // allowed: once the water-loss limit is or was involved, restart only at a net loss ≤ 2 % of body mass (credit before
+  // this step's drink).
   const blockOf = (restarted: PhsState, reached: 'rectal' | 'dehydration' | null): 'rectal' | 'dehydration' | null => {
-    const p = minutesToLimit(restarted, phsIn.input, 0, PHS_OPTS, lossOpts)
+    const p = minutesToLimit(restarted, phsIn.input, 0, PHS_OPTS, gateLossOpts)
     if (p.minutes === 0 && (p.binding ?? 'rectal') === 'rectal') return 'rectal'
-    if (water.restricted) return p.minutes === 0 || reached === 'dehydration' ? 'dehydration' : null
-    return (reached === 'dehydration' || p.minutes === 0) && water.netG > water.restartMaxNetG ? 'dehydration' : null
+    if (waterGate.restricted) return p.minutes === 0 || reached === 'dehydration' ? 'dehydration' : null
+    return (reached === 'dehydration' || p.minutes === 0) && waterGate.netG > waterGate.restartMaxNetG ? 'dehydration' : null
   }
   if (recovery !== null) {
     const r: PhsRecoveryState = { ...recovery, signoff: recovery.signoff ? { ...recovery.signoff } : null }
@@ -1546,9 +1983,9 @@ export function stepWorkerEngine(
   }
 
   // A limit crossed inside the PHS state between projections forces a fresh projection (protective [ENG]). The water
-  // part uses the threshold in force: with drinking allowed max(5 %, 3 % + credit) (exactly the 5 % mark without
-  // credit), while restricted the ISO no-drink marks.
-  const waterAtLimit = water.restricted ? phs.waterLoss5PctMin !== null || phs.waterLoss3PctMin !== null : water.sweatG >= water.thresholdG
+  // part uses the threshold in force before this step's drink: with drinking allowed min(7.5 %, max(5 %, 3 % + credit))
+  // (exactly the 5 % mark without credit), while restricted the ISO no-drink marks.
+  const waterAtLimit = waterGate.restricted ? phs.waterLoss5PctMin !== null || phs.waterLoss3PctMin !== null : waterGate.sweatG >= waterGate.thresholdG
   const stateAtLimit = phs.tReLimitMin !== null || waterAtLimit
   const limitCrossed = stateAtLimit && projection !== null && projection.minutes !== 0
   const due =
@@ -1571,11 +2008,14 @@ export function stepWorkerEngine(
   }
   const proj = projection as ProjectionRecord
   let minutesNow = proj.minutes === null ? null : Math.max(0, proj.minutes - (now - proj.t) / MINUTE_MS)
-  // A reached limit (while the model applies) starts a recovery review.
-  if (recovery === null && phsIn.applicable && minutesNow === 0) {
-    recovery = { limitT: now, binding: proj.binding, boutStartT: null, restCooledMin: 0, restShadeMin: 0, restMetT: null, signoff: null }
+  // A reached limit (while the model applies) starts a recovery review — also a water-loss limit reached before a drink
+  // logged in this same step (the drink does not skip the review).
+  const reachedBeforeDrink = waterGate !== water && !waterGate.restricted && waterGate.sweatG >= waterGate.thresholdG
+  if (recovery === null && phsIn.applicable && (minutesNow === 0 || reachedBeforeDrink)) {
+    const binding = minutesNow === 0 ? proj.binding : 'dehydration'
+    recovery = { limitT: now, binding, boutStartT: null, restCooledMin: 0, restShadeMin: 0, restMetT: null, signoff: null }
     recoveryNeeds = { rest: true, checkin: true, signoff: true }
-    restartBlock = blockOf(postReviewPhsState(phs), proj.binding)
+    restartBlock = blockOf(postReviewPhsState(phs), binding)
   }
   if (recovery !== null) minutesNow = 0
 
@@ -1585,6 +2025,8 @@ export function stepWorkerEngine(
   const resumeNeedMin = PT.highFromMin + RISK_THRESHOLDS.resume.minBoutMin
   let releasedNow = false
   if (recovery !== null || !phsIn.applicable) {
+    // The recovery review holds stop instead; a current activity outside the model's scope ends the hold without the
+    // release shortcut (releasedNow stays false), so the fused level follows the normal 10-min dwell [protective].
     hold = null
     resumeBout = null
   } else {
@@ -1608,9 +2050,15 @@ export function stepWorkerEngine(
       const restIn = phsInputsFor(ctx, clothingFor(null, profile), acclim, null, restLoc)
       const targetIn = resumeTarget ? phsInputsFor(ctx, clothingFor(resumeTarget.task, profile), acclim, resumeTarget.task, resumeTarget.location) : restIn
       const targetId = resumeTarget?.task.id ?? null
-      const chk = resumePasses(phs, targetIn, lossOpts)
-      // The current activity itself must be out of the stop band too (a worker still at the task cannot be released).
-      if (chk.ok && (minutesNow === null || minutesNow >= PT.highFromMin)) {
+      // The water-loss threshold before this step's drink: a drink never releases the hold in the step it is logged.
+      const chk = resumePasses(phs, targetIn, gateLossOpts)
+      if (chk.unchecked) {
+        // The task to resume is outside the model's scope (vapour barrier): no projection can pass, so the hold ends
+        // without the release shortcut and the fused level follows the normal 10-min dwell (safety review 2c, LOW).
+        hold = null
+        resumeBout = null
+      } else if (chk.ok && (minutesNow === null || minutesNow >= PT.highFromMin)) {
+        // The current activity itself must be out of the stop band too (a worker still at the task cannot be released).
         releasedNow = true
         resumeBout = { taskId: targetId, releasedT: now }
         hold = null
@@ -1630,7 +2078,7 @@ export function stepWorkerEngine(
           est = countdown
           estT = hold.estT as number
         } else {
-          est = restEstimateMin(phs, targetIn, restIn, lossOpts)
+          est = restEstimateMin(phs, targetIn, restIn, gateLossOpts)
           estT = now
         }
         hold = { ...hold, checkedT: now, checkedTaskId: targetId, resumeMin: chk.minutes, estRestMin: est, infeasibleNow: !chk.ok && est === null, estT, checkKey: phsIn.key }
@@ -1644,20 +2092,153 @@ export function stepWorkerEngine(
       : null
 
   // ── 6. Channels ──
-  const env = evaluateEnvironment(ctx, clothing, acclim, cons, hotWorkMinToday)
-
-  const floor = regulatoryFloor({
+  // Physiology first: monitored mode needs its validity.
+  const phy = physiologyLevel({
     t: now,
-    twlWm2: ctx.location === 'sun' ? ctx.heat.twlWm2 : ctx.location === 'shade' ? ctx.heat.twlShadeWm2 : cooledTwlWm2(ctx.heat),
-    outdoorInSun: isSunWork(ctx),
-    // ADOSH-SF TG v4.0 Table 1 note b exactly (new, or > 14 days off, during the first 7 days back). The stricter RAL
-    // and the acclimatisation ramp of an 'acclimatizing' worker stay in the environment channel.
-    acclimatization: acclim.adoshUnacclimatized ? 'unacclimatized' : 'acclimatized',
-    workClass: env.workClass,
-    wbgtC: locationWbgtC(ctx.heat, ctx.location),
-    pack,
+    minutes: physio.minutes,
+    initT: physio.track.initT,
+    consented: physioConsented,
+    physioDisabled: hrDisabled,
+    conservativeMode: cons.conservative,
+    ...(isNum(profile.ageYears) ? { ageYears: profile.ageYears } : {}),
   })
+
+  // Monitored mode (RISK_THRESHOLDS.monitoring), per worker and per step; 'tables' (or absent) leaves the channel as before.
+  const planBasis: PlanBasis = ctx.planBasis === 'monitored' ? 'monitored' : 'tables'
+  const MON = RISK_THRESHOLDS.monitoring
+  const monitorChecks: MonitoringChecks | null =
+    planBasis === 'monitored'
+      ? {
+          status: acclim.status !== 'acclimatized' || cons.conservative,
+          consent: !physioConsented || hrDisabled,
+          data: !phy.status.channelValid || recentValidMinutes(physio.minutes, now, MON.recentWindowMin) < MON.minValidInWindow,
+        }
+      : null
+  const monitorReason = monitorChecks === null ? null : monitoringReason(monitorChecks, phsModelOk(phsIn, validity.withinLimits))
+  const monitored = monitorChecks !== null && monitorReason === null
+  const env = evaluateEnvironment(ctx, clothing, acclim, cons, hotWorkMinToday, monitored)
+  if (monitored) {
+    monitorValidT = now
+  } else if (monitorReason !== null && monitorValidT !== null) {
+    // Monitoring lapsed this shift: the table level applies in this same step (an escalation needs no dwell). The text
+    // names the reason on the worker's own device only (it can reveal consent or health status).
+    env.result.drivers.push(
+      makeDriver('monitoring_fallback_tables', 'environment', MONITORING_FALLBACK_TEXT[monitorReason], RISK_ORDER[env.tableLevel] > RISK_ORDER.caution ? 'raises' : 'info', MON.basis),
+    )
+  }
+
+  const floor = floorFor(ctx, ctx.task, ctx.location, env.workClass, acclim, pack)
   const regulation: ChannelResult = { channel: 'regulation', level: floor.level, available: true, drivers: [...floor.drivers] }
+
+  // Task hold (TaskHold; RISK_THRESHOLDS.taskHold): a regulation/environment stop driven by the current task — or, for a
+  // resting worker whose device already shows stop, by the task to resume — is held while the worker rests, until the
+  // task to resume, at the current conditions, its location and clothing, is free of those stops and its ISO 7933 resume
+  // check passes (checked every step; the other channels keep their dwell). The engine owns the resume decision (this
+  // replaces worldsim 1.2.0 resumeTaskAllowed). While the worker is at a task the hold follows that task's live stops.
+  const envLiveLevel = env.result.level
+  const regLiveLevel = regulation.level
+  const liveStops = stopCausesOf(env, floor)
+  const holdActions: ActionId[] = []
+  let taskShortcut = false
+  let taskReleasedId: string | null = null
+  const restingNow = ctx.task === null
+  let targetEnv: EnvironmentEval | null = null
+  let targetStops: StopCauses | null = null
+  const targetStopsOf = (): StopCauses => {
+    if (targetStops !== null) return targetStops
+    if (resumeTarget === null) {
+      targetStops = { heldBy: [], causes: [] }
+    } else if (ctx.task !== null && resumeTarget.task.id === ctx.task.id && resumeTarget.location === ctx.location) {
+      targetEnv = env
+      targetStops = liveStops
+    } else {
+      const tClothing = clothingFor(resumeTarget.task, profile)
+      const tMonitored =
+        monitorChecks !== null && monitoringReason(monitorChecks, phsModelOk(phsInputsFor(ctx, tClothing, acclim, resumeTarget.task, resumeTarget.location))) === null
+      const tEnv = evaluateEnvironment({ ...ctx, task: resumeTarget.task, location: resumeTarget.location }, tClothing, acclim, cons, hotWorkMinToday, tMonitored)
+      targetEnv = tEnv
+      targetStops = stopCausesOf(tEnv, floorFor(ctx, resumeTarget.task, resumeTarget.location, tEnv.workClass, acclim, pack))
+    }
+    return targetStops
+  }
+  if (taskHold === null) {
+    // E1: the current task drives the stop. E2: a resting worker whose device shows stop (or holds a projection stop)
+    // would return to a task those channels stop now (the former simulator check, moved into the engine).
+    const e1 = ctx.task !== null && liveStops.heldBy.length > 0
+    const e2 = !e1 && restingNow && resumeTarget !== null && (hold !== null || (!newShift && atLeast(state.displayed.level, 'stop'))) && targetStopsOf().heldBy.length > 0
+    if (e1 || e2) {
+      taskHold = { since: now, taskId: e1 ? (ctx.task as Task).id : (resumeTarget as { task: Task }).task.id, heldBy: [], causes: [], checkedT: null, checkedTaskId: null, nextCheckT: null, infeasible: false }
+    }
+  }
+  if (taskHold !== null) {
+    // At a task: that task's live stops. Resting or idle: the task to resume (and the resting activity itself).
+    const by: StopCauses = !restingNow ? liveStops : targetStopsOf().heldBy.length > 0 ? targetStopsOf() : liveStops
+    const checkedTaskId = !restingNow ? (ctx.task as Task).id : (resumeTarget?.task.id ?? null)
+    if (by.heldBy.length > 0) {
+      taskHold = {
+        ...taskHold,
+        heldBy: by.heldBy,
+        causes: by.causes,
+        checkedT: now,
+        checkedTaskId,
+        nextCheckT: taskHoldNextCheckT(by.causes, now, pack),
+        infeasible: by.causes.includes('exposure_budget'),
+      }
+      if (restingNow) {
+        // Resting: the held channels stay at stop (a live stop of the resting activity itself is already shown).
+        for (const chId of taskHold.heldBy) {
+          const result = chId === 'regulation' ? regulation : env.result
+          if (atLeast(result.level, 'stop')) continue
+          result.level = 'stop'
+          const h = taskHoldDrivers(taskHold, chId, pack, targetEnv)
+          result.drivers.push(...h.drivers)
+          holdActions.push(...h.actions)
+        }
+      }
+    } else if (!restingNow || resumeTarget === null) {
+      // At a task free of those stops (the task resumed, or another task), or nothing to resume: the hold ends without
+      // the release shortcut, so the level follows the normal 10-min dwell (the anti-chatter deadband for a worker who is
+      // not resting, as before the hold existed) [ENG, protective].
+      taskHold = null
+    } else if (recovery !== null || hold !== null) {
+      // The regulation/environment stops are over; a reviewed recovery or a projection hold keeps the worker at stop and
+      // owns the rest of the wait (its own release rules apply).
+      taskHold = null
+    } else {
+      // The task to resume is free of those stops: its ISO 7933 resume check must pass too (≥ highFromMin + minBoutMin
+      // min, the projection hold's rule), so a release gives at least a minimum work bout [ENG, ANSI/ISA-18.2 deadband].
+      const targetIn = phsInputsFor(ctx, clothingFor(resumeTarget.task, profile), acclim, resumeTarget.task, resumeTarget.location)
+      const chk = phsIn.applicable ? resumePasses(phs, targetIn, gateLossOpts) : { ok: false, minutes: null, unchecked: true }
+      if (chk.ok) {
+        taskShortcut = true
+        taskReleasedId = resumeTarget.task.id
+        taskHold = null
+        // The bout countdown of a projection release applies too (phs_work_bout).
+        resumeBout = { taskId: resumeTarget.task.id, releasedT: now }
+      } else if (chk.unchecked) {
+        // Outside the model's scope: the hold ends without the release shortcut (the normal 10-min dwell applies).
+        taskHold = null
+      } else {
+        // Not enough work time before the heat-strain limit: a projection hold takes over (its rest estimate and
+        // "not feasible now" flag; released by its own resume check).
+        const restLoc: WorkerLocation = ctx.location !== 'sun' ? ctx.location : resolveRestArea(ctx) === 'cooled_cabin' ? 'indoor_cool' : 'shade'
+        const est = restEstimateMin(phs, targetIn, phsInputsFor(ctx, clothingFor(null, profile), acclim, null, restLoc), gateLossOpts)
+        hold = {
+          since: now,
+          taskId: resumeTarget.task.id,
+          checkedT: now,
+          checkedTaskId: resumeTarget.task.id,
+          resumeMin: chk.minutes,
+          estRestMin: est,
+          infeasibleNow: est === null,
+          estT: now,
+          checkKey: phsIn.key,
+        }
+        resumeBout = null
+        taskHold = null
+      }
+    }
+  }
 
   // Projection channel.
   const projDrivers: RiskDriver[] = []
@@ -1668,15 +2249,14 @@ export function stepWorkerEngine(
     // A reached limit holds stop until the reviewed recovery (also if the clothing later leaves the model's scope).
     const R = RISK_THRESHOLDS.recovery
     projLevel = 'stop'
+    // Projection texts, ids, bases and values are identical whether drinking is restricted (fasting) or not, so a
+    // supervisor cannot infer a drinking restriction (safety review 2c, HIGH); the drink/no-drink detail is in the
+    // worker-only hydration drivers below.
     projDrivers.push(
       makeDriver(
         'phs_limit_reached',
         'projection',
-        recovery.binding === 'dehydration'
-          ? water.restricted
-            ? 'Heat-strain model: the water-loss limit for this shift is reached'
-            : 'Heat-strain model: the water-loss limit is reached'
-          : 'Heat-strain model: the body-heat limit for this shift is reached',
+        recovery.binding === 'dehydration' ? 'Heat-strain model: the water-loss limit is reached' : 'Heat-strain model: the body-heat limit for this shift is reached',
         'raises',
         PHS_BASIS,
         0,
@@ -1689,24 +2269,13 @@ export function stepWorkerEngine(
       recoveryNeeds.checkin ? 'check-in pending' : null,
       recoveryNeeds.signoff ? 'sign-off pending' : null,
       restartBlock === 'rectal' ? 'the model still shows the body-heat limit' : null,
+      restartBlock === 'dehydration' ? 'the water-loss limit is not yet restored' : null,
     ]
       .filter((x): x is string => x !== null)
       .join('; ')
     const review = `work resumes only after ${R.cooledRestMin} min rest in a cooled area (${R.shadeRestMin} min in shade), a clear check-in and sign-off by a first aider or supervisor`
     projDrivers.push(
-      makeDriver(
-        'phs_recovery_review_required',
-        'projection',
-        restartBlock !== 'dehydration'
-          ? `Heat-strain limit reached: ${review}${outstanding ? ` (${outstanding})` : ''}`
-          : water.restricted
-            ? 'Heat-strain limit reached: the shift water-loss allowance is used up and rest does not restore it, so no more heat work this shift'
-            : `Heat-strain limit reached: drink and rest: the water-loss limit is not yet restored; ${review}${outstanding ? ` (${outstanding})` : ''}`,
-        'raises',
-        restartBlock === 'dehydration' && !water.restricted ? `${R.basis}; ${RISK_THRESHOLDS.hydrationCredit.basis}` : R.basis,
-        restMin,
-        'min',
-      ),
+      makeDriver('phs_recovery_review_required', 'projection', `Heat-strain limit reached: ${review}${outstanding ? ` (${outstanding})` : ''}`, 'raises', R.basis, restMin, 'min'),
     )
     if (restartBlock === 'dehydration' && !water.restricted) {
       // Worker device only (hydration channel): the water figures stay off supervisor screens (privacy).
@@ -1716,12 +2285,24 @@ export function stepWorkerEngine(
           'hydration',
           `Drink water and rest: logged drinks count toward restarting heat work (net water loss ${((100 * water.netG) / (water.massKg * 1000)).toFixed(1)} % of body mass; restart at ${RISK_THRESHOLDS.hydrationCredit.restartNetLossFraction * 100} % or less)`,
           'info',
-          RISK_THRESHOLDS.hydrationCredit.basis,
+          `${R.basis}; ${RISK_THRESHOLDS.hydrationCredit.basis}`,
           (100 * water.netG) / (water.massKg * 1000),
           '% body mass',
         ),
       )
       projActions.push('drink_water')
+    } else if (restartBlock === 'dehydration') {
+      // Drinking restricted (fasting): the ISO 7933 no-drink allowance is per exposure and rest does not restore it.
+      // Worker device only (hydration channel), like the fasting itself.
+      extraDrivers.push(
+        makeDriver(
+          'phs_no_drink_no_restart',
+          'hydration',
+          'Not drinking (fasting): the water-loss allowance without drinking is used up and rest does not restore it, so no more heat work this shift',
+          'info',
+          `${R.basis}; ISO 7933:2023 Annex B (drink = 0 dehydration limit; the cumulative water loss is kept for the exposure [ENG])`,
+        ),
+      )
     }
     if (ctx.task === null) {
       projDrivers.push(
@@ -1780,19 +2361,23 @@ export function stepWorkerEngine(
       }
     }
   }
+  const waterActions: ActionId[] = []
   if (!water.restricted && water.creditL > 0 && phsIn.applicable) {
-    // Worker device only (hydration channel): logged drinking extends the water-loss limit, never below ISO 7933.
+    // Worker device only (hydration channel): logged drinking extends the water-loss limit, never below ISO 7933 and
+    // never above 7.5 % of body mass; beyond the ISO 5 % an electrolyte drink is recommended (sodium losses).
+    const tail = water.capped ? ': at the 7.5 % ceiling, add an electrolyte drink' : water.extended ? ': add an electrolyte drink' : ''
     extraDrivers.push(
       makeDriver(
         'phs_water_credit',
         'hydration',
-        `Logged drinks counted: water-loss limit ${(water.thresholdG / 1000).toFixed(1)} L (net loss ${((100 * water.netG) / (water.massKg * 1000)).toFixed(1)} % of body mass)`,
+        `Logged drinks counted: water-loss limit ${(water.thresholdG / 1000).toFixed(1)} L (net loss ${((100 * water.netG) / (water.massKg * 1000)).toFixed(1)} % of body mass)${tail}`,
         'info',
         RISK_THRESHOLDS.hydrationCredit.basis,
         water.creditL,
         'L',
       ),
     )
+    if (water.extended) waterActions.push('electrolytes')
   }
   if (phsIn.applicable) {
     if (!validity.withinLimits) {
@@ -1817,16 +2402,7 @@ export function stepWorkerEngine(
   }
   const projectionCh: ChannelResult = { channel: 'projection', level: projLevel, available: projAvailable, drivers: projDrivers }
 
-  // Physiology channel.
-  const phy = physiologyLevel({
-    t: now,
-    minutes: physio.minutes,
-    initT: physio.track.initT,
-    consented: physioConsented,
-    physioDisabled: hrDisabled,
-    conservativeMode: cons.conservative,
-    ...(isNum(profile.ageYears) ? { ageYears: profile.ageYears } : {}),
-  })
+  // Physiology channel (computed above, before the environment channel).
   // physio.ts (wave 1) reports 'signal_unusable' while fewer than 10 minutes exist, i.e. during the first 10 min of
   // the 30-min warm-up as well: treat the warm-up as start-up (no 'check_sensor', no confidence penalty) [ENG]. Once
   // physio.ts checks the warm-up first this is a no-op.
@@ -1844,7 +2420,7 @@ export function stepWorkerEngine(
     symptoms: plainChannel(sym),
     hydration: plainChannel(hyd),
   }
-  const actionSet: ActionId[] = [...env.actions, ...floor.actions, ...projActions, ...phyActions, ...sym.actions, ...hyd.actions]
+  const actionSet: ActionId[] = [...env.actions, ...floor.actions, ...holdActions, ...projActions, ...waterActions, ...phyActions, ...sym.actions, ...hyd.actions]
 
   // ── 7. Latch and no-hot-work rule ──
   const latestIntakeT = intakes.length > 0 ? intakes[intakes.length - 1].t : null
@@ -1917,21 +2493,31 @@ export function stepWorkerEngine(
   // ── 8. Fusion and dwell ──
   const channelList = CHANNEL_ORDER.map((id) => channels[id])
   const computed = channelList.reduce<RiskLevel>((acc, ch) => (ch.available ? maxLevel(acc, ch.level) : acc), 'safe')
-  const computedOthers = channelList.reduce<RiskLevel>((acc, ch) => (ch.available && ch.channel !== 'projection' ? maxLevel(acc, ch.level) : acc), 'safe')
+  // Two auxiliary tracks with the live regulation/environment levels (without a task hold's forced stop): one without
+  // the projection channel (a projection release drops to it), one with it (a task-hold release drops to it), so that a
+  // release skips only its own hold's dwell while every other channel keeps its own.
+  // A task-held channel's stop belongs to the hold (released by its resume check, not by a dwell): capped at HIGH in the
+  // auxiliary tracks while the hold is active, so a release still dwells from HIGH (protective) [ENG].
+  const taskHeld: readonly ChannelId[] = taskHold?.heldBy ?? []
+  const liveLevelOf = (ch: ChannelResult): RiskLevel => {
+    if (ch.channel !== 'environment' && ch.channel !== 'regulation') return ch.level
+    const live = ch.channel === 'environment' ? envLiveLevel : regLiveLevel
+    return taskHeld.includes(ch.channel) && atLeast(live, 'stop') ? 'high' : live
+  }
+  const computedOthers = channelList.reduce<RiskLevel>((acc, ch) => (ch.available && ch.channel !== 'projection' ? maxLevel(acc, liveLevelOf(ch)) : acc), 'safe')
+  const computedExTask = channelList.reduce<RiskLevel>((acc, ch) => (ch.available ? maxLevel(acc, liveLevelOf(ch)) : acc), 'safe')
   const dwellMs = o.dwellMin * MINUTE_MS
   let { displayed, pending } = dwellStep({ displayed: state.displayed, pending: state.pending }, computed, now, dwellMs)
   dwellOthers = dwellStep(dwellOthers, computedOthers, now, dwellMs)
-  if (releasedNow) {
-    // The resume check is the projection channel's hysteresis: its release is not delayed by the dwell, while the other
-    // channels keep theirs (their own track, which never saw the projection's stop).
-    const target = maxLevel(computed, dwellOthers.displayed.level)
-    if (RISK_ORDER[target] < RISK_ORDER[displayed.level]) {
-      displayed = { level: target, since: now }
-      pending =
-        RISK_ORDER[computed] < RISK_ORDER[target] && dwellOthers.pending !== null
-          ? { level: maxLevel(dwellOthers.pending.level, computed), since: dwellOthers.pending.since }
-          : null
-    }
+  dwellExTask = dwellStep(dwellExTask, computedExTask, now, dwellMs)
+  // A projection release also ends the projection's stop inside the task-hold track.
+  if (releasedNow) dwellExTask = releaseTrack(dwellExTask, computedExTask, dwellOthers, now)
+  const anyRelease = releasedNow || taskShortcut
+  if (anyRelease) {
+    // A resume check (projection or task hold) is that hold's hysteresis: its release is not delayed by the dwell, while
+    // the other channels keep theirs (their own track, which never saw the held stop). A hold still active elsewhere
+    // keeps `computed` at stop, so nothing drops.
+    ;({ displayed, pending } = releaseTrack({ displayed, pending }, computed, releasedNow ? dwellOthers : dwellExTask, now))
   }
   const level = displayed.level
   const held = RISK_ORDER[level] > RISK_ORDER[computed]
@@ -1965,7 +2551,10 @@ export function stepWorkerEngine(
       )
     }
   }
-  let workMinPerHour = atLeast(level, 'stop') ? 0 : Math.max(0, Math.min(60, env.allowed.workMinPerHour, regWorkMin))
+  // The table cycle limits work minutes unless monitored mode is in force (then it is a guide: the projection and
+  // physiology channels enforce; the regulation channel's schedule and the day plan still apply).
+  const tableWorkMin = monitored ? 60 : env.allowed.workMinPerHour
+  let workMinPerHour = atLeast(level, 'stop') ? 0 : Math.max(0, Math.min(60, tableWorkMin, regWorkMin))
   // The day plan's work minutes for this task and hour (which include the planner's ISO 7933 screen) [protective].
   const planned = ctx.plannedWorkMinPerHour
   let plannedCapApplied = false
@@ -1981,7 +2570,7 @@ export function stepWorkerEngine(
     }
   }
   // A dwell-held level keeps the previous work minutes, except at a resume release (the stop it held is over).
-  if (held && !releasedNow && state.lastAssessment !== null && !atLeast(level, 'stop')) workMinPerHour = Math.min(workMinPerHour, state.lastAssessment.workMinPerHour)
+  if (held && !anyRelease && state.lastAssessment !== null && !atLeast(level, 'stop')) workMinPerHour = Math.min(workMinPerHour, state.lastAssessment.workMinPerHour)
 
   if (cons.conservative && atLeast(level, 'caution')) {
     const lastCheckinT = usableToday.length > 0 ? usableToday[usableToday.length - 1].t : null
@@ -2103,12 +2692,42 @@ export function stepWorkerEngine(
     lastTask,
     resumeBout,
     dwellExProjection: dwellOthers,
+    dwellExTaskHold: dwellExTask,
+    taskHold,
+    monitorValidT,
+    lastHotWorkT,
+  }
+  // Resume detail: every active hold, and the earliest time the next check could release them all (null when the task
+  // hold cannot release this shift).
+  const heldBy: ResumeHolder[] = [...(hold !== null ? (['projection'] as const) : []), ...(taskHold?.heldBy ?? [])]
+  let nextCheckT: number | null = null
+  if (heldBy.length > 0 && !(taskHold !== null && taskHold.nextCheckT === null)) {
+    const times = [hold !== null ? proj.t + o.projectionEveryMin * MINUTE_MS : null, taskHold?.nextCheckT ?? null].filter((x): x is number => x !== null)
+    nextCheckT = times.length > 0 ? Math.max(...times) : null
   }
   const resumeDetail: ResumeDetail | null =
-    hold !== null
-      ? { held: true, taskId: hold.checkedTaskId ?? hold.taskId, ready: false, boutMin: null, estRestMin: hold.estRestMin, infeasibleNow: hold.infeasibleNow }
-      : releasedNow || boutMin !== null
-        ? { held: false, taskId: resumeBout?.taskId ?? null, ready: true, boutMin, estRestMin: releasedNow ? 0 : null, infeasibleNow: false }
+    heldBy.length > 0
+      ? {
+          held: true,
+          heldBy,
+          taskId: hold?.checkedTaskId ?? hold?.taskId ?? taskHold?.checkedTaskId ?? taskHold?.taskId ?? null,
+          ready: false,
+          boutMin: null,
+          estRestMin: hold?.estRestMin ?? null,
+          infeasibleNow: (hold?.infeasibleNow ?? false) || (taskHold?.infeasible ?? false),
+          nextCheckT,
+        }
+      : anyRelease || boutMin !== null
+        ? {
+            held: false,
+            heldBy: [],
+            taskId: !releasedNow && taskShortcut ? taskReleasedId : (resumeBout?.taskId ?? null),
+            ready: true,
+            boutMin,
+            estRestMin: anyRelease ? 0 : null,
+            infeasibleNow: false,
+            nextCheckT: null,
+          }
         : null
   const waterDetail: PhsWaterDetail = {
     sweatLossL: water.sweatG / 1000,
@@ -2116,6 +2735,22 @@ export function stepWorkerEngine(
     netLossPctBM: (100 * water.netG) / (water.massKg * 1000),
     thresholdL: water.thresholdG / 1000,
     restricted: water.restricted,
+    extended: water.extended,
+    capped: water.capped,
+  }
+  const environmentDetail: EnvironmentDetail = {
+    basis: planBasis,
+    monitored,
+    enforced: !monitored,
+    workMinPerHour: env.allowed.f < 1 ? env.allowed.workMinPerHour : null,
+    fallbackReason: monitorReason,
+  }
+  const drinkDetail: DrinkReminderDetail = {
+    exposed: exposure !== null,
+    exposure,
+    reminder: restrict ? null : hyd.fluid.reminder,
+    nextReminderAtMs: restrict ? null : hyd.fluid.nextReminderAtMs,
+    locationWbgtEffC,
   }
   const recoveryDetail: PhsRecoveryDetail | null =
     recovery === null
@@ -2156,6 +2791,8 @@ export function stepWorkerEngine(
     water: waterDetail,
     resume: resumeDetail,
     plannedCapApplied,
+    environment: environmentDetail,
+    drink: drinkDetail,
   }
   return { state: next, assessment, detail }
 }
@@ -2178,6 +2815,7 @@ export function assessSnapshot(ctx: WorkerContext, partialState: Partial<WorkerE
     displayed: { level: 'safe', since: ctx.now },
     pending: null,
     dwellExProjection: { displayed: { level: 'safe', since: ctx.now }, pending: null },
+    dwellExTaskHold: { displayed: { level: 'safe', since: ctx.now }, pending: null },
   }
   return stepWorkerEngine(state, ctx, {}, { dwellMin: 0 }).assessment
 }

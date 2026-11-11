@@ -27,14 +27,45 @@ import type {
 import type { SiteHeat } from '../engine/indices'
 import type { WorkerEnvStatus, WorkerLocation, WorkerStepDetail } from '../engine/risk'
 import type { AlertStats, Notification } from '../engine/alerts'
-import type { DayPlan } from '../engine/planner'
+import type { DayPlan, PlanBasis } from '../engine/planner'
 import type { RulePackId } from '../engine/regulation'
 
 // ─────────────────────────────── Configuration ───────────────────────────────
 
-/** The four protection policies compared in the closed-loop back-test (docs/SIMULATION.md §4). */
-export type PolicyId = 'ban_only' | 'site_index' | 'zill_env' | 'zill_full'
-export const POLICY_IDS: readonly PolicyId[] = ['ban_only', 'site_index', 'zill_env', 'zill_full'] as const
+/**
+ * The protection policies compared in the closed-loop back-test (docs/SIMULATION.md §4). 'zill_monitored' (wave 2d) =
+ * zill_full on a site that opted in to the monitored plan basis (occupational-health sign-off): the day plan is made with
+ * planner.ts planBasis 'monitored' and every device gets WorkerContext.planBasis from its crew plan, so for an acclimatised
+ * worker with valid wearable monitoring and an applicable ISO 7933 model the WBGT tables are a screen and the worker's own
+ * ISO 7933 projection and physiological strain criteria enforce (risk.ts EnvironmentDetail); any lost condition falls
+ * back to the tables in the same step. Basis: ISO 7243:2017 §1 / ACGIH TLV decision flow / NIOSH 2016-106 (detailed
+ * analysis or physiological monitoring above the screen).
+ */
+export type PolicyId = 'ban_only' | 'site_index' | 'zill_env' | 'zill_full' | 'zill_monitored'
+export const POLICY_IDS: readonly PolicyId[] = ['ban_only', 'site_index', 'zill_env', 'zill_full', 'zill_monitored'] as const
+/** Zill policies: the planner's day plan plus acting on the worker's own device (closed loop, or shadow mode). */
+export const ZILL_POLICY_IDS: readonly PolicyId[] = ['zill_env', 'zill_full', 'zill_monitored'] as const
+/** Zill policies whose device receives wearable physiology (paired band and consent.wearable). */
+export const WEARABLE_POLICY_IDS: readonly PolicyId[] = ['zill_full', 'zill_monitored'] as const
+
+/** True for a Zill policy ({@link ZILL_POLICY_IDS}). */
+export function isZillPolicy(policy: PolicyId): boolean {
+  return (ZILL_POLICY_IDS as readonly string[]).includes(policy)
+}
+
+/** True when the policy's device receives wearable physiology ({@link WEARABLE_POLICY_IDS}). */
+export function policyUsesWearable(policy: PolicyId): boolean {
+  return (WEARABLE_POLICY_IDS as readonly string[]).includes(policy)
+}
+
+/**
+ * The plan basis a policy plans with (planner.ts PlanDayInput.planBasis): 'monitored' for zill_monitored (the site's
+ * opt-in), else 'tables' (the default). Each device takes its basis from its crew plan (CrewPlan.planBasis), which falls
+ * back to 'tables' where the planner cannot confirm monitoring (no acclimatised member, no climate data).
+ */
+export function policyPlanBasis(policy: PolicyId): PlanBasis {
+  return policy === 'zill_monitored' ? 'monitored' : 'tables'
+}
 
 /** Behavioural parameters. Every value is an [ASSUMPTION] and is swept in the sensitivity analysis. */
 export interface SimBehaviour {
@@ -53,6 +84,21 @@ export interface SimBehaviour {
    * alert) is actually carried out, one draw per reassignment. 1 = always carried out (the v0.1 assumption).
    */
   supervisorFollowThrough: number
+  /**
+   * Fidelity of the worker's own drink logging on the device ("I drank water"), worldsim ≥ 1.3.0. Only the device's
+   * log changes (fluid caps, reminders, the water credit of the ISO 7933 projection); the worker's true intake does not.
+   */
+  drinkLogging: DrinkLogging
+}
+
+/**
+ * Drink-logging behaviour: each drink is logged with probability `loggedFraction` (0–1) and recorded as its volume ×
+ * `overReportFactor` (> 0; > 1 over-reports, < 1 under-reports). Defaults 1 / 1: every drink logged exactly, the
+ * behaviour before worldsim 1.3.0 [ASSUMPTION; swept in the back-test].
+ */
+export interface DrinkLogging {
+  loggedFraction: number
+  overReportFactor: number
 }
 
 /** Disruptions for the robustness analysis (docs/SIMULATION.md §5). */

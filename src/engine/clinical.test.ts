@@ -12,6 +12,7 @@ import {
   SYMPTOM_RULES,
   UAE_EMERGENCY,
   conservativeMode,
+  drinkReminderExposure,
   fluidCapCheck,
   fluidStatus,
   hydrationChannel,
@@ -613,5 +614,69 @@ describe('local day start (Asia/Dubai arithmetic, wave 2c performance)', () => {
     expect(fluidStatus(intakes, m - 1).todayL).toBeCloseTo(0.5, 12)
     const day = symptomsChannel({ now: m + MINUTE_MS, checkins: [{ t: m - 1, workerId: 'X', by: 'self', symptoms: ['cramps'] }], consented: true })
     expect(day.available).toBe(false) // yesterday's check-in does not count today
+  })
+})
+
+// ─────────────────────────────── drink reminders follow heat exposure (wave 2d) ───────────────────────────────
+
+describe('drink reminders follow heat exposure (drinkReminderExposure; FLUID)', () => {
+  const NOW = epochFromLocal('2026-07-15T10:00')
+
+  it('constants: 78 °F (TB MED 507 heat category 1 lower bound) converted exactly; 30 min after hot work [ENG]', () => {
+    expect(FLUID.EXPOSED_REST_WBGT_C).toBeCloseTo(25.5556, 4)
+    expect(FLUID.EXPOSED_REST_WBGT_C).toBe(((78 - 32) * 5) / 9)
+    expect(FLUID.REMINDER_AFTER_HOT_WORK_MIN).toBe(30)
+    expect([FLUID.REMINDER_L, FLUID.REMINDER_EVERY_MIN]).toEqual([0.25, 20])
+  })
+
+  it('known answers: hot work (and 30 min after it), rest/idle outside a cooled area at ≥ 25.56 °C, else none', () => {
+    const base = { hotWorkNow: false, minutesSinceHotWork: null, restingOutsideCooled: false, wbgtC: 20 }
+    expect(drinkReminderExposure({ ...base, hotWorkNow: true })).toBe('hot_work')
+    expect(drinkReminderExposure({ ...base, minutesSinceHotWork: 0 })).toBe('hot_work')
+    expect(drinkReminderExposure({ ...base, minutesSinceHotWork: 29.9 })).toBe('hot_work')
+    expect(drinkReminderExposure({ ...base, minutesSinceHotWork: 30 })).toBeNull()
+    expect(drinkReminderExposure({ ...base, restingOutsideCooled: true, wbgtC: FLUID.EXPOSED_REST_WBGT_C })).toBe('heat_rest')
+    expect(drinkReminderExposure({ ...base, restingOutsideCooled: true, wbgtC: 25.55 })).toBeNull()
+    expect(drinkReminderExposure({ ...base, restingOutsideCooled: true, wbgtC: Number.NaN })).toBe('heat_rest') // fail-safe
+    expect(drinkReminderExposure({ ...base, restingOutsideCooled: false, wbgtC: 35 })).toBeNull() // cooled rest area
+    expect(drinkReminderExposure({ ...base, minutesSinceHotWork: -1, restingOutsideCooled: false })).toBeNull()
+  })
+
+  it('fluidStatus: reminders only while exposed (absent = exposed, the behaviour before wave 2d); same cadence and caps', () => {
+    const last = [{ t: NOW - 25 * MINUTE_MS, workerId: 'W-1', ml: 250 }]
+    const before = fluidStatus(last, NOW)
+    expect(before).toMatchObject({ exposed: true, sendDrinkReminders: true, nextReminderAtMs: NOW, reminder: 'drink' })
+    expect(fluidStatus(last, NOW, { exposed: true })).toEqual(before)
+    const off = fluidStatus(last, NOW, { exposed: false })
+    expect(off).toMatchObject({ exposed: false, sendDrinkReminders: false, nextReminderAtMs: null, reminder: null })
+    expect(off.actions).not.toContain('drink_water')
+    expect(off.flags).toEqual(before.flags)
+    const notDue = fluidStatus([{ t: NOW - 10 * MINUTE_MS, workerId: 'W-1', ml: 250 }], NOW, { exposed: true })
+    expect([notDue.nextReminderAtMs, notDue.reminder]).toEqual([NOW + 10 * MINUTE_MS, null])
+    // Over the hourly cap: no reminder even while exposed.
+    const capped = fluidStatus([{ t: NOW - 5 * MINUTE_MS, workerId: 'W-1', ml: 1500 }], NOW, { exposed: true })
+    expect(capped.flags).toContain('OVER_HOURLY_CAP')
+    expect([capped.sendDrinkReminders, capped.reminder]).toEqual([false, null])
+  })
+
+  it('fasting: no drink reminder, rest-in-shade guidance while exposed (none when not exposed)', () => {
+    const fx = fluidStatus([], NOW, { fastingNow: true, exposed: true })
+    expect(fx).toMatchObject({ sendDrinkReminders: false, nextReminderAtMs: null, reminder: 'shade' })
+    expect(fx.actions).not.toContain('drink_water')
+    expect(fluidStatus([], NOW, { fastingNow: true, exposed: false }).reminder).toBeNull()
+    const ch = hydrationChannel({ now: NOW, checkins: [], intakes: [], consented: true, fastingNow: true, exposed: true })
+    expect(ch.fluid.reminder).toBe('shade')
+    expect(ch.drivers.map((d) => d.id)).toContain('fasting_no_drink_reminders')
+    expect(ch.actions).not.toContain('drink_water')
+  })
+
+  it('hydrationChannel passes the exposure through (absent = exposed)', () => {
+    const intakes = [{ t: NOW - 30 * MINUTE_MS, workerId: 'W-1', ml: 250 }]
+    const on = hydrationChannel({ now: NOW, checkins: [], intakes, consented: true, workerId: 'W-1' })
+    const off = hydrationChannel({ now: NOW, checkins: [], intakes, consented: true, workerId: 'W-1', exposed: false })
+    expect(on.actions).toContain('drink_water')
+    expect(off.actions).not.toContain('drink_water')
+    expect(off.fluid.reminder).toBeNull()
+    expect(off.level).toBe(on.level)
   })
 })

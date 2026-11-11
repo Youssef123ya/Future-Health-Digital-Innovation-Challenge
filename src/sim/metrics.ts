@@ -16,22 +16,25 @@
  * Evidence class: SIMULATED COHORT. Every number is a projection under stated assumptions (SIMULATION.md §6), never a
  * measured health outcome.
  */
-import type { BasisCounts } from '../engine/alerts'
+import { isAlertSuppressed, type BasisCounts, type DesignedSuppressionStats } from '../engine/alerts'
 import { triage } from '../engine/clinical'
 import { getRulePack, middayBreakWindow, regulatoryFloor, type RulePack } from '../engine/regulation'
 import { epochFromLocal, MINUTE_MS } from '../engine/time'
 import { RISK_ORDER, type AlertBasis, type Crew, type RiskLevel, type Role, type Task } from '../engine/types'
 import { createRng } from './rng'
-import type { PolicyId, SimConfig, SimEvent, SiteDayResult, SiteHour, TruthEventKind, WorkerMinute, WorkerSubgroup } from './types'
+import { isZillPolicy, type PolicyId, type SimConfig, type SimEvent, type SiteDayResult, type SiteHour, type TruthEventKind, type WorkerMinute, type WorkerSubgroup } from './types'
 
 // ─────────────────────────────── Constants ───────────────────────────────
 
 /**
  * Version of the metric definitions; part of every cohort report. 1.1.0: alarms split by Alert.basis — headline
  * detection on INDIVIDUAL alarms at ≥ high and ≥ stop, exposure advisories reported separately, alert burden by basis
- * and role (the all-alarm fields of 1.0.0 are kept for comparison).
+ * and role (the all-alarm fields of 1.0.0 are kept for comparison). 1.2.0 (wave 2d): designed suppression (engine/alerts.ts,
+ * ANSI/ISA-18.2): an alert version recorded under designed suppression is logged, not announced, so it is not an alarm
+ * or an exposure advisory; it is counted as a suppressed advisory (per worker-shift) and the runs carry
+ * AlertStats.designedSuppression. Reports before 1.2.0 had no suppressed alert, so their numbers read the same.
  */
-export const METRICS_VERSION = '1.1.0'
+export const METRICS_VERSION = '1.2.0'
 
 /** Ground-truth event kinds in report order (sim/types.ts TruthEventKind; definitions SIMULATION.md §2.4). */
 export const TRUTH_EVENT_KINDS: readonly TruthEventKind[] = ['excessive_strain', 'severe_strain', 'critical', 'dehydration_3pct', 'symptom_onset']
@@ -145,6 +148,11 @@ export interface WorkerShiftRecord {
    * was 'exposure' (a site or crew condition; crew alerts that bundle them are not counted again).
    */
   exposureAdvisories: number
+  /**
+   * Suppressed advisories (metrics 1.2.0): distinct worker-scope alerts at ≥ high recorded under designed suppression
+   * (engine/alerts.ts; the plan already enforces their action) that were never notified at ≥ high — logged, not announced.
+   */
+  suppressedAdvisories: number
   /** Engine minutes at ≥ high and ≥ stop (ShiftOutcome.engine.minutesByLevel), and the first emergency time. */
   minutesHighPlus: number
   minutesStopPlus: number
@@ -179,7 +187,7 @@ export interface RecordOptions {
 
 /** True when the engine runs under this configuration (Zill policies or shadow mode; worldsim.ts createWorld). */
 export function engineRuns(config: Pick<SimConfig, 'policy' | 'shadow'>): boolean {
-  return config.shadow || config.policy === 'zill_env' || config.policy === 'zill_full'
+  return config.shadow || isZillPolicy(config.policy)
 }
 
 /** Scheduled shift window [startT, endT) of a configuration (Asia/Dubai local times; engine/time.ts). */
@@ -197,7 +205,8 @@ export function alarmTimesByWorker(events: readonly SimEvent[], minLevel: RiskLe
   for (const e of events) {
     if (e.kind !== 'alert') continue
     const a = e.alert
-    if (a.status === 'resolved' || RISK_ORDER[a.level] < RISK_ORDER[minLevel]) continue
+    // A version under designed suppression is logged, not announced: not an alarm (metrics 1.2.0).
+    if (a.status === 'resolved' || RISK_ORDER[a.level] < RISK_ORDER[minLevel] || isAlertSuppressed(a)) continue
     const ids = a.scope === 'worker' ? (a.workerId ? [a.workerId] : []) : (a.memberIds ?? [])
     for (const w of ids) {
       let m = first.get(w)
@@ -217,6 +226,11 @@ export interface AlarmTimesByBasis {
   individual: Map<string, number[]>
   /** Per worker: sorted first times of the worker-scope alerts that were exposure at every version at ≥ the level. */
   exposure: Map<string, number[]>
+  /**
+   * Per worker: sorted first times of the worker-scope alerts recorded under designed suppression at ≥ the level and
+   * never notified at ≥ the level (suppressed advisories, metrics 1.2.0).
+   */
+  suppressed: Map<string, number[]>
 }
 
 /**
@@ -225,8 +239,11 @@ export interface AlarmTimesByBasis {
  * crew/site scope → `memberIds`), its non-resolved versions at ≥ `minLevel` are read in log order. It is an individual
  * alarm at the first such version whose basis is individual — an open exposure alert re-labelled individual (sticky
  * individual) counts from the re-label — and an exposure advisory when every such version was exposure; exposure
- * advisories count worker-scope alerts only (the crew alert that bundles them is the same condition).
- * Basis: PILOT.md §5.4 (a); wave 2c task brief (detection on individual alarms; exposure advisories separately).
+ * advisories count worker-scope alerts only (the crew alert that bundles them is the same condition). A version under
+ * designed suppression (engine/alerts.ts isAlertSuppressed: recorded, notified to nobody) is not an alarm; a worker-scope
+ * alert with such a version at ≥ the level and no notified one there is a suppressed advisory (metrics 1.2.0; a lifted
+ * alert counts from its lift, as the alarm it then became). Basis: PILOT.md §5.4 (a); wave 2c task brief (detection on
+ * individual alarms; exposure advisories separately); ANSI/ISA-18.2-2016 (designed suppression is logged, not announced).
  */
 export function alarmTimesByBasis(events: readonly SimEvent[], minLevel: RiskLevel = METRIC_PARAMS.alarmMinLevel): AlarmTimesByBasis {
   const ind = new Map<string, Map<string, number>>()
@@ -237,18 +254,29 @@ export function alarmTimesByBasis(events: readonly SimEvent[], minLevel: RiskLev
     const prev = x.get(id)
     if (prev === undefined || t < prev) x.set(id, t)
   }
+  const sup = new Map<string, Map<string, number>>()
+  const notified = new Set<string>()
   for (const e of events) {
     if (e.kind !== 'alert') continue
     const a = e.alert
     if (a.status === 'resolved' || RISK_ORDER[a.level] < RISK_ORDER[minLevel]) continue
     const ids = a.scope === 'worker' ? (a.workerId ? [a.workerId] : []) : (a.memberIds ?? [])
+    if (isAlertSuppressed(a)) {
+      if (a.scope === 'worker') for (const w of ids) put(sup, w, a.id, e.t)
+      continue
+    }
+    notified.add(a.id)
     const individual = (a.basis ?? 'individual') === 'individual'
     for (const w of ids) {
       if (individual) put(ind, w, a.id, e.t)
       else if (a.scope === 'worker') put(exp, w, a.id, e.t)
     }
   }
-  const out: AlarmTimesByBasis = { individual: new Map(), exposure: new Map() }
+  const out: AlarmTimesByBasis = { individual: new Map(), exposure: new Map(), suppressed: new Map() }
+  for (const [w, m] of sup) {
+    const times = [...m.entries()].filter(([id]) => !notified.has(id)).map(([, t]) => t)
+    if (times.length) out.suppressed.set(w, times.sort((x, y) => x - y))
+  }
   for (const [w, m] of ind) out.individual.set(w, [...m.values()].sort((x, y) => x - y))
   for (const [w, m] of exp) {
     // An alert that later became individual at ≥ the level is an individual alarm, not an exposure advisory.
@@ -429,6 +457,7 @@ export function workerShiftRecords(result: SiteDayResult, opts: RecordOptions = 
       alarmTimes: ran ? (alarms.get(o.workerId) ?? []) : [],
       individualAlarmTimes: ran ? { high: basisHigh.individual.get(o.workerId) ?? [], stop: basisStop.individual.get(o.workerId) ?? [] } : { high: [], stop: [] },
       exposureAdvisories: ran ? (basisHigh.exposure.get(o.workerId)?.length ?? 0) : 0,
+      suppressedAdvisories: ran ? (basisHigh.suppressed.get(o.workerId)?.length ?? 0) : 0,
       minutesHighPlus: ran ? lv.high + lv.stop + lv.emergency : 0,
       minutesStopPlus: ran ? lv.stop + lv.emergency : 0,
       engineEmergencyT: ran ? o.engine.firstEmergencyT : null,
@@ -474,6 +503,11 @@ export interface RunAlertSummary {
   notificationsByBasisRole: BasisRoleCounts
   /** engine/alerts.ts AlertStats.byBasis (alerts by their latest basis; notifications by their basis at sending). */
   byBasis: Record<AlertBasis, BasisCounts>
+  /**
+   * engine/alerts.ts AlertStats.designedSuppression (metrics 1.2.0): alerts recorded under designed suppression, of
+   * which still suppressed (never notified) and lifted (notified later). Zeros for logs without it.
+   */
+  designedSuppression: DesignedSuppressionStats
 }
 
 /** Notification counts by basis and recipient role ({@link RunAlertSummary}.notificationsByBasisRole). */
@@ -537,6 +571,7 @@ export function runAlertSummary(result: SiteDayResult, minLevel: RiskLevel = MET
     exposureAdvisoriesToSupervisor: toSupervisor.size,
     notificationsByBasisRole: byRole,
     byBasis: { individual: { ...emptyBasisCounts(), ...(s.byBasis?.individual ?? {}) }, exposure: { ...emptyBasisCounts(), ...(s.byBasis?.exposure ?? {}) } },
+    designedSuppression: { alerts: s.designedSuppression?.alerts ?? 0, stillSuppressed: s.designedSuppression?.stillSuppressed ?? 0, lifted: s.designedSuppression?.lifted ?? 0 },
   }
 }
 
@@ -1065,6 +1100,8 @@ export interface AckSummary {
   exposureAdvisoriesToSupervisor: number
   notificationsByBasisRole: BasisRoleCounts
   byBasis: Record<AlertBasis, BasisCounts>
+  /** Designed suppression pooled over the runs (metrics 1.2.0; {@link RunAlertSummary}.designedSuppression). */
+  designedSuppression: DesignedSuppressionStats
 }
 
 /** Pool {@link RunAlertSummary} values into an {@link AckSummary}. */
@@ -1088,6 +1125,11 @@ export function ackSummary(runs: readonly RunAlertSummary[]): AckSummary {
     workerShifts: s((r) => r.workerShifts ?? 0),
     crewShifts: s((r) => r.crewShifts ?? 0),
     exposureAdvisoriesToSupervisor: s((r) => r.exposureAdvisoriesToSupervisor ?? 0),
+    designedSuppression: {
+      alerts: s((r) => r.designedSuppression?.alerts ?? 0),
+      stillSuppressed: s((r) => r.designedSuppression?.stillSuppressed ?? 0),
+      lifted: s((r) => r.designedSuppression?.lifted ?? 0),
+    },
     notificationsByBasisRole: poolBasisRole(runs.map((r) => r.notificationsByBasisRole)),
     byBasis: Object.fromEntries(
       ALERT_BASES.map((b) => [
@@ -1135,6 +1177,11 @@ export interface ChallengeMeasures {
   exposureAdvisoriesPerWorkerShift: Estimate
   /** Exposure advisories that reached the crew's supervisor at ≥ high, per crew-shift (null without crews). */
   exposureAdvisoriesPerCrewShift: number | null
+  /**
+   * Suppressed advisories per worker-shift (metrics 1.2.0): worker-scope exposure alerts at ≥ high logged under designed
+   * suppression and never notified ({@link WorkerShiftRecord}.suppressedAdvisories).
+   */
+  suppressedAdvisoriesPerWorkerShift: Estimate
   /**
    * Alert burden: notifications per worker-shift by basis and recipient role — sent and requiring an acknowledgement
    * (plus the totals over both bases).
@@ -1207,6 +1254,7 @@ export function challengeMeasures(records: readonly WorkerShiftRecord[], runs: r
     },
     exposureAdvisoriesPerWorkerShift: ratioEstimate(cl, (r) => r.exposureAdvisories, () => 1, 'advisories|worker', o, 1, 2),
     exposureAdvisoriesPerCrewShift: ack.crewShifts > 0 ? round(ack.exposureAdvisoriesToSupervisor / ack.crewShifts, 2) : null,
+    suppressedAdvisoriesPerWorkerShift: ratioEstimate(cl, (r) => r.suppressedAdvisories ?? 0, () => 1, 'advisories|suppressed', o, 1, 2),
     burdenPerWorkerShift: burden,
     adherence: ratioEstimate(cl, (r) => r.followed, (r) => r.instructions, 'adherence', o),
     checkinResponse: ratioEstimate(cl, (r) => r.checkinsAnswered, (r) => r.checkinsPrompted, 'checkinResponse', o),

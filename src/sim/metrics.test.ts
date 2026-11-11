@@ -15,6 +15,7 @@ import {
   challengeMeasures,
   detectionSummary,
   emptyCalibration,
+  engineRuns,
   fairnessBreakdown,
   mergeCalibration,
   pairedComparison,
@@ -418,6 +419,68 @@ describe('alarms split by Alert.basis (metrics 1.1.0)', () => {
     expect(c.burdenPerWorkerShift.total.supervisor).toEqual({ sent: 2.5, requiringAck: 2.5 })
     expect(c.burdenPerWorkerShift.total.worker).toEqual({ sent: 1.5, requiringAck: 0.5 })
     expect(allFinite(c)).toBe(true)
+  })
+})
+
+describe('designed suppression (metrics 1.2.0)', () => {
+  const sup = (id: string, level: RiskLevel, who: string, liftedAt?: number, basis: 'exposure' | 'individual' = 'exposure', status: Alert['status'] = 'active'): Alert => ({
+    ...alert(id, level, 'worker', { workerId: who }, status),
+    basis,
+    suppression: { reason: 'action_in_force', t: T('08:00'), ...(liftedAt !== undefined ? { liftedAt } : {}) },
+  })
+  /** W1: S1 suppressed at high, never notified; S2 suppressed, lifted at 09:30 (now an exposure advisory); S3 suppressed at caution only. W2: N notified exposure. */
+  function suppressedDay(): SiteDayResult {
+    const events: SimEvent[] = [
+      { kind: 'alert', t: T('08:00'), alert: sup('S1', 'high', 'W1') },
+      { kind: 'alert', t: T('08:30'), alert: sup('S1', 'high', 'W1', undefined, 'exposure', 'resolved') },
+      { kind: 'alert', t: T('09:00'), alert: sup('S2', 'high', 'W1') },
+      { kind: 'alert', t: T('09:30'), alert: sup('S2', 'high', 'W1', T('09:30'), 'individual') },
+      { kind: 'alert', t: T('10:00'), alert: sup('S3', 'caution', 'W1') },
+      { kind: 'alert', t: T('11:00'), alert: { ...alert('N', 'high', 'worker', { workerId: 'W2' }), basis: 'exposure' } },
+    ]
+    const stats = alertStats([], [])
+    return {
+      config: makeSimConfig({ siteId: 'kezad', date: DATE, policy: 'zill_monitored' }),
+      stamp: 'test',
+      hours: hours(),
+      outcomes: [outcome('W1'), outcome('W2')],
+      events,
+      alertStats: { ...stats, designedSuppression: { alerts: 3, stillSuppressed: 2, lifted: 1 } },
+      plan: null,
+      timingMs: 0,
+    }
+  }
+
+  it('a version under designed suppression is not an alarm; an alert never notified at ≥ the level is a suppressed advisory, a lifted one counts from its lift (known answers)', () => {
+    const ev = suppressedDay().events
+    const hi = alarmTimesByBasis(ev, 'high')
+    expect(hi.suppressed.get('W1')).toEqual([T('08:00')]) // S1 only: S2 was lifted (notified), S3 is below high
+    expect(hi.individual.get('W1')).toEqual([T('09:30')]) // S2 from its lift, with the basis it was lifted on
+    expect(hi.exposure.get('W1')).toBeUndefined()
+    expect(hi.exposure.get('W2')).toEqual([T('11:00')])
+    expect(alarmTimesByBasis(ev, 'caution').suppressed.get('W1')).toEqual([T('08:00'), T('10:00')])
+    // Every-alarm count (metrics 1.0.0 definition) skips the suppressed versions too.
+    expect(alarmTimesByWorker(ev).get('W1')).toEqual([T('09:30')])
+    // Logs without suppression read as before (metrics 1.1.0 numbers unchanged).
+    expect(alarmTimesByBasis(siteDay().events, 'high').suppressed.size).toBe(0)
+  })
+
+  it('records, run summaries and challenge measures carry suppressed advisories and AlertStats.designedSuppression; zill_monitored runs the engine', () => {
+    const r = suppressedDay()
+    expect(engineRuns(r.config)).toBe(true)
+    const rs = workerShiftRecords(r, { crews: [CREW] })
+    expect(byId(rs, 'W1').suppressedAdvisories).toBe(1)
+    expect(byId(rs, 'W2').suppressedAdvisories).toBe(0)
+    expect(byId(rs, 'W1').exposureAdvisories).toBe(0)
+    const s = runAlertSummary(r, 'high', { crews: [CREW] })
+    expect(s.designedSuppression).toEqual({ alerts: 3, stillSuppressed: 2, lifted: 1 })
+    expect(ackSummary([s, s]).designedSuppression).toEqual({ alerts: 6, stillSuppressed: 4, lifted: 2 })
+    const c = challengeMeasures(rs, [s], O)
+    expect(c.suppressedAdvisoriesPerWorkerShift.value).toBe(0.5)
+    expect(c.exposureAdvisoriesPerWorkerShift.value).toBe(0.5) // W2's notified advisory only
+    // A run summary of a log without the stats (older results) reports zeros.
+    const old = runAlertSummary({ ...r, alertStats: alertStats([], []) }, 'high', { crews: [CREW] })
+    expect(old.designedSuppression).toEqual({ alerts: 0, stillSuppressed: 0, lifted: 0 })
   })
 })
 

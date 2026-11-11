@@ -234,9 +234,16 @@ export interface Checkin {
 
 /** A logged drink ("I drank water"), used for hourly/daily fluid caps and hydration reminders. */
 export interface FluidIntake {
+  /** When the drink was taken (epoch ms). */
   t: number
   workerId: string
   ml: number
+  /**
+   * When the drink was logged (epoch ms); absent = logged at `t` (risk.ts creditedIntakeL), while the worker engine
+   * stamps a log it receives without one with the receiving step. The ISO 7933 water-loss credit counts only drinks
+   * logged within 15 min of `t`, either side (engine/risk.ts RISK_THRESHOLDS.hydrationCredit.maxLogDelayMin) [ENG].
+   */
+  loggedAt?: number
 }
 
 /** Clinical escalation tiers shared by the physiology and symptom rules (physio_and_clinical.md §10.5–10.7). */
@@ -346,6 +353,32 @@ export interface RiskAssessment {
  */
 export type AlertBasis = 'exposure' | 'individual'
 
+/**
+ * Why an exposure alert is under designed (state-based) suppression (ANSI/ISA-18.2-2016: an alarm must call for a new
+ * operator action; designed suppression logs an alarm whose action is already in force instead of announcing it).
+ * One pooled value, 'action_in_force': the alert's console actions are already in force, either because the active
+ * day plan sets the work/rest (the engine's `work_rest_planned` driver) or because the worker's device enforces their
+ * own limits and the WBGT tables are only a screen (monitored mode, `wbgt_screen_monitored`). The two causes are not
+ * told apart on a published alert: monitored mode depends on wearable consent and on the absence of a stricter personal
+ * mode, so naming it would reveal consent or health status (wave 2d principle 4; ARCHITECTURE §1 principle 5). The
+ * alert engine keeps the cause in its own state (engine/alerts.ts `AlertRecord.suppressionCause`).
+ * Basis: engine/alerts.ts designed suppression.
+ */
+export type AlertSuppressionReason = 'action_in_force'
+
+/** Designed-suppression marker of an alert: recorded, notified to nobody until lifted. */
+export interface AlertSuppression {
+  /** Always 'action_in_force' (see {@link AlertSuppressionReason}). */
+  reason: AlertSuppressionReason
+  /** When the alert was recorded under suppression (its raise time). */
+  t: number
+  /**
+   * When the suppression was lifted: the alert gained an individual basis or the suppressing condition ended while it
+   * stayed open. It was notified at that time. Absent while suppressed.
+   */
+  liftedAt?: number
+}
+
 export interface Alert {
   id: string
   t: number
@@ -357,6 +390,10 @@ export interface Alert {
   memberIds?: string[]
   scope: 'worker' | 'crew' | 'site'
   level: RiskLevel
+  /**
+   * The worker's own actions, as on their device (a drink reminder is absent while drinking is withheld, e.g. while
+   * fasting). For the worker and the clinical responders only: consoles show {@link Alert.consoleActions}.
+   */
   actions: ActionId[]
   /** Short, non-clinical reason that is safe to show a supervisor. */
   reason: string
@@ -378,6 +415,18 @@ export interface Alert {
    */
   escalatedAt?: number
   resolvedAt?: number
+  /**
+   * The actions as consoles may show them (supervisor, HSE): no device-only prompt (drink reminder, check-in, buddy
+   * check) and no confidential action; 'rotate_task' for a worker not cleared for heat work (engine/privacy.ts
+   * supervisorActions). Absent on alerts from older producers: derive it from `actions` with the same rule.
+   */
+  consoleActions?: ActionId[]
+  /** i18n key of `reason`: `driver.<id>`, `reason.<generic or pooled>` (engine/alerts.ts). Never a private driver id. */
+  reasonKey?: string
+  /** Exposure alerts: the reason is framed as site heat ('heat') or a site rule ('rule'), for the localised label. */
+  frame?: 'heat' | 'rule'
+  /** Present when the alert was recorded under designed suppression (see {@link AlertSuppression}). */
+  suppression?: AlertSuppression
 }
 
 // ─────────────────────────────── Governance ───────────────────────────────

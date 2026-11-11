@@ -7,16 +7,25 @@ import {
   CLINICAL_TEXT_PATTERN,
   CREW_BUNDLE_MIN_WORKERS,
   DEESCALATION_DWELL_MIN,
+  DESIGNED_SUPPRESSION_MAX_LEVEL,
   EXPOSURE_CHANNELS,
+  HIGH_ACK_TIMEOUT_MIN,
   INDIVIDUAL_CHANNELS,
+  INDIVIDUAL_DRIVER_IDS,
+  MONITORED_SCREEN_DRIVER_IDS,
+  PLAN_COVERED_ACTIONS,
+  PLAN_IN_FORCE_DRIVER_IDS,
+  PRIVATE_FACTOR_TEXT_PATTERN,
   REPEAT_SUPPRESSION_MIN,
   STOP_ACK_TIMEOUT_MIN,
   acknowledge,
   alertStats,
   assessmentBasis,
   createAlertEngine,
+  isAlertSuppressed,
   processAssessments,
   resolve,
+  supervisorSafeText,
   tick,
 } from './alerts'
 import type { AlertEngineState, EngineAlert, Notification, RosterEntry } from './alerts'
@@ -172,7 +181,7 @@ const CLINICAL_WORDS = [
 ]
 const NOTIFICATION_KEYS = ['id', 't', 'alertId', 'to', 'channel', 'level', 'actions', 'reasonKey', 'text', 'requiresAck', 'kind', 'basis'].sort()
 /** Every field a published alert may carry (no engine bookkeeping such as driving channels or the clinical flag). */
-const ALERT_KEYS = new Set(['id', 't', 'siteId', 'crewId', 'workerId', 'memberIds', 'scope', 'level', 'actions', 'reason', 'basis', 'status', 'ack', 'acks', 'escalatedTo', 'escalatedAt', 'resolvedAt'])
+const ALERT_KEYS = new Set(['id', 't', 'siteId', 'crewId', 'workerId', 'memberIds', 'scope', 'level', 'actions', 'consoleActions', 'reason', 'reasonKey', 'frame', 'basis', 'status', 'ack', 'acks', 'escalatedTo', 'escalatedAt', 'resolvedAt', 'suppression'])
 
 function seeded(seed: number): () => number {
   let a = seed >>> 0
@@ -552,12 +561,14 @@ describe('basis: exposure vs individual', () => {
     expect(EXPOSURE_CHANNELS).toEqual(['environment', 'regulation'])
   })
 
-  it.each(INDIVIDUAL_CHANNELS)('a %s-driven alert is individual and keeps its non-clinical reason', (channel) => {
+  it.each(INDIVIDUAL_CHANNELS)('a %s-driven alert is individual, with a non-clinical reason and no individual number', (channel) => {
     const r = step(createAlertEngine(), 0, [assess('V1', at(0), 'high', { channel })])
     const a = r.raised[0]
     expect(a.basis).toBe('individual')
     expect(r.notifications.every((n) => n.basis === 'individual')).toBe(true)
-    expect(a.reason).toBe(channel === 'projection' ? DRIVER.projection.text : 'Personal check flagged on the worker’s device')
+    // Wave 2d: the projection driver's text ("about 20 min to …") is replaced by its generic driver.<id> phrase.
+    expect(a.reason).toBe(channel === 'projection' ? 'At this work rate, your safe time in the heat is running out.' : 'Personal check flagged on the worker’s device')
+    expect(a.reason).not.toMatch(/\d/)
     expect(toRole(r.notifications, 'supervisor')[0].text).toContain(`Reason: ${a.reason}`)
     for (const w of CLINICAL_WORDS) expect(a.reason).not.toMatch(w)
   })
@@ -565,7 +576,7 @@ describe('basis: exposure vs individual', () => {
   it('mixed: an individual channel at the alert level makes it individual; one below the level does not', () => {
     const mixed = step(createAlertEngine(), 0, [assess('V1', at(0), 'high', { channels: { environment: 'high', projection: 'high' } })])
     expect(mixed.raised[0].basis).toBe('individual')
-    expect(mixed.raised[0].reason).toBe('Effective WBGT 33.4 °C is 2.1 °C over the exposure limit for heavy work') // unchanged non-clinical reason
+    expect(mixed.raised[0].reason).toBe('The heat is over the safe limit for this work.') // generic phrase: no personal-limit margin (wave 2d)
     const below = step(createAlertEngine(), 0, [assess('V1', at(0), 'stop', { channels: { environment: 'stop', projection: 'high' } })])
     expect(below.raised[0].basis).toBe('exposure')
     expect(assessmentBasis(assess('V1', at(0), 'stop', { channels: { regulation: 'stop', environment: 'high', physiology: 'caution' } }))).toBe('exposure')
@@ -619,7 +630,7 @@ describe('basis: exposure vs individual', () => {
     const r = step(s, 1, [assess('V1', at(1), 'high', { channels: { environment: 'high', projection: 'high' } })])
     expect(r.raised).toHaveLength(0)
     expect(r.notifications).toHaveLength(0)
-    expect(r.updated).toEqual([expect.objectContaining({ id, basis: 'individual', reason: 'Effective WBGT 33.4 °C is 2.1 °C over the exposure limit for heavy work' })])
+    expect(r.updated).toEqual([expect.objectContaining({ id, basis: 'individual', reason: 'The heat is over the safe limit for this work.' })])
     s = r.state
     // Back to environment only at the same level: still individual while it stays open.
     const back = step(s, 2, [assess('V1', at(2), 'high')])
@@ -1135,5 +1146,315 @@ describe('properties', () => {
       }
       expect(escalations).toBeGreaterThan(10)
     }
+  })
+})
+
+// ─────────────────────────────── Wave 2d: designed suppression, relabel, supervisor texts ───────────────────────────────
+
+/** engine/risk.ts `work_rest_planned`: the day plan's cap binds (it is at least as strict as the live limit). */
+const PLANNED: RiskDriver = {
+  id: 'work_rest_planned',
+  channel: 'environment',
+  text: 'Day plan: at most 30 min work per hour on this task, rest the remainder',
+  value: 30,
+  unit: 'min/h',
+  direction: 'info',
+  basis: 'engine/planner.ts day plan',
+}
+/** engine/risk.ts `wbgt_screen_monitored`: monitored mode, the WBGT tables are only a screen. */
+const MONITORED: RiskDriver = {
+  id: 'wbgt_screen_monitored',
+  channel: 'environment',
+  text: 'WBGT is above the table limit: your own heat-strain projection (ISO 7933) and wearable monitoring are in use',
+  direction: 'raises',
+  basis: 'ISO 7243:2017; ACGIH TLV; NIOSH 2016',
+}
+/** An environment-driven assessment with the day plan in force (plus any extra drivers). */
+const planned = (w: string, t: number, level: RiskLevel, o: AOpts = {}): RiskAssessment => {
+  const base = assess(w, t, level, o)
+  const extra = [PLANNED, ...(o.drivers ?? [])].filter((d, i, all) => all.findIndex((x) => x.id === d.id) === i)
+  const drivers = [...base.drivers.filter((d) => !extra.some((x) => x.id === d.id)), ...extra]
+  return { ...base, drivers, channels: base.channels.map((c) => ({ ...c, drivers: drivers.filter((d) => d.channel === c.channel) })) }
+}
+
+describe('designed suppression (ANSI/ISA-18.2-2016, wave 2d)', () => {
+  it('constants: at most high; plan and monitored-screen drivers; the console actions a plan already puts in force', () => {
+    expect(DESIGNED_SUPPRESSION_MAX_LEVEL).toBe('high')
+    expect(PLAN_IN_FORCE_DRIVER_IDS).toEqual(['work_rest_planned'])
+    expect(MONITORED_SCREEN_DRIVER_IDS).toEqual(['wbgt_screen_monitored'])
+    expect(PLAN_COVERED_ACTIONS).toEqual(['shade_breaks', 'rotate_task', 'reduce_intensity'])
+  })
+
+  it('an exposure alert at high whose work/rest the active plan already enforces is recorded and notified to nobody; no timer runs', () => {
+    const r = step(createAlertEngine(), 0, [planned('V1', at(0), 'high')])
+    expect(r.raised).toHaveLength(1)
+    const a = r.raised[0]
+    expect(a).toMatchObject({ level: 'high', basis: 'exposure', status: 'active', suppression: { reason: 'action_in_force', t: at(0) } })
+    expect(a.suppression?.liftedAt).toBeUndefined()
+    expect(isAlertSuppressed(a)).toBe(true)
+    expect(r.notifications).toEqual([])
+    expect(r.state.alerts[a.id].suppressionCause).toBe('plan_in_force')
+    // No acknowledgement was asked, so no reminder after the high timeout.
+    expect(tick(r.state, at(HIGH_ACK_TIMEOUT_MIN + 5)).notifications).toEqual([])
+    // It stays open and silent while the plan stays in force.
+    let s = r.state
+    for (let m = 1; m <= 30; m++) {
+      const x = step(s, m, [planned('V1', at(m), 'high')])
+      expect(x.notifications).toEqual([])
+      s = x.state
+    }
+    expect(isAlertSuppressed(s.alerts[a.id].alert)).toBe(true)
+  })
+
+  it('a monitored-mode screen alert (WBGT tables only a screen) is suppressed too; the published alert never names the cause', () => {
+    const r = step(createAlertEngine(), 0, [assess('V1', at(0), 'caution', { drivers: [DRIVER.environment, MONITORED], actions: ['drink_water'] })])
+    const a = r.raised[0]
+    expect(a.suppression).toEqual({ reason: 'action_in_force', t: at(0) })
+    expect(r.state.alerts[a.id].suppressionCause).toBe('monitored_screen')
+    expect(r.notifications).toEqual([])
+    // Plan and monitored mode share one published reason: monitored mode would reveal wearable consent.
+    const plan = step(createAlertEngine(), 0, [planned('V1', at(0), 'caution', { actions: ['drink_water'] })]).raised[0]
+    expect(plan.suppression).toEqual(a.suppression)
+    expect(JSON.stringify([a, plan])).not.toMatch(/monitor|plan_in_force|wearable|consent/i)
+  })
+
+  const NEVER: Array<[string, () => RiskAssessment]> = [
+    ['stop level', () => planned('V1', at(0), 'stop')],
+    ['emergency', () => planned('V1', at(0), 'emergency', { channel: 'symptoms' })],
+    ['individual basis (projection at the level)', () => planned('V1', at(0), 'high', { channels: { environment: 'high', projection: 'high' } })],
+    ['symptoms at the level', () => planned('V1', at(0), 'high', { channels: { environment: 'high', symptoms: 'high' } })],
+    ['physiology at the level', () => planned('V1', at(0), 'high', { channels: { environment: 'high', physiology: 'high' } })],
+    ['hydration at the level', () => planned('V1', at(0), 'high', { channels: { environment: 'high', hydration: 'high' } })],
+    ['a first-aid action', () => planned('V1', at(0), 'high', { actions: [...DEFAULT_ACTIONS.high, 'first_aider_check'] })],
+    ['a new operator action (no lone work)', () => planned('V1', at(0), 'high', { actions: [...DEFAULT_ACTIONS.high, 'no_lone_work'] })],
+    ['a site sensor check', () => planned('V1', at(0), 'high', { actions: [...DEFAULT_ACTIONS.high, 'check_sensor'], drivers: [{ id: 'meter_check_advised', channel: 'environment', text: 'Check the site WBGT meter', direction: 'info', basis: 'b' }] })],
+    ['a rest-now action', () => planned('V1', at(0), 'high', { actions: [...DEFAULT_ACTIONS.high, 'rest_shade_now'] })],
+    ['an individual driver on the exposure channel (clinical latch)', () => planned('V1', at(0), 'high', { drivers: [DRIVER.environment, { id: 'clinical_latch', channel: 'environment', text: 'Level stays until the case is resolved', direction: 'raises', basis: 'b' }] })],
+    ['no plan in force and no monitored screen', () => assess('V1', at(0), 'high')],
+  ]
+  it.each(NEVER)('never suppressed: %s (worker notified at once)', (_label, make) => {
+    const r = step(createAlertEngine(), 0, [make()])
+    expect(r.raised).toHaveLength(1)
+    expect(r.raised[0].suppression).toBeUndefined()
+    expect(toWorker(r.notifications, 'V1')).toHaveLength(1)
+  })
+
+  it('a carried clinical latch is never suppressed, even when the new level is exposure-only with the plan in force', () => {
+    let s = step(createAlertEngine(), 0, [assess('V1', at(0), 'high', { channel: 'symptoms' })]).state
+    const r = step(s, 1, [planned('V1', at(1), 'stop')])
+    s = r.state
+    const next = step(s, 2, [planned('V1', at(2), 'stop')])
+    expect([...r.raised, ...next.raised].every((a) => a.suppression === undefined)).toBe(true)
+  })
+
+  it('escalation out of suppression: caution → high stay silent; the stop notifies at once and its acknowledgement timer runs', () => {
+    let r = step(createAlertEngine(), 0, [planned('V1', at(0), 'caution', { actions: ['drink_water'] })])
+    const caution = r.raised[0]
+    expect(isAlertSuppressed(caution)).toBe(true)
+    r = step(r.state, 1, [planned('V1', at(1), 'high')])
+    expect(r.raised).toHaveLength(1)
+    expect(isAlertSuppressed(r.raised[0])).toBe(true)
+    expect(r.updated.find((a) => a.id === caution.id)?.status).toBe('resolved')
+    expect(r.notifications).toEqual([])
+    r = step(r.state, 2, [planned('V1', at(2), 'stop')])
+    const stop = r.raised[0]
+    expect(stop.level).toBe('stop')
+    expect(stop.suppression).toBeUndefined()
+    expect(toWorker(r.notifications, 'V1')).toEqual([expect.objectContaining({ requiresAck: true, kind: 'alert' })])
+    expect(toRole(r.notifications, 'supervisor')).toHaveLength(1)
+    const t = tick(r.state, at(2 + STOP_ACK_TIMEOUT_MIN))
+    expect(t.updated.find((a) => a.id === stop.id)?.escalatedAt).toBe(at(2 + STOP_ACK_TIMEOUT_MIN))
+    expect(t.notifications.length).toBeGreaterThan(0)
+  })
+
+  it('gaining an individual basis lifts the suppression: notified at once, individually, timers counted from the lift', () => {
+    let r = step(createAlertEngine(), 0, [planned('V1', at(0), 'high')])
+    const id = r.raised[0].id
+    r = step(r.state, 3, [planned('V1', at(3), 'high', { channels: { environment: 'high', projection: 'high' } })])
+    expect(r.raised).toHaveLength(0)
+    expect(r.updated).toEqual([expect.objectContaining({ id, basis: 'individual', suppression: { reason: 'action_in_force', t: at(0), liftedAt: at(3) } })])
+    expect(toWorker(r.notifications, 'V1')).toHaveLength(1)
+    const sup = toRole(r.notifications, 'supervisor')
+    expect(sup).toHaveLength(1)
+    expect(sup[0]).toMatchObject({ basis: 'individual', requiresAck: true })
+    expect(sup[0].text).not.toMatch(/\d+ min to/)
+    expect(r.state.alerts[id].notifiedAt).toBe(at(3))
+    // The high reminder counts from the first notification (at 3), not from the raise (at 0).
+    expect(tick(r.state, at(HIGH_ACK_TIMEOUT_MIN + 1)).notifications).toEqual([])
+    expect(tick(r.state, at(3 + HIGH_ACK_TIMEOUT_MIN)).notifications.filter((n) => n.kind === 'reminder')).toHaveLength(1)
+  })
+
+  it('the suppressing condition ending lifts it too (the plan cap no longer binds): notified at once', () => {
+    let r = step(createAlertEngine(), 0, [planned('V1', at(0), 'high')])
+    const id = r.raised[0].id
+    r = step(r.state, 5, [assess('V1', at(5), 'high')])
+    expect(r.updated).toEqual([expect.objectContaining({ id, basis: 'exposure', suppression: { reason: 'action_in_force', t: at(0), liftedAt: at(5) } })])
+    expect(toWorker(r.notifications, 'V1')).toHaveLength(1)
+    expect(toRole(r.notifications, 'supervisor')).toHaveLength(1)
+  })
+
+  it('a level held only by the dwell (no channel at the level) keeps the suppression', () => {
+    let r = step(createAlertEngine(), 0, [planned('V1', at(0), 'high')])
+    const id = r.raised[0].id
+    r = step(r.state, 4, [assess('V1', at(4), 'high', { channels: {}, drivers: [] })])
+    expect(r.notifications).toEqual([])
+    expect(isAlertSuppressed(r.state.alerts[id].alert)).toBe(true)
+  })
+
+  it('suppressed alerts are never crew-bundled; lifted together, they bundle (window counted from the lift)', () => {
+    const crew = ['W1', 'W2', 'W3']
+    let r = step(createAlertEngine(), 0, crew.map((w) => planned(w, at(0), 'high')))
+    expect(r.notifications).toEqual([])
+    expect(r.raised.every((a) => a.scope === 'worker' && isAlertSuppressed(a))).toBe(true)
+    r = step(r.state, 20, crew.map((w) => assess(w, at(20), 'high')))
+    const crewAlert = r.raised.find((a) => a.scope === 'crew')
+    expect(crewAlert?.memberIds?.slice().sort()).toEqual(crew)
+    expect(toRole(r.notifications, 'supervisor')).toHaveLength(1)
+    for (const w of crew) expect(toWorker(r.notifications, w)).toHaveLength(1)
+  })
+
+  it('leaving a suppressed alert below the level raises a new alert, never a "conditions eased" message', () => {
+    let r = step(createAlertEngine(), 0, [planned('V1', at(0), 'high')])
+    let s = r.state
+    const told: Notification[] = []
+    for (let m = 1; m <= DEESCALATION_DWELL_MIN + 2; m++) {
+      r = step(s, m, [assess('V1', at(m), 'caution')])
+      told.push(...r.notifications)
+      s = r.state
+    }
+    const toV1 = toWorker(told, 'V1')
+    expect(toV1).toHaveLength(1)
+    expect(toV1[0].kind).toBe('alert')
+    expect(toV1[0].text).not.toMatch(/eased/)
+  })
+
+  it('alertStats counts designed suppression apart from repeat suppressions (known answer)', () => {
+    // V1: suppressed, never lifted. W1: suppressed, then lifted by an individual cause. V2: notified normally.
+    const s1 = step(createAlertEngine(), 0, [planned('V1', at(0), 'high'), planned('W1', at(0), 'high'), assess('V2', at(0), 'high')])
+    const s2 = step(s1.state, 2, [
+      planned('V1', at(2), 'high'),
+      planned('W1', at(2), 'high', { channels: { environment: 'high', projection: 'high' } }),
+      assess('V2', at(2), 'high'),
+    ])
+    const v1 = s1.raised.find((a) => a.workerId === 'V1')!
+    const notes = [...s1.notifications, ...s2.notifications]
+    const stats = alertStats([...s1.raised, ...s2.raised, ...s2.updated], notes, s2.state.suppressed)
+    expect(stats.designedSuppression).toEqual({ alerts: 2, stillSuppressed: 1, lifted: 1 })
+    expect(stats.alerts).toBe(3)
+    expect(stats.suppressed).toBe(0)
+    expect(stats.byBasis.exposure.alerts).toBe(2)
+    expect(stats.byBasis.individual.alerts).toBe(1)
+    expect(notes.some((n) => n.alertId === v1.id)).toBe(false)
+  })
+})
+
+describe('relabel needs a cause AT the alert level (safety review wave 2c, relabel-dwell probe)', () => {
+  it('the drivingChannels() fallback to a lower channel never relabels; an individual driver on a channel at the level does', () => {
+    // The probe: environment stop (exposure), then a dwell-held stop with every channel safe but the projection at
+    // caution (the highest channel, below the level), then all safe.
+    let r = step(createAlertEngine(), 0, [assess('V1', at(0), 'stop')])
+    const id = r.raised[0].id
+    expect(r.raised[0].basis).toBe('exposure')
+    r = step(r.state, 1, [assess('V1', at(1), 'stop', { channels: { projection: 'caution' } })])
+    expect(r.updated).toEqual([])
+    expect(r.state.alerts[id].alert).toMatchObject({ basis: 'exposure', reason: 'Site heat: too hot for this work now' })
+    r = step(r.state, 2, [assess('V1', at(2), 'stop', { channels: {}, drivers: [] })])
+    expect(r.state.alerts[id].alert.basis).toBe('exposure')
+    // An individual driver on a channel below the level does not relabel either.
+    r = step(r.state, 3, [assess('V1', at(3), 'stop', { channels: { environment: 'stop', projection: 'caution' }, drivers: [DRIVER.environment, { ...DRIVER.projection, id: 'phs_limit_reached' }] })])
+    expect(r.state.alerts[id].alert.basis).toBe('exposure')
+    // One on a channel at the level does.
+    const budget: RiskDriver = { id: 'acclimatization_budget_exhausted', channel: 'environment', text: "Today's heat-exposure allowance is used up: no more hot work today", direction: 'raises', basis: 'b' }
+    expect(INDIVIDUAL_DRIVER_IDS).toContain('acclimatization_budget_exhausted')
+    r = step(r.state, 4, [assess('V1', at(4), 'stop', { drivers: [budget, DRIVER.environment] })])
+    expect(r.updated).toEqual([expect.objectContaining({ id, basis: 'individual', reason: 'Not cleared for heat work now: assign cooler work; the device will say when to return.', reasonKey: 'reason.not_cleared_for_heat_work' })])
+    expect(r.notifications).toEqual([])
+  })
+})
+
+describe('supervisor-facing texts (wave 2d)', () => {
+  it('the private-factor filter: fasting and consent words are caught; site and pooled texts pass', () => {
+    for (const t of ['Fasting: your water limit is used up', 'Wearable monitoring is off (consent, wearable or setting)', 'during Ramadan', 'consented band']) {
+      expect(PRIVATE_FACTOR_TEXT_PATTERN.test(t), t).toBe(true)
+      expect(supervisorSafeText(t), t).toBe(false)
+    }
+    for (const t of ['Site heat: work/rest 30/30 in effect', 'Not cleared for heat work now: assign cooler work; the device will say when to return.', "Device-directed rest: follow the work and rest times on the worker's device.", 'Breakfast break at 09:00']) {
+      expect(supervisorSafeText(t), t).toBe(true)
+    }
+    expect(supervisorSafeText('Dizziness reported')).toBe(false) // the clinical pattern still applies
+  })
+
+  const PRIVATE_DRIVERS: Array<[string, RiskDriver, RiskLevel]> = [
+    ['monitored mode', MONITORED, 'stop'],
+    ['monitoring fallback (consent)', { id: 'monitoring_fallback_tables', channel: 'environment', text: 'Wearable monitoring is off (consent, wearable or setting): the table work/rest limits apply again', direction: 'raises', basis: 'b' }, 'high'],
+    ['stricter personal limit', { id: 'limit_stricter_personal', channel: 'environment', text: 'The stricter personal exposure limit applies', direction: 'raises', basis: 'b' }, 'high'],
+    ['environment task hold', { id: 'resume_hold_environment', channel: 'environment', text: 'Rest before going back to this task: the heat-exposure limit does not allow it now', direction: 'raises', basis: 'b' }, 'stop'],
+    ['regulation task hold', { id: 'resume_hold_regulation', channel: 'regulation', text: 'Midday work ban: rest until it ends at 15:00', direction: 'raises', basis: 'b' }, 'stop'],
+    ['projection resume hold with a rest estimate', { id: 'phs_resume_hold', channel: 'projection', text: 'Rest before going back to this task: about 25 min of rest needed (rest 40 % done)', direction: 'raises', basis: 'b' }, 'stop'],
+    ['projection work-bout countdown', { id: 'phs_work_bout', channel: 'projection', text: 'About 12 min of work left before the next rest', value: 12, unit: 'min', direction: 'raises', basis: 'b' }, 'high'],
+    ['drink-restricted wording on the projection channel', { id: 'phs_limit_reached', channel: 'projection', text: 'Not drinking (fasting): no more heat work this shift', direction: 'raises', basis: 'b' }, 'stop'],
+  ]
+  it.each(PRIVATE_DRIVERS)('%s: the alert reason, key and supervisor notification carry no number, private word or private id', (_label, d, level) => {
+    const r = step(createAlertEngine(), 0, [assess('V1', at(0), level, { channel: d.channel, drivers: [d] })])
+    const a = r.raised[0]
+    const sup = toRole(r.notifications, 'supervisor')
+    expect(sup.length).toBeGreaterThan(0)
+    // The work/rest minutes are the released operational field (workMinPerHour); no other number may appear.
+    const released = (s: string): string =>
+      s.replace(ROSTER.V1.displayName, '').replace(/\(\d+ min work \/ \d+ min rest per hour\)/g, '').replace(/work\/rest \d+\/\d+/g, '')
+    for (const text of [a.reason, ...sup.map((n) => n.text)]) {
+      expect(released(text), text).not.toMatch(/\d/)
+      expect(supervisorSafeText(text), text).toBe(true)
+    }
+    expect(a.reasonKey).toMatch(/^(driver\.[a-z_]+|reason\.(not_cleared_for_heat_work|device_directed_rest|heat_exposure|regulation|projection|personal_check|first_aid_check|emergency))$/)
+    expect(a.reasonKey).not.toMatch(/monitor|fasting|drink|stricter|resume_hold/)
+  })
+
+  it('fasting vs drinking at the same limit: identical supervisor-facing alert and notifications', () => {
+    const at0 = (fasting: boolean): RiskAssessment => {
+      const proj: RiskDriver[] = [
+        { id: 'phs_limit_reached', channel: 'projection', text: 'Heat-strain model: the water-loss limit is reached', direction: 'raises', basis: 'ISO 7933:2023' },
+        fasting
+          ? { id: 'phs_recovery_review_required', channel: 'projection', text: 'Not drinking: the water-loss allowance is used up, so no more heat work this shift', direction: 'raises', basis: 'b' }
+          : { id: 'phs_drink_to_restart', channel: 'projection', text: 'Drink and rest: about 1.2 L to drink before heat work can restart (rest 0 % done)', value: 1.2, unit: 'L', direction: 'raises', basis: 'b' },
+      ]
+      const hyd: RiskDriver[] = fasting
+        ? [{ id: 'water_paused_fasting', channel: 'hydration', text: 'Fasting: water recommendation paused (0 mL/h)', direction: 'info', basis: 'b' }]
+        : [{ id: 'phs_water_credit', channel: 'hydration', text: 'Logged drinks counted: 1.5 L', direction: 'info', basis: 'b' }]
+      return assess('V1', at(0), 'stop', {
+        channels: { projection: 'stop' },
+        drivers: [...proj, ...hyd],
+        actions: fasting ? ['rest_shade_now', 'cool_down', 'symptom_checkin'] : ['rest_shade_now', 'cool_down', 'drink_water', 'electrolytes', 'symptom_checkin'],
+      })
+    }
+    const view = (fasting: boolean) => {
+      const r = step(createAlertEngine(), 0, [at0(fasting)])
+      const a = r.raised[0]
+      const t = tick(r.state, at(STOP_ACK_TIMEOUT_MIN))
+      const consoles = [...r.notifications, ...t.notifications].filter((n) => !(n.to.role === 'worker' && n.to.id === 'V1'))
+      return {
+        alert: { level: a.level, basis: a.basis, reason: a.reason, reasonKey: a.reasonKey, consoleActions: a.consoleActions, frame: a.frame, suppression: a.suppression },
+        consoles: consoles.map((n) => ({ to: n.to, channel: n.channel, level: n.level, actions: n.actions, reasonKey: n.reasonKey, text: n.text, kind: n.kind })),
+      }
+    }
+    expect(view(true)).toEqual(view(false))
+    expect(view(true).alert).toMatchObject({ basis: 'individual', reasonKey: 'reason.not_cleared_for_heat_work', consoleActions: ['rest_shade_now', 'cool_down', 'rotate_task'] })
+    expect(JSON.stringify(view(true))).not.toMatch(/drink|fasting|water-loss|electrolyte|check-in|mL/i)
+  })
+})
+
+describe('individual reason refresh (wave 2d)', () => {
+  it('an open individual alert takes the current reason when its cause changes at the same level, without a notification; no churn otherwise', () => {
+    let r = step(createAlertEngine(), 0, [assess('V1', at(0), 'stop', { channel: 'projection' })])
+    const id = r.raised[0].id
+    expect(r.raised[0]).toMatchObject({ basis: 'individual', reasonKey: 'driver.phs_minutes_to_limit' })
+    // The same assessment again: nothing to publish.
+    r = step(r.state, 0.5, [assess('V1', at(0.5), 'stop', { channel: 'projection' })])
+    expect(r.updated).toEqual([])
+    // The limit is now reached: the pooled phrase replaces the countdown phrase.
+    const reached: RiskDriver = { id: 'phs_limit_reached', channel: 'projection', text: 'Heat-strain model: the body-heat limit is reached', direction: 'raises', basis: 'ISO 7933:2023' }
+    r = step(r.state, 1, [assess('V1', at(1), 'stop', { channel: 'projection', drivers: [reached] })]) // within the 2-min stop timeout
+    expect(r.updated).toEqual([expect.objectContaining({ id, reason: 'Not cleared for heat work now: assign cooler work; the device will say when to return.', reasonKey: 'reason.not_cleared_for_heat_work' })])
+    expect(r.notifications).toEqual([])
   })
 })

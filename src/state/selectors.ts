@@ -20,7 +20,9 @@ import {
   RISK_LEVELS,
   RISK_ORDER,
   type Alert,
+  type AlertBasis,
   type ConsentState,
+  type LangCode,
   type Crew,
   type DataField,
   type Purpose,
@@ -39,6 +41,7 @@ import {
   createWorkerSnapshot,
   payloadForSync,
   project,
+  supervisorActions,
   type AckStatus,
   type AggregateTable,
   type AuditDraft,
@@ -49,7 +52,9 @@ import {
   type WorkerLocation as CaseLocation,
   type WorkerSnapshot,
 } from '../engine/privacy'
-import { CLINICAL_TEXT_PATTERN, SUPERVISOR_MIN_LEVEL, type Notification } from '../engine/alerts'
+import { SUPERVISOR_MIN_LEVEL, isAlertSuppressed, supervisorSafeText, type Notification } from '../engine/alerts'
+import { CONSOLE_PHRASES, SOURCE_LANG, consolePhrase, type ConsolePhraseId } from '../i18n/messages'
+import { driverText, hasDriverText } from '../i18n'
 import type { WorkerEnvStatus, WorkerLocation, WorkerStepDetail } from '../engine/risk'
 import type { EctempBand } from '../engine/physio'
 import type { SiteHeat } from '../engine/indices'
@@ -71,6 +76,12 @@ export interface SelectorInput {
   consent?: Readonly<Record<string, ConsentState>>
   /** Latest sync payloads received from worker devices in other tabs (./syncBus.ts). */
   remote?: Readonly<Record<string, RemotePayload>>
+  /**
+   * Console language for the labels the selectors compose (alert basis and frame labels, localised reasons, the first
+   * aider's location words, the no-data notice); absent = English (the source language). Basis: i18n/messages.ts
+   * CONSOLE_PHRASES (wave 2d governance task 2).
+   */
+  lang?: LangCode
 }
 
 /** A view model plus the audit drafts its projections produced (append them: governanceStore.recordAll). */
@@ -79,14 +90,29 @@ export interface Projected<T> {
   audit: AuditDraft[]
 }
 
-/** Builds the selector input from the simulation store and the consent ledger; null before a world exists. */
+/**
+ * Builds the selector input from the simulation store, the consent ledger and the console language (uiStore
+ * `language`; absent = English); null before a world exists.
+ */
 export function selectorInput(
   sim: Pick<SimStoreState, 'view' | 'crews' | 'roster' | 'device' | 'remotePayloads'>,
   consent?: Readonly<Record<string, ConsentState>>,
+  lang?: LangCode,
 ): SelectorInput | null {
   if (!sim.view) return null
-  return { view: sim.view, crews: sim.crews, roster: sim.roster, device: sim.device, remote: sim.remotePayloads, ...(consent ? { consent } : {}) }
+  return {
+    view: sim.view,
+    crews: sim.crews,
+    roster: sim.roster,
+    device: sim.device,
+    remote: sim.remotePayloads,
+    ...(consent ? { consent } : {}),
+    ...(lang ? { lang } : {}),
+  }
 }
+
+/** The console language of an input (English when absent or unknown). */
+const langOf = (input: Pick<SelectorInput, 'lang'>): LangCode => (input.lang && Object.prototype.hasOwnProperty.call(CONSOLE_PHRASES, input.lang) ? input.lang : SOURCE_LANG)
 
 // ─────────────────────────────── Parameters ───────────────────────────────
 
@@ -97,12 +123,27 @@ export function selectorInput(
  */
 export const CASE_SYMPTOM_WINDOW_MIN = 120
 
-/** Plain-language location text for the first aider. Basis: privacy.ts WorkerLocation (so a first aider can reach them). */
+/**
+ * Plain-language location text for the first aider, in English (the source of i18n/messages.ts CONSOLE_PHRASES
+ * `location_*`; see {@link locationText} for other languages). Basis: privacy.ts WorkerLocation (so a first aider can
+ * reach them).
+ */
 export const LOCATION_TEXT: Readonly<Record<WorkerLocation, string>> = Object.freeze({
   sun: 'in the sun',
   shade: 'in shade',
   indoor_cool: 'in the cooled rest area',
 })
+
+const LOCATION_PHRASE: Readonly<Record<WorkerLocation, ConsolePhraseId>> = Object.freeze({
+  sun: 'location_sun',
+  shade: 'location_shade',
+  indoor_cool: 'location_indoor_cool',
+})
+
+/** The first aider's location words in `lang` (English fallback). Basis: {@link LOCATION_TEXT}. */
+export function locationText(lang: LangCode, location: WorkerLocation): string {
+  return consolePhrase(lang, LOCATION_PHRASE[location])
+}
 
 // ─────────────────────────────── Shared helpers ───────────────────────────────
 
@@ -139,11 +180,15 @@ function isEscalated(a: Alert): boolean {
   return a.ack?.role === 'first_aider' || routed.includes('occ_health') || (RISK_ORDER[a.level] >= RISK_ORDER.stop && routed.includes('buddy'))
 }
 
-/** Open case of every worker (latest unresolved worker-scoped alert), from the alert list. Basis: {@link isEscalated}. */
+/**
+ * Open case of every worker (latest unresolved worker-scoped alert), from the alert list. An alert under designed
+ * suppression is not a case: nobody was notified or asked to acknowledge it (engine/alerts.ts; ANSI/ISA-18.2). Basis:
+ * {@link isEscalated}.
+ */
 export function caseIndex(alerts: readonly Alert[]): Map<string, CaseStatus> {
   const open = new Map<string, Alert>()
   for (const a of alerts) {
-    if (a.scope !== 'worker' || !a.workerId || a.status === 'resolved') continue
+    if (a.scope !== 'worker' || !a.workerId || a.status === 'resolved' || isAlertSuppressed(a)) continue
     const prev = open.get(a.workerId)
     if (!prev || a.t >= prev.t) open.set(a.workerId, a)
   }
@@ -163,12 +208,15 @@ export function profileWithConsent(input: Pick<SelectorInput, 'consent'>, profil
   return consent ? { ...profile, consent } : profile
 }
 
-/** Where the worker is, for a first aider: site, task and sun/shade/cooled. Basis: privacy.ts WorkerLocation. */
-export function caseLocation(view: Pick<WorldView, 'site'>, wv: Pick<WorkerView, 'task' | 'location'>): CaseLocation {
+/**
+ * Where the worker is, for a first aider: site, task and sun/shade/cooled, with the words in `lang` (site and task
+ * names are site data, shown as configured). Basis: privacy.ts WorkerLocation.
+ */
+export function caseLocation(view: Pick<WorldView, 'site'>, wv: Pick<WorkerView, 'task' | 'location'>, lang: LangCode = SOURCE_LANG): CaseLocation {
   const site = view.site
   return {
     siteId: site.id,
-    label: `${site.name} · ${wv.task ? wv.task.name : 'not on a task'} · ${LOCATION_TEXT[wv.location]}`,
+    label: `${site.name} · ${wv.task ? wv.task.name : consolePhrase(lang, 'no_task')} · ${locationText(lang, wv.location)}`,
     lat: site.lat,
     lon: site.lon,
   }
@@ -198,7 +246,7 @@ function buildSnapshot(input: SelectorInput, wv: WorkerView, cs: CaseStatus): Wo
     psi: null,
     symptoms: reports.symptoms,
     urineColor: reports.urineColor,
-    location: caseLocation(input.view, wv),
+    location: caseLocation(input.view, wv, langOf(input)),
   })
 }
 
@@ -230,12 +278,20 @@ export function siteStatus(view: WorldView): SiteStatus {
   return { t: view.t, site: view.site, heat: view.heat, env: view.env, hours: view.hours, network: view.network, sensor: view.sensor, finished: view.finished }
 }
 
-/** Defence in depth: a supervisor-facing text that matches the clinical-term pattern is replaced. Basis: alerts.ts CLINICAL_TEXT_PATTERN. */
+/**
+ * Defence in depth: a supervisor-facing text that matches the clinical-term pattern or names a private factor
+ * (fasting, wearable consent) is replaced. Basis: alerts.ts supervisorSafeText (CLINICAL_TEXT_PATTERN,
+ * PRIVATE_FACTOR_TEXT_PATTERN).
+ */
 function safeText(text: string, fallback: string): string {
-  return CLINICAL_TEXT_PATTERN.test(text) ? fallback : text
+  return supervisorSafeText(text) ? text : fallback
 }
 
-/** An alert as shown to an operational role: no confidential action, non-clinical reason. */
+/**
+ * An alert as shown to an operational role: console actions only, a non-clinical reason, the basis and frame with
+ * localised labels, and whether it is under designed suppression. Never the suppression cause, the worker's own
+ * action list or an individual number (wave 2d principle 4).
+ */
 export interface AlertItem {
   id: string
   t: number
@@ -244,14 +300,83 @@ export interface AlertItem {
   workerId?: string
   memberIds?: string[]
   level: RiskLevel
+  /** Console actions (engine/privacy.ts supervisorActions): no device-only prompt, no confidential action. */
   actions: Alert['actions']
+  /** The engine's English reason, after the supervisor text filter. */
   reason: string
+  /** The reason in the console language: the phrase of `reasonKey` (the frame label is shown apart), else `reason`. */
+  reasonText: string
+  /** i18n key of the reason (engine/alerts.ts), when the producer set one. */
+  reasonKey?: string
+  /** A shared site condition ('exposure') or this worker ('individual'). A missing basis (older producers) is 'individual'. */
+  basis: AlertBasis
+  /** Localised basis label: "Site condition" / "This worker" (it never says which personal channel). */
+  basisLabel: string
+  /** Exposure alerts: framed as site heat or a site rule (older producers: read from the reason's prefix). */
+  frame?: 'heat' | 'rule'
+  /** Localised frame label: "Site heat" / "Site rule". */
+  frameLabel?: string
+  /** True while the alert is under designed suppression: logged, notified to nobody (ANSI/ISA-18.2). */
+  suppressed: boolean
+  /** Localised label of a suppressed alert ("Action already in force: logged, not notified"). */
+  suppressedLabel?: string
   status: Alert['status']
   ack?: Alert['ack']
 }
 
-/** Alert → operational item: confidential actions removed, reason checked against the clinical-term pattern. Basis: alerts.ts. */
-export function alertItem(a: Alert): AlertItem {
+/** Console phrases of the generic and pooled alert reason keys (engine/alerts.ts `reason.*`). */
+const REASON_PHRASE: Readonly<Record<string, ConsolePhraseId>> = Object.freeze({
+  'reason.not_cleared_for_heat_work': 'not_cleared',
+  'reason.device_directed_rest': 'device_rest',
+  'reason.heat_exposure': 'reason_heat_exposure',
+  'reason.regulation': 'reason_regulation',
+  'reason.projection': 'reason_projection',
+  'reason.personal_check': 'reason_personal_check',
+  'reason.first_aid_check': 'reason_first_aid_check',
+  'reason.emergency': 'reason_emergency',
+})
+
+/** Basis of an alert as shown: a missing or unknown basis is 'individual' (the exposure share is never overstated). */
+export function alertBasisOf(a: Pick<Alert, 'basis'>): AlertBasis {
+  return a.basis === 'exposure' ? 'exposure' : 'individual'
+}
+
+/** Frame of an exposure alert: `Alert.frame`, else the English reason's prefix (older producers). */
+function frameOf(a: Pick<Alert, 'frame' | 'reason'>, basis: AlertBasis): 'heat' | 'rule' | undefined {
+  if (basis !== 'exposure') return undefined
+  if (a.frame === 'heat' || a.frame === 'rule') return a.frame
+  return a.reason.startsWith('Site heat') ? 'heat' : a.reason.startsWith('Site rule') ? 'rule' : undefined
+}
+
+/**
+ * The reason in `lang`: the console phrase of a `reason.*` key or the catalog phrase of a `driver.<id>` key; the
+ * filtered English reason otherwise. The filter runs on the English source phrase (the patterns are English; every
+ * translation renders the same reviewed source): a source that fails it gives the "kept on the device" phrase.
+ */
+function localisedReason(a: Pick<Alert, 'reasonKey'>, lang: LangCode, english: string): string {
+  const key = a.reasonKey
+  if (key === undefined) return english
+  if (Object.prototype.hasOwnProperty.call(REASON_PHRASE, key)) {
+    const id = REASON_PHRASE[key]
+    return supervisorSafeText(consolePhrase(SOURCE_LANG, id)) ? consolePhrase(lang, id) : consolePhrase(lang, 'reason_withheld')
+  }
+  const driverId = key.startsWith('driver.') ? key.slice('driver.'.length) : ''
+  if (!hasDriverText(driverId)) return english
+  return supervisorSafeText(driverText(SOURCE_LANG, driverId)) ? driverText(lang, driverId) : consolePhrase(lang, 'reason_withheld')
+}
+
+/**
+ * Alert → operational item (supervisor, first aider, occupational health): console actions only (`Alert.consoleActions`,
+ * or privacy.ts supervisorActions for older producers), the reason through the supervisor text filter, the basis and
+ * frame with labels in `lang`, and the designed-suppression flag (never its cause). Basis: alerts.ts; wave 2d
+ * governance tasks 2 and 3.
+ */
+export function alertItem(a: Alert, lang: LangCode = SOURCE_LANG): AlertItem {
+  const basis = alertBasisOf(a)
+  const frame = frameOf(a, basis)
+  const reason = safeText(a.reason, consolePhrase(SOURCE_LANG, 'reason_withheld'))
+  const suppressed = isAlertSuppressed(a)
+  const actions = (a.consoleActions ?? supervisorActions(a.actions, [])).filter((x) => !CONFIDENTIAL_ACTIONS.includes(x))
   return {
     id: a.id,
     t: a.t,
@@ -260,17 +385,25 @@ export function alertItem(a: Alert): AlertItem {
     ...(a.workerId !== undefined ? { workerId: a.workerId } : {}),
     ...(a.memberIds ? { memberIds: [...a.memberIds] } : {}),
     level: a.level,
-    actions: a.actions.filter((x) => !CONFIDENTIAL_ACTIONS.includes(x)),
-    reason: safeText(a.reason, `Level: ${a.level}`),
+    actions,
+    reason,
+    reasonText: localisedReason(a, lang, reason),
+    ...(a.reasonKey !== undefined ? { reasonKey: a.reasonKey } : {}),
+    basis,
+    basisLabel: consolePhrase(lang, basis === 'exposure' ? 'basis_exposure' : 'basis_individual'),
+    ...(frame ? { frame, frameLabel: consolePhrase(lang, frame === 'heat' ? 'frame_heat' : 'frame_rule') } : {}),
+    suppressed,
+    ...(suppressed ? { suppressedLabel: consolePhrase(lang, 'suppressed') } : {}),
     status: a.status,
     ...(a.ack ? { ack: { ...a.ack } } : {}),
   }
 }
 
-function notificationsFor(view: WorldView, role: Role, actorId: string | null): Notification[] {
+function notificationsFor(view: WorldView, role: Role, actorId: string | null, lang: LangCode = SOURCE_LANG): Notification[] {
+  const withheld = consolePhrase(lang, 'reason_withheld')
   return view.notifications
     .filter((n) => n.to.role === role && (n.to.id === undefined || actorId === null || n.to.id === actorId))
-    .map((n) => (role === 'worker' ? { ...n, actions: [...n.actions] } : { ...n, actions: n.actions.filter((a) => !CONFIDENTIAL_ACTIONS.includes(a)), text: safeText(n.text, `Level: ${n.level}`) }))
+    .map((n) => (role === 'worker' ? { ...n, actions: [...n.actions] } : { ...n, actions: n.actions.filter((a) => !CONFIDENTIAL_ACTIONS.includes(a)), text: safeText(n.text, withheld) }))
 }
 
 /** An individual record as received by a role: only the released fields, plus why the rest was withheld. */
@@ -285,10 +418,9 @@ export interface ReceivedRecord {
   reason: string
 }
 
-const NO_DATA_REASON = 'No assessment from the worker device yet (or the engine does not run under this policy).'
-
-function received(workerId: string, result: ProjectionResult | null): ReceivedRecord {
-  if (!result) return { workerId, decision: 'no_data', data: {}, fields: [], withheld: [], reason: NO_DATA_REASON }
+/** Reason of a no-data record, in `lang` (i18n/messages.ts CONSOLE_PHRASES `no_data`; English is the source). */
+function received(workerId: string, result: ProjectionResult | null, lang: LangCode = SOURCE_LANG): ReceivedRecord {
+  if (!result) return { workerId, decision: 'no_data', data: {}, fields: [], withheld: [], reason: consolePhrase(lang, 'no_data') }
   return { workerId, decision: result.decision, data: result.data, fields: result.fields, withheld: result.withheld, reason: result.reason }
 }
 
@@ -346,7 +478,7 @@ export function selectWorkerDevice(input: SelectorInput, workerId: string): Proj
       checkinDue: wv.checkinDue,
       alert: cs.alert,
       ackStatus: cs.ackStatus,
-      notifications: notificationsFor(input.view, 'worker', workerId),
+      notifications: notificationsFor(input.view, 'worker', workerId, langOf(input)),
       device: input.device[workerId] ?? emptyDeviceRecord(),
       outbound: wv.assessment ? payloadForSync(wv.assessment, profile, cs.ackStatus) : null,
       buddyCards: buddies.model,
@@ -386,13 +518,13 @@ export function selectBuddyCards(input: SelectorInput, buddyId: string): Project
       ? project(snap, { role: 'buddy', actorId: buddyId, purpose: 'safety_alerting' }, { now: input.view.t, escalated: cs.escalated, buddyIds: [pairedBuddy] })
       : null
     if (result) audit.push(result.audit)
-    const rec = received(id, result)
+    const rec = received(id, result, langOf(input))
     const alertIds = new Set(input.view.alerts.filter((a) => a.workerId === id).map((a) => a.id))
     cards.push({
       ...rec,
       buddyCheck: (rec.data.actions ?? []).includes('buddy_check'),
       alertId: rec.decision === 'allowed' ? (cs.alert?.id ?? null) : null,
-      notifications: notificationsFor(input.view, 'buddy', buddyId).filter((n) => alertIds.has(n.alertId)),
+      notifications: notificationsFor(input.view, 'buddy', buddyId, langOf(input)).filter((n) => alertIds.has(n.alertId)),
     })
   }
   return { model: cards, audit }
@@ -433,12 +565,27 @@ export interface CrewBoardRow extends ReceivedRecord {
   alertId: string | null
 }
 
+/**
+ * Open alerts on a console by basis, plus the alerts under designed suppression (listed apart, never notified).
+ * Basis: AlertItem.basis (a missing basis counts as 'individual'); engine/alerts.ts designed suppression (ANSI/ISA-18.2).
+ */
+export interface AlertCounts {
+  /** Shown alerts (`alerts`) about a shared site condition. */
+  exposure: number
+  /** Shown alerts (`alerts`) about one worker. */
+  individual: number
+  /** Open alerts under designed suppression (`suppressedAlerts`; not in the two counts above). */
+  suppressed: number
+}
+
 /** A crew on the supervisor's board. */
 export interface CrewBoard {
   crew: { id: string; name: string; supervisorName: string; tasks: Task[] }
   rows: CrewBoardRow[]
   /** Released levels per level (rows with data only). */
   counts: Record<RiskLevel, number>
+  /** This crew's open alerts on the board (worker and crew alerts with its crew id), by basis and suppression. */
+  alertCounts: AlertCounts
   plan: CrewPlan | null
 }
 
@@ -447,8 +594,15 @@ export interface SupervisorBoard {
   actorId: string
   t: number
   crews: CrewBoard[]
-  /** Open alerts in scope at or above the supervisor level (crew/site alerts included). */
+  /** Open alerts in scope at or above the supervisor level (crew/site alerts included), not under designed suppression. */
   alerts: AlertItem[]
+  /**
+   * Open alerts in scope at or above the supervisor level that are under designed suppression: logged, notified to
+   * nobody, shown apart on request (ANSI/ISA-18.2 suppressed-alarm list). Never their cause.
+   */
+  suppressedAlerts: AlertItem[]
+  /** All open alerts on the board (`alerts` and `suppressedAlerts`), by basis and suppression. */
+  alertCounts: AlertCounts
   notifications: Notification[]
   site: SiteStatus
 }
@@ -471,6 +625,16 @@ function overlayRemote(data: ProjectedData, fields: readonly DataField[], remote
 }
 
 const zeroCounts = (): Record<RiskLevel, number> => ({ safe: 0, caution: 0, high: 0, stop: 0, emergency: 0 })
+
+/** {@link AlertCounts} of a list of alert items. Pure. */
+export function alertCounts(items: readonly AlertItem[]): AlertCounts {
+  const out: AlertCounts = { exposure: 0, individual: 0, suppressed: 0 }
+  for (const it of items) {
+    if (it.suppressed) out.suppressed += 1
+    else out[it.basis] += 1
+  }
+  return out
+}
 
 /**
  * The crew board for a supervisor actor: one `project(role 'supervisor', purpose 'safety_alerting')` per worker of the
@@ -498,7 +662,7 @@ export function selectSupervisorBoard(input: SelectorInput, actorId: string): Pr
         ? project(snap, { role: 'supervisor', actorId, purpose: 'safety_alerting' }, { now: input.view.t, escalated: cs.escalated, actorCrewIds: crewIds })
         : null
       if (result) audit.push(result.audit)
-      const rec = received(id, result)
+      const rec = received(id, result, langOf(input))
       const remote = rec.decision === 'allowed' && snap ? overlayRemote(rec.data, rec.fields, input.remote?.[id], snap.t) : false
       if (rec.data.level) counts[rec.data.level] += 1
       rows.push({ ...rec, crewId: crew.id, source: remote ? 'remote' : 'local', alertId: rec.decision === 'allowed' ? (cs.alert?.id ?? null) : null })
@@ -507,17 +671,30 @@ export function selectSupervisorBoard(input: SelectorInput, actorId: string): Pr
       crew: { id: crew.id, name: crew.name, supervisorName: crew.supervisorName, tasks: crew.tasks.map((t) => ({ ...t })) },
       rows,
       counts,
+      alertCounts: { exposure: 0, individual: 0, suppressed: 0 },
       plan: input.view.plan?.crews.find((c) => c.crewId === crew.id) ?? null,
     })
   }
-  const inScope = (a: Alert): boolean =>
-    a.scope === 'site' ? crewIds.length > 0 : a.crewId !== undefined ? crewIds.includes(a.crewId) : a.workerId !== undefined && crewIds.includes(input.roster[a.workerId]?.crewId ?? '')
-  const alerts = input.view.alerts
+  const lang = langOf(input)
+  const crewOf = (a: Alert): string | undefined => a.crewId ?? (a.workerId !== undefined ? input.roster[a.workerId]?.crewId : undefined)
+  const inScope = (a: Alert): boolean => (a.scope === 'site' ? crewIds.length > 0 : crewIds.includes(crewOf(a) ?? ''))
+  const items = input.view.alerts
     .filter((a) => a.status !== 'resolved' && inScope(a) && (a.scope !== 'worker' || RISK_ORDER[a.level] >= RISK_ORDER[SUPERVISOR_MIN_LEVEL]))
     .sort((a, b) => RISK_ORDER[b.level] - RISK_ORDER[a.level] || a.t - b.t)
-    .map(alertItem)
+    .map((a) => ({ crewId: crewOf(a), item: alertItem(a, lang) }))
+  for (const c of crews) c.alertCounts = alertCounts(items.filter((x) => x.crewId === c.crew.id).map((x) => x.item))
+  const all = items.map((x) => x.item)
   return {
-    model: { actorId, t: input.view.t, crews, alerts, notifications: crewIds.length > 0 ? notificationsFor(input.view, 'supervisor', actorId) : [], site: siteStatus(input.view) },
+    model: {
+      actorId,
+      t: input.view.t,
+      crews,
+      alerts: all.filter((x) => !x.suppressed),
+      suppressedAlerts: all.filter((x) => x.suppressed),
+      alertCounts: alertCounts(all),
+      notifications: crewIds.length > 0 ? notificationsFor(input.view, 'supervisor', actorId, lang) : [],
+      site: siteStatus(input.view),
+    },
     audit,
   }
 }
@@ -556,12 +733,12 @@ export function selectFirstAiderCases(input: SelectorInput, actorId: string): Pr
     const snap = buildSnapshot(input, wv, cs)
     const result = snap ? project(snap, { role: 'first_aider', actorId, purpose: 'safety_alerting' }, { now: input.view.t, escalated: cs.escalated }) : null
     if (result) audit.push(result.audit)
-    const rec = received(id, result)
+    const rec = received(id, result, langOf(input))
     if (rec.decision !== 'allowed') continue
-    cases.push({ ...rec, alert: alertItem(a), escalated: cs.escalated })
+    cases.push({ ...rec, alert: alertItem(a, langOf(input)), escalated: cs.escalated })
   }
   cases.sort((x, y) => RISK_ORDER[y.alert.level] - RISK_ORDER[x.alert.level] || x.alert.t - y.alert.t)
-  return { model: { actorId, t: input.view.t, cases, notifications: notificationsFor(input.view, 'first_aider', actorId), site: siteStatus(input.view) }, audit }
+  return { model: { actorId, t: input.view.t, cases, notifications: notificationsFor(input.view, 'first_aider', actorId, langOf(input)), site: siteStatus(input.view) }, audit }
 }
 
 // ─────────────────────────────── Occupational health ───────────────────────────────
@@ -597,12 +774,12 @@ export function selectOccHealthCases(input: SelectorInput, actorId: string): Pro
     const snap = buildSnapshot(input, wv, cs)
     const result = snap ? project(snap, { role: 'occ_health', actorId, purpose: 'clinical_care' }, { now: input.view.t, escalated: true }) : null
     if (result) audit.push(result.audit)
-    const rec = received(id, result)
+    const rec = received(id, result, langOf(input))
     if (rec.decision !== 'allowed') continue
-    cases.push({ ...rec, alert: alertItem(cs.alert as Alert), clinicalReleased: rec.fields.some((f) => CLINICAL_FIELDS.includes(f)) })
+    cases.push({ ...rec, alert: alertItem(cs.alert as Alert, langOf(input)), clinicalReleased: rec.fields.some((f) => CLINICAL_FIELDS.includes(f)) })
   }
   cases.sort((x, y) => RISK_ORDER[y.alert.level] - RISK_ORDER[x.alert.level] || x.alert.t - y.alert.t)
-  return { model: { actorId, t: input.view.t, cases, notifications: notificationsFor(input.view, 'occ_health', null) }, audit }
+  return { model: { actorId, t: input.view.t, cases, notifications: notificationsFor(input.view, 'occ_health', null, langOf(input)) }, audit }
 }
 
 // ─────────────────────────────── Aggregates (HSE, regulator) ───────────────────────────────

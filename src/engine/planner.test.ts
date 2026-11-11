@@ -15,7 +15,7 @@ import type { SiteHeat } from './indices'
 import { createWorkerEngine, stepWorkerEngine } from './risk'
 import type { WorkerContext } from './risk'
 import { CLINICAL_TEXT_PATTERN } from './alerts'
-import { PHS_SCREEN, STOP_BAND_WORK_FRACTION, planDay, suggestShiftStart } from './planner'
+import { DEVICE_REST_NOTE, PHS_SCREEN, STOP_BAND_WORK_FRACTION, planDay, suggestShiftStart } from './planner'
 import type { DayPlan, PlanDayInput, PlannerHour } from './planner'
 
 // ─────────────────────────────── Real days (heat via the data parsers, wbgt.ts and twl.ts — not indices.ts) ───────────────────────────────
@@ -86,6 +86,13 @@ function input(day: { site: Site; date: string; hourly: PlannerHour[] }, over: P
 
 const local = (date: string, hhmm: string): number => epochFromLocal(`${date}T${hhmm}`)
 
+/**
+ * History and private reasons a supervisor-visible plan text must never carry (wave 2d; ARCHITECTURE §1.5, §7): days on
+ * site or away, the day or fraction of the ramp, seasons, body mass, conservative mode or a risk flag. Citations of the
+ * duty itself ('5–7 days before starting hard work') are allowed.
+ */
+const HISTORY_TEXT = /\bday \d|days? on site|days? (off|away)|absence|returning|\bseason|\d+ ?%|allowance is \d|conservative|medication|fasting|stricter personal limit|\bkg\b/i
+
 /** Flat synthetic day: constant conditions, so expectations are exact. */
 function flatDay(date: string, wbgtC: number, wbgtShadeC: number, twlWm2: number, twlShadeWm2 = twlWm2 + 40): PlannerHour[] {
   return Array.from({ length: 24 }, (_, h) => ({ t: local(date, `${String(h).padStart(2, '0')}:00`), wbgtC, wbgtShadeC, twlWm2, twlShadeWm2 }))
@@ -101,15 +108,49 @@ function assertNoSunWorkInBreak(plan: DayPlan, window: { startT: number; endT: n
 }
 
 /**
- * Every block-hour: work ≤ the NIOSH/ACGIH allowed fraction recomputed with limits.allowedWorkFraction, ≤ the rule
- * pack's zone cycle (regulation.twlZone), never in the stop band, whole 5-min steps; required rest kept.
+ * Every block-hour: work ≤ the NIOSH/ACGIH allowed fraction recomputed with limits.allowedWorkFraction (for the members
+ * the crew rate is planned for: the acclimatised ones, else everyone), ≤ the rule pack's zone cycle (regulation.twlZone),
+ * never in the stop band, whole 5-min steps; required rest kept; the execution bout is floored (boutMin ≤ the allowance
+ * × wall / 60, wave 2d). Personal caps never exceed the crew layout; scheduled work per member = Σ bouts.
  */
 function assertWorkWithinAllowance(plan: DayPlan, crews: readonly Crew[], workers: readonly WorkerProfile[], pack?: RulePack): number {
   const byId = new Map(workers.map((w) => [w.id, w]))
   let checked = 0
   for (const cp of plan.crews) {
     const crew = crews.find((c) => c.id === cp.crewId)!
-    const masses = crew.workerIds.map((id) => byId.get(id)?.massKg)
+    const profiles = crew.workerIds.map((id) => byId.get(id))
+    const acclimatised = profiles.filter((p): p is WorkerProfile => p !== undefined && assessAcclimatization(p).status === 'acclimatized')
+    const masses = acclimatised.length > 0 ? acclimatised.map((p) => p.massKg) : profiles.map((p) => p?.massKg)
+    const taskHours = cp.blocks.filter((b) => b.taskId !== null).flatMap((b) => b.hours.map((h) => ({ b, h })))
+    let crewBouts = 0
+    for (const { b, h } of taskHours) {
+      expect(Number.isInteger(h.boutMin)).toBe(true)
+      expect(h.boutMin).toBeLessThanOrEqual((b.workMinPerHour * h.wallMin) / 60 + 1e-9)
+      expect(h.boutMin).toBeLessThanOrEqual((h.allowedWorkMinPerHour * h.wallMin) / 60 + 1e-9)
+      expect(h.boutMin).toBeGreaterThan(h.workMin - 1 - 0.01)
+      expect(h.boutMin).toBeLessThanOrEqual(h.workMin + 0.01)
+      crewBouts += h.boutMin
+    }
+    for (const id of crew.workerIds) {
+      const caps = cp.memberCaps[id]
+      const p = byId.get(id)
+      if (p !== undefined && assessAcclimatization(p).status === 'acclimatized') {
+        expect(caps).toBeUndefined()
+        expect(cp.memberWorkMin[id]).toBe(crewBouts)
+        continue
+      }
+      expect(caps.map((c) => c.startT)).toEqual(taskHours.map((x) => x.h.startT))
+      caps.forEach((c, i) => {
+        expect(c.workMinPerHour).toBeLessThanOrEqual(taskHours[i].b.workMinPerHour)
+        expect(c.workMinPerHour === 0 || c.workMinPerHour >= PHS_SCREEN.minBoutMin).toBe(true)
+        expect(c.boutMin).toBeLessThanOrEqual(taskHours[i].h.boutMin)
+        expect(c.boutMin).toBeLessThanOrEqual((c.workMinPerHour * c.wallMin) / 60 + 1e-9)
+        expect(c.wallMin).toBe(taskHours[i].h.wallMin)
+      })
+      expect(cp.memberWorkMin[id]).toBe(caps.reduce((s, c) => s + c.boutMin, 0))
+      const ramp = p === undefined ? 0.2 : assessAcclimatization(p).maxExposureFraction
+      if (ramp < 1) expect(cp.memberWorkMin[id]).toBeLessThan(ramp * 480)
+    }
     for (const b of cp.blocks) {
       if (b.taskId === null) {
         expect(b.workMin).toBe(0)
@@ -180,12 +221,16 @@ describe('musaffah 2025-08-01 (peak WBGT day, real hours)', () => {
     expect(pour.bestWorkMinPerHour).toBeLessThan(60 * STOP_BAND_WORK_FRACTION)
     expect(plan.warnings.some((w) => w.code === 'task_deferred' && w.taskId === 'pour')).toBe(true)
     expect(plan.warnings.some((w) => w.code === 'rest_exceeds_limit')).toBe(true)
-    // The naive plan pours at 11:00 and after the break, in WBGT ≈ 40 °C.
+    // The naive plan works the listed order within the task windows (wave 2d: same constraints for every policy): only
+    // the pour is open at 05:00, the material handling and finishing take over from 06:00 and the pour's window closes
+    // at 10:30 with 120 min left (known answer: 60 + 120 + 240 min, mostly in WBGT above the limit).
     const naivePour = crew.naive.blocks.filter((b) => b.taskId === 'pour')
-    expect(naivePour.map((b) => b.start)).toEqual(['11:00', '15:00'])
+    expect(naivePour.map((b) => `${b.start}-${b.end}`)).toEqual(['05:00-06:00'])
+    expect(crew.naive.blocks.map((b) => `${b.taskId}@${b.start}-${b.end}`)).toEqual(['pour@05:00-06:00', 'mh@06:00-08:00', 'fin@08:00-12:00'])
+    expect(crew.naive.workMin).toBe(420)
     expect(crew.naive.exposureCMin).toBeGreaterThan(1000)
     expect(plan.totals.exposureReduction).toBe(plan.totals.exposureNaiveCMin)
-    expect(plan.totals.lostWorkMinVsNaive).toBe(540)
+    expect(plan.totals.lostWorkMinVsNaive).toBe(420)
     expect(plan.crews[0].blocks.some((b) => b.notes.join(' ').includes('Midday break'))).toBe(true)
     assertNoSunWorkInBreak(plan, window)
     expect(crew.waterL).toBeGreaterThan(0)
@@ -201,8 +246,11 @@ describe('musaffah 2025-08-01 (peak WBGT day, real hours)', () => {
     expect(pourBlocks.length).toBeGreaterThan(0)
     expect(pourBlocks[0].start).toBe('05:00')
     for (const b of pourBlocks) expect(b.endT).toBeLessThanOrEqual(local(HOT.date, '10:30'))
-    const naivePour = crew.naive.blocks.find((b) => b.taskId === 'pour')!
-    expect(hhmmToMinutes(pourBlocks[0].start)).toBeLessThan(hhmmToMinutes(naivePour.start))
+    // The naive listed order (within the task windows) leaves the pour at 06:00 for the tasks listed before it, and its
+    // window closes before they finish: the plan does more of the pour inside its window.
+    const naivePourWork = crew.naive.blocks.filter((b) => b.taskId === 'pour').reduce((s, b) => s + b.workMin, 0)
+    expect(naivePourWork).toBe(60)
+    expect(pourBlocks.reduce((s, b) => s + b.workMin, 0)).toBeGreaterThan(naivePourWork)
     const early = pourBlocks.filter((b) => b.endT <= local(HOT.date, '07:00')).reduce((s, b) => s + b.workMin, 0)
     const late = pourBlocks.filter((b) => b.startT >= local(HOT.date, '09:00')).reduce((s, b) => s + b.workMin, 0)
     expect(early).toBeGreaterThan(late)
@@ -236,7 +284,10 @@ describe('musaffah 2025-11-26 (mild November day, real hours)', () => {
     const crew = plan.crews[0]
     expect(crew.unscheduled).toEqual([])
     expect(plan.totals.workMin).toBe(540)
-    expect(Math.abs(plan.totals.lostWorkMinVsNaive)).toBeLessThanOrEqual(0.05 * plan.totals.naiveWorkMin)
+    // No lost work: the naive listed order within the task windows defers 120 min of the pour (its window closes at
+    // 10:30 while the crew is on the tasks listed before it); the plan completes all 540 min.
+    expect(plan.totals.naiveWorkMin).toBe(420)
+    expect(plan.totals.lostWorkMinVsNaive).toBe(-120)
     expect(plan.hours.every((h) => !h.middayBreak && h.zone === 'low')).toBe(true)
     for (const h of plan.hours) expect(h.allowedWorkMinPerHour.heavy).toBeGreaterThanOrEqual(45)
     const taskWall = crew.blocks.filter((b) => b.taskId !== null).reduce((s, b) => s + (b.endT - b.startT), 0)
@@ -252,32 +303,60 @@ describe('musaffah 2025-11-26 (mild November day, real hours)', () => {
 // ─────────────────────────────── Rules ───────────────────────────────
 
 describe('binding worker, cycles and flags', () => {
-  it('RAL when any member is unacclimatised; the worst clothing CAV and the hood add to WBGT_eff', () => {
-    const members = [worker('A1', 'c'), worker('A2', 'c', { clothing: 'double_layer' }), worker('A3', 'c', { daysOnSite: 2, experiencedInHeat: false })]
-    const welding: Task = { id: 'weld', name: 'Welding', workClass: 'heavy', inSun: false, hood: true, durationMin: 60, flexible: true }
+  it('per member (wave 2d): an unacclimatised member in an acclimatised crew — crew rate at NIOSH REL, personal cap at RAL, never above the crew rate; the worst clothing CAV and the hood add to WBGT_eff', () => {
+    const members = [worker('A1', 'c'), worker('A2', 'c', { clothing: 'double_layer' }), worker('A3', 'c', { daysOnSite: 2, experiencedInHeat: false, massKg: 80 })]
+    const welding: Task = { id: 'weld', name: 'Welding', workClass: 'heavy', inSun: false, hood: true, durationMin: 240, flexible: true }
     const crew = crewOf('c', members.map((m) => m.id), [welding])
-    const plan = planDay({ date: '2025-11-26', site: SITE, crews: [crew], workers: members, hourly: flatDay('2025-11-26', 18, 18, 300, 300), shift: { start: '06:00', end: '14:00' } })
+    // ADOSH Low zone (TWL 300): no zone exclusion and continuous work by the pack, so NIOSH binds; no climate in the
+    // forecast, so no ISO 7933 screen: the table numbers are exact. Rest in the site's 25 °C cabin (shade 27 °C).
+    const plan = planDay({ date: '2025-11-26', site: SITE, crews: [crew], workers: members, hourly: flatDay('2025-11-26', 30, 27, 300, 300), shift: { start: '06:00', end: '14:00' } })
     const cp = plan.crews[0]
-    expect(cp.binding.limit).toBe('RAL')
+    expect(cp.binding.limit).toBe('REL')
     expect(cp.binding.nonAcclimatizedMemberIds).toEqual(['A3'])
-    expect(cp.binding.text).not.toMatch(/A3|flag|medic/i)
+    // Crew rate: REL for the acclimatised members (worst clothing: double layer + hood; their highest metabolic rate).
+    const cav = clothingAdjustmentC('double_layer', true)
+    const crewF = allowedWorkFraction({ workW: taskMetabolicW(welding, 72), wbgtWorkEffC: 27 + cav, wbgtRestEffC: 25 + cav, limit: 'REL' })
     const h = cp.blocks.find((b) => b.taskId === 'weld')!.hours[0]
-    expect(h.wbgtWorkEffC).toBeCloseTo(18 + clothingAdjustmentC('double_layer', true), 9)
+    expect(h.wbgtWorkEffC).toBeCloseTo(27 + cav, 9)
+    expect(h.nioshWorkMinPerHour).toBeCloseTo(crewF.workMinPerHour, 9)
+    expect(h).toMatchObject({ allowedWorkMinPerHour: 20, limitedBy: 'niosh_acgih', boutMin: 20, monitored: false }) // known answer: 20.8 → 20
+    // A3's personal cap: RAL with A3's own size and clothing (cloth coveralls + hood): 15 min/h (known answer), below the crew's 20.
+    const cavA3 = clothingAdjustmentC('cloth_coveralls', true)
+    const a3F = allowedWorkFraction({ workW: taskMetabolicW(welding, 80), wbgtWorkEffC: 27 + cavA3, wbgtRestEffC: 25 + cavA3, limit: 'RAL' })
+    expect(Math.floor(a3F.workMinPerHour / 5) * 5).toBe(15)
+    expect(cp.memberCaps.A3).toHaveLength(8)
+    for (const c of cp.memberCaps.A3) expect(c).toMatchObject({ taskId: 'weld', wallMin: 60, workMinPerHour: 15, boutMin: 15, limitedBy: 'acclimatization' })
+    expect(Object.keys(cp.memberCaps)).toEqual(['A3'])
+    expect(cp.memberWorkMin).toEqual({ A1: 160, A2: 160, A3: 120 })
+    // The supervisor sees the schedule and the cap, never the history or a reason.
+    expect(cp.binding.text).toMatch(/acclimatisation schedule \(A3\)/)
+    expect(cp.blocks[0].notes.join(' ')).toMatch(/Acclimatisation schedule \(personal caps\): A3 120 of 160 min/)
+    expect(JSON.stringify([cp.binding.text, cp.notes, plan.warnings.map((w) => w.text), cp.blocks.flatMap((b) => b.notes)])).not.toMatch(HISTORY_TEXT)
     expect(plan.warnings.some((w) => w.code === 'acclimatization_ramp' && w.workerIds?.[0] === 'A3')).toBe(true)
+    // The same member with a looser personal limit than the crew rate is capped at the crew rate ('crew').
+    const cool = planDay({ date: '2025-11-26', site: SITE, crews: [crew], workers: members, hourly: flatDay('2025-11-26', 30, 26, 300, 300), shift: { start: '06:00', end: '14:00' } })
+    for (const c of cool.crews[0].memberCaps.A3) expect(c).toMatchObject({ workMinPerHour: 20, boutMin: 20, limitedBy: 'crew' })
   })
 
-  it('conservative mode (a declared flag) → RAL and the next-stricter tier, without naming the flag', () => {
+  it('conservative mode and fasting are not planner inputs (wave 2d): a declared flag changes neither the plan nor its texts; one neutral note covers device-directed rest', () => {
     const crew = crewOf('c', ['B1', 'B2'], [MATERIAL])
-    const day = flatDay('2025-07-20', 26, 25, 130) // ADOSH Medium: heavy 45/15; next-stricter (High): heavy 20/40
-    const rel = planDay({ date: '2025-07-20', site: SITE, crews: [crew], workers: [worker('B1', 'c'), worker('B2', 'c')], hourly: day, shift: { start: '06:00', end: '12:00' } })
-    expect(rel.crews[0].binding).toMatchObject({ limit: 'REL', stricterTier: false })
-    for (const b of rel.crews[0].blocks) for (const h of b.hours) expect(h.packWorkMinPerHour).toBe(45)
-    const flagged = [worker('B1', 'c', { riskFlags: ['heat_sensitive_medication'] as RiskFlagId[], consent: { ...CONSENT, healthFlags: true } }), worker('B2', 'c')]
-    expect(conservativeMode(flagged[0]).conservative).toBe(true)
-    const ral = planDay({ date: '2025-07-20', site: SITE, crews: [crew], workers: flagged, hourly: day, shift: { start: '06:00', end: '12:00' } })
-    expect(ral.crews[0].binding).toMatchObject({ limit: 'RAL', conservative: true, stricterTier: true })
-    for (const b of ral.crews[0].blocks) for (const h of b.hours) expect(h.packWorkMinPerHour).toBe(20)
-    expect(JSON.stringify(ral)).not.toMatch(/medication|heat_sensitive/)
+    const day = flatDay('2025-07-20', 26, 25, 130) // ADOSH Medium: heavy 45/15 (the next-stricter High tier would be 20/40)
+    const inp = { date: '2025-07-20', site: SITE, crews: [crew], hourly: day, shift: { start: '06:00', end: '12:00' } }
+    const plain = planDay({ ...inp, workers: [worker('B1', 'c'), worker('B2', 'c')] })
+    expect(plain.crews[0].binding.limit).toBe('REL')
+    for (const b of plain.crews[0].blocks) for (const h of b.hours) expect(h.packWorkMinPerHour).toBe(45)
+    expect(plain.crews[0].notes).toContain(DEVICE_REST_NOTE)
+    for (const flags of [['heat_sensitive_medication'], ['fasting'], ['prior_heat_illness', 'oh_review_required']] as RiskFlagId[][]) {
+      const flagged = [worker('B1', 'c', { riskFlags: flags, consent: { ...CONSENT, healthFlags: true } }), worker('B2', 'c')]
+      expect(JSON.stringify(planDay({ ...inp, workers: flagged }))).toBe(JSON.stringify(plain))
+    }
+    // The device still applies it (risk.ts: RAL and the next-stricter tier for a conservative worker).
+    expect(conservativeMode(worker('B1', 'c', { riskFlags: ['heat_sensitive_medication'], consent: { ...CONSENT, healthFlags: true } })).conservative).toBe(true)
+    const cp = plain.crews[0]
+    const texts = [cp.binding.text, cp.notes, plain.notes, plain.warnings.map((w) => w.text), cp.blocks.flatMap((b) => [...b.notes, b.rest.text])]
+    expect(JSON.stringify(texts)).not.toMatch(/stricter personal limit|conservative|medication|fasting/i)
+    expect(plain.crews[0]).not.toHaveProperty('binding.conservative')
+    expect(plain.crews[0]).not.toHaveProperty('binding.stricterTier')
   })
 
   it('stricter wins: the ADOSH High-zone heavy cycle (20/40) caps a generous NIOSH allowance', () => {
@@ -347,7 +426,7 @@ describe('fail-safe inputs', () => {
     expect(plan.warnings.find((w) => w.code === 'forecast_gap')?.hours).toEqual(fb)
   })
 
-  it('no forecast → no plan; invalid shift → no plan; unknown worker → treated as unacclimatised (RAL)', () => {
+  it('no forecast → no plan; invalid shift → no plan; unknown worker → personal caps as a new worker on day 1 of the schedule (fail-safe)', () => {
     const none = planDay(input(HOT, { hourly: [] }))
     expect(none.crews).toEqual([])
     expect(none.warnings[0].code).toBe('no_forecast')
@@ -356,8 +435,19 @@ describe('fail-safe inputs', () => {
     expect(bad.warnings[0].code).toBe('invalid_shift')
     const crew = crewOf('c', ['G1', 'GHOST'], [MATERIAL])
     const plan = planDay({ date: MILD.date, site: SITE, crews: [crew], workers: [worker('G1', 'c')], hourly: MILD.hourly, shift: { start: '06:00', end: '12:00' } })
-    expect(plan.crews[0].binding).toMatchObject({ limit: 'RAL', unknownMemberIds: ['GHOST'] })
-    expect(plan.warnings.some((w) => w.code === 'unknown_worker')).toBe(true)
+    const cp = plan.crews[0]
+    // The crew rate is planned for the known acclimatised member; the unknown member gets personal caps (RAL, the
+    // ADOSH note b exclusion and the first ramp day: 20 % × 480 min, the device stops at that count → ≤ 95 min).
+    expect(cp.binding).toMatchObject({ limit: 'REL', unknownMemberIds: ['GHOST'], nonAcclimatizedMemberIds: ['GHOST'], adoshUnacclimatizedMemberIds: ['GHOST'] })
+    expect(cp.memberWorkMin.G1).toBe(120)
+    expect(cp.memberWorkMin.GHOST).toBeGreaterThan(0)
+    expect(cp.memberWorkMin.GHOST).toBeLessThanOrEqual(95)
+    expect(plan.warnings.find((w) => w.code === 'unknown_worker')?.text).toMatch(/GHOST not found — treated as new and unacclimatised \(first day of the acclimatisation schedule\)/)
+    assertWorkWithinAllowance(plan, [crew], [worker('G1', 'c')])
+    // A crew with no known member: the crew rate itself is the acclimatisation-schedule rate (RAL).
+    const ghosts = planDay({ date: MILD.date, site: SITE, crews: [crewOf('g', ['X1', 'X2'], [MATERIAL])], workers: [], hourly: MILD.hourly, shift: { start: '06:00', end: '12:00' } })
+    expect(ghosts.crews[0].binding).toMatchObject({ limit: 'RAL', unknownMemberIds: ['X1', 'X2'] })
+    expect(ghosts.crews[0].binding.text).toMatch(/no known members/)
   })
 })
 
@@ -502,12 +592,13 @@ describe('property: the plan never removes required rest', () => {
         expect(cp.blocks[0].startT).toBe(shiftStart)
         expect(cp.blocks[cp.blocks.length - 1].endT).toBe(shiftEnd)
         for (let i = 1; i < cp.blocks.length; i++) expect(cp.blocks[i].startT).toBe(cp.blocks[i - 1].endT)
-        // Binding limit, recomputed independently.
-        const needsRal = crew.workerIds.some((id) => {
+        // Crew-rate limit, recomputed independently (wave 2d): REL when a known member is acclimatised, else RAL.
+        const hasAcclimatised = crew.workerIds.some((id) => {
           const p = byId.get(id)
-          return !p || assessAcclimatization(p).status !== 'acclimatized' || conservativeMode(p).conservative
+          return p !== undefined && assessAcclimatization(p).status === 'acclimatized'
         })
-        expect(cp.binding.limit).toBe(needsRal ? 'RAL' : 'REL')
+        expect(cp.binding.limit).toBe(hasAcclimatised ? 'REL' : 'RAL')
+        expect(JSON.stringify([cp.binding.text, cp.notes, cp.blocks.flatMap((b) => b.notes)])).not.toMatch(HISTORY_TEXT)
         for (const t of crew.tasks) {
           const bs = cp.blocks.filter((b) => b.taskId === t.id)
           const done = bs.reduce((s, b) => s + b.workMin, 0)
@@ -519,6 +610,10 @@ describe('property: the plan never removes required rest', () => {
         workSum += cp.workMin
       }
       expect(Math.abs(workSum - plan.totals.workMin)).toBeLessThan(0.5)
+      expect(plan.warnings.map((w) => w.text).join(' ')).not.toMatch(HISTORY_TEXT)
+      // Conservative mode and fasting are not planner inputs (wave 2d): removing every risk flag changes nothing.
+      const stripped = planDay({ ...inp, workers: inp.workers.map((w) => ({ ...w, riskFlags: [] })) })
+      expect(JSON.stringify(stripped)).toBe(JSON.stringify(plan))
     }
     expect(checked).toBeGreaterThan(200)
     expect(scheduledBlocks).toBeGreaterThan(100)
@@ -628,7 +723,7 @@ describe('ISO 7933 screen of the planned day (PHS_SCREEN)', () => {
       for (const h of b.hours) {
         expect(h.phsWorkMinPerHour).not.toBeNull()
         expect(b.workMinPerHour).toBe(Math.min(h.allowedWorkMinPerHour, h.phsWorkMinPerHour as number))
-        expect(h.boutMin).toBe(Math.ceil(h.workMin - 1e-6))
+        expect(h.boutMin).toBe(Math.floor(h.workMin + 1e-6)) // wave 2d: floored (never above the allowance)
         expect(h.limitedBy).toBe((h.phsWorkMinPerHour as number) < h.allowedWorkMinPerHour ? 'phs' : h.allowedWorkMinPerHour >= 60 ? 'none' : 'niosh_acgih')
         const cell = scr.hours.find((x) => x.hour === h.hour)?.byTask.weld
         expect(cell).toEqual({ allowedMin: h.allowedWorkMinPerHour, phsWorkMin: h.phsWorkMinPerHour, workMin: b.workMinPerHour, limitedBy: h.limitedBy })
@@ -655,10 +750,15 @@ describe('ISO 7933 screen of the planned day (PHS_SCREEN)', () => {
     expect(none.crews[0].blocks.flatMap((b) => b.hours).every((h) => h.phsWorkMinPerHour === null && h.limitedBy !== 'phs')).toBe(true)
   })
 
-  it('reference worker: least-acclimatised known member; vapour-barrier tasks are not screened (PHS does not apply)', () => {
+  it('reference worker: acclimatised for the crew rate of a crew with an acclimatised member (members on a schedule are screened unacclimatised in their caps); vapour-barrier tasks are not screened (PHS does not apply)', () => {
     const newcomer = worker('R2', 'ref-crew', { daysOnSite: 2, experiencedInHeat: false })
     const mixed = crewOf('ref-crew', [REF_W.id, newcomer.id], [WELD_FR])
-    expect(planFor(heatOf(33, 40, 750), COOLED_SITE, mixed, [REF_W, newcomer]).crews[0].phsScreen?.reference.acclimatized).toBe(false)
+    const mp = planFor(heatOf(33, 40, 750), COOLED_SITE, mixed, [REF_W, newcomer]).crews[0]
+    expect(mp.phsScreen?.reference.acclimatized).toBe(true)
+    expect(mp.memberCaps.R2.length).toBeGreaterThan(0)
+    expect(mp.memberWorkMin.R2).toBeLessThan(mp.memberWorkMin.R1)
+    const newOnly = planFor(heatOf(33, 40, 750), COOLED_SITE, crewOf('ref-crew', [newcomer.id], [WELD_FR]), [newcomer]).crews[0]
+    expect(newOnly.phsScreen?.reference.acclimatized).toBe(false)
     const suit: Task = { id: 'suit', name: 'Tank cleaning', workClass: 'light', inSun: false, clothing: 'vapour_barrier', durationMin: 120, flexible: true }
     const plan = planFor(heatOf(22, 40, 200), COOLED_SITE, crewOf('ref-crew', [REF_W.id], [suit]), [REF_W])
     const bhs = plan.crews[0].blocks.flatMap((b) => b.hours)

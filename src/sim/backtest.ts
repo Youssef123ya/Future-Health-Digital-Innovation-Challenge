@@ -50,41 +50,70 @@ import {
   type WorkerShiftRecord,
 } from './metrics'
 import type { SimDataLoader } from './simdata'
-import type { DeepPartial, TruthParams } from './truth'
+import { TRUTH_MODEL_VERSION, type DeepPartial, type TruthParams } from './truth'
 import { createWorld, DEFAULT_SHIFT, makeSimConfig, runSiteDay, WORLDSIM_VERSION, type CreateWorldOptions } from './worldsim'
-import type { PolicyId, SimBehaviour, SimConfig, SimData, SimDisruptions } from './types'
+import type { DrinkLogging, PolicyId, SimBehaviour, SimConfig, SimData, SimDisruptions } from './types'
 
-/** Version of the cohort design and report schema. */
-export const BACKTEST_VERSION = '1.1.0'
+/**
+ * Version of the cohort design and report schema. 1.2.0 (wave 2d): arms from one table ({@link ARM_TABLE}); variants
+ * habitualDrinkFraction 1.0 / 0.4 (the v0.1 / v0.2 drinking floors around the calibrated 0.87) and drink-logging
+ * fidelity 50 % / ×1.5; VariantArmSummary.baseVsBanOnly (the base case's paired difference on the variant's site-days);
+ * report versions.truth (sim/truth.ts TRUTH_MODEL_VERSION). 1.3.0 (wave 2d, integration): arms zill_monitored (zill_full on
+ * the monitored plan basis) and shadow_zill_monitored (its detection without anybody acting on it); headline suppressed
+ * advisories (metrics 1.2.0) and supervisor acknowledgements per worker-shift.
+ */
+export const BACKTEST_VERSION = '1.3.0'
 
 // ─────────────────────────────── Arms ───────────────────────────────
 
+/**
+ * Every arm in report order — the one list the arm sets below and the variants derive from, so adding an arm (for
+ * example a new Zill policy) is one row here. kind: 'baseline' = a policy without Zill, 'zill' = closed loop acting
+ * on Zill, 'shadow' = the engine runs and alerts but nobody acts on it; wearable: the engine receives wearable
+ * physiology. SIMULATION.md §4. zill_monitored (wave 2d) = zill_full on a site that opted in to the monitored plan basis
+ * (sim/types.ts PolicyId). Its shadow arm is meaningful and kept: monitored mode changes which limits enforce for an
+ * eligible worker (the worker's own ISO 7933 projection and physiological strain criteria instead of the WBGT tables),
+ * and whether that device still warns before the ground-truth strain events can only be measured where nobody acts on
+ * it — acting on an alarm censors the event it predicts (metrics.ts detection) — so shadow_zill_monitored is the
+ * detection evidence for monitored mode (the base case only; variants keep their shadow arms).
+ */
+const ARM_TABLE = [
+  { id: 'ban_only', policy: 'ban_only', kind: 'baseline', wearable: false },
+  { id: 'site_index', policy: 'site_index', kind: 'baseline', wearable: false },
+  { id: 'zill_env', policy: 'zill_env', kind: 'zill', wearable: false },
+  { id: 'zill_full', policy: 'zill_full', kind: 'zill', wearable: true },
+  { id: 'zill_monitored', policy: 'zill_monitored', kind: 'zill', wearable: true },
+  { id: 'shadow_zill_env', policy: 'zill_env', kind: 'shadow', wearable: false },
+  { id: 'shadow_zill_full', policy: 'zill_full', kind: 'shadow', wearable: true },
+  { id: 'shadow_zill_monitored', policy: 'zill_monitored', kind: 'shadow', wearable: true },
+] as const satisfies readonly { id: string; policy: PolicyId; kind: 'baseline' | 'zill' | 'shadow'; wearable: boolean }[]
+
 /** A back-test arm: a policy, acted on (closed loop) or in shadow mode (engine runs, nobody acts on it). */
-export type ArmId = 'ban_only' | 'site_index' | 'zill_env' | 'zill_full' | 'shadow_zill_env' | 'shadow_zill_full'
+export type ArmId = (typeof ARM_TABLE)[number]['id']
 
 /** Definition of an arm (SIMULATION.md §4). */
 export interface BacktestArm {
   id: ArmId
   policy: PolicyId
+  kind: 'baseline' | 'zill' | 'shadow'
+  /** kind === 'shadow'. */
   shadow: boolean
+  wearable: boolean
 }
 
-/** Every arm: the four closed-loop policies of SIMULATION.md §4 and shadow mode with and without wearables. */
-export const BACKTEST_ARMS: Readonly<Record<ArmId, BacktestArm>> = Object.freeze({
-  ban_only: { id: 'ban_only', policy: 'ban_only', shadow: false },
-  site_index: { id: 'site_index', policy: 'site_index', shadow: false },
-  zill_env: { id: 'zill_env', policy: 'zill_env', shadow: false },
-  zill_full: { id: 'zill_full', policy: 'zill_full', shadow: false },
-  shadow_zill_env: { id: 'shadow_zill_env', policy: 'zill_env', shadow: true },
-  shadow_zill_full: { id: 'shadow_zill_full', policy: 'zill_full', shadow: true },
-})
+/** Every arm: the closed-loop policies of SIMULATION.md §4 and shadow mode with and without wearables. */
+export const BACKTEST_ARMS: Readonly<Record<ArmId, BacktestArm>> = Object.freeze(
+  Object.fromEntries(ARM_TABLE.map((a) => [a.id, Object.freeze({ ...a, shadow: a.kind === 'shadow' })])) as Record<ArmId, BacktestArm>,
+)
 
 /** All arms in report order. */
-export const ARM_IDS: readonly ArmId[] = ['ban_only', 'site_index', 'zill_env', 'zill_full', 'shadow_zill_env', 'shadow_zill_full']
-/** Closed-loop arms (outcome comparison). */
-export const CLOSED_LOOP_ARMS: readonly ArmId[] = ['ban_only', 'site_index', 'zill_env', 'zill_full']
+export const ARM_IDS: readonly ArmId[] = Object.freeze(ARM_TABLE.map((a) => a.id))
+/** Closed-loop arms (outcome comparison): baselines and Zill arms. */
+export const CLOSED_LOOP_ARMS: readonly ArmId[] = Object.freeze(ARM_IDS.filter((a) => BACKTEST_ARMS[a].kind !== 'shadow'))
+/** Closed-loop Zill arms (the policies that act on the engine's output). */
+export const ZILL_ARMS: readonly ArmId[] = Object.freeze(ARM_IDS.filter((a) => BACKTEST_ARMS[a].kind === 'zill'))
 /** Shadow arms (detection metrics; their ground truth equals ban_only's by construction). */
-export const SHADOW_ARMS: readonly ArmId[] = ['shadow_zill_env', 'shadow_zill_full']
+export const SHADOW_ARMS: readonly ArmId[] = Object.freeze(ARM_IDS.filter((a) => BACKTEST_ARMS[a].kind === 'shadow'))
 
 // ─────────────────────────────── Heat stratification ───────────────────────────────
 
@@ -216,7 +245,7 @@ export interface VariantSpec {
   factor: string
   label: string
   value: number | string
-  behaviour?: Partial<Omit<SimBehaviour, 'ackDelayMin'>>
+  behaviour?: Partial<Omit<SimBehaviour, 'ackDelayMin' | 'drinkLogging'>> & { drinkLogging?: Partial<DrinkLogging> }
   disruptions?: Partial<SimDisruptions>
   /** Ground-truth parameter overrides (sim/truth.ts withTruthParams); need worldsim support, see {@link truthOverridesApplied}. */
   truthParams?: DeepPartial<TruthParams>
@@ -235,10 +264,16 @@ export const STALE_FORECAST_AGE_H = 30
  * - Sensitivity: compliance 0.5 / 0.9 [0.7] (SIMULATION.md §5); self-report scale 0.5 / 1.5 [1]; metabolic multiplier
  *   spread σ_ln 0.10 / 0.25 [0.15]; symptom hazard scale 0.5 / 2 [1]; PPG noise ×2 [×1] (SIMULATION.md §5); supervisor
  *   follow-through 0.5 [1] (SimBehaviour.supervisorFollowThrough: the share of supervisor reassignments on a STOP that
- *   are carried out; added in backtest 1.1.0, defined before any run with it) [ASSUMPTION].
+ *   are carried out; added in backtest 1.1.0, defined before any run with it) [ASSUMPTION]; added in backtest 1.2.0,
+ *   defined before any run with them: the habitual drinking floor 1.0 (the v0.1 floor) and 0.4 (the v0.2 floor)
+ *   [0.87, calibrated: truth.DRINK_CALIBRATION] on the closed-loop arms, so the headline dehydration and heat-symptom
+ *   deltas can be read next to the floors that bracket the calibration; drink-logging fidelity 50 % of drinks logged
+ *   and ×1.5 over-reported volumes [1 / ×1] (SimBehaviour.drinkLogging) on the closed-loop Zill arms, which are the
+ *   only arms whose device reads the log.
  * - Robustness: wearable dropout 20 / 50 / 100 % [0 %] (SIMULATION.md §5); environment sensor/feed failure for the
  *   whole shift; stale forecast ({@link STALE_FORECAST_AGE_H} h); network outage ({@link NETWORK_OUTAGE_WINDOW}).
- * Every variant includes `ban_only`, so Zill − ban_only is always paired within the variant.
+ * Every variant includes `ban_only`, so Zill − ban_only is always paired within the variant. Arm sets derive from
+ * {@link ARM_TABLE}: a new Zill arm joins every closed-loop, Zill, data and (if it has a wearable) wearable variant.
  */
 export function cohortVariants(spec: Pick<CohortSpec, 'sweepStrata' | 'shift' | 'variants'>): VariantSpec[] {
   const base: VariantSpec = { id: 'base', group: 'base', factor: 'base', label: 'Base case', value: 'default', arms: ARM_IDS, strata: HEAT_STRATA }
@@ -246,8 +281,9 @@ export function cohortVariants(spec: Pick<CohortSpec, 'sweepStrata' | 'shift' | 
   const st = spec.sweepStrata
   const closed = CLOSED_LOOP_ARMS
   const withShadow: ArmId[] = [...CLOSED_LOOP_ARMS, 'shadow_zill_full']
-  const wearableArms: ArmId[] = ['ban_only', 'zill_full', 'shadow_zill_full']
-  const dataArms: ArmId[] = ['ban_only', 'zill_env', 'zill_full', 'shadow_zill_env']
+  const wearableArms: ArmId[] = ['ban_only', ...ZILL_ARMS.filter((a) => BACKTEST_ARMS[a].wearable), 'shadow_zill_full']
+  const dataArms: ArmId[] = ['ban_only', ...ZILL_ARMS, 'shadow_zill_env']
+  const zillLoop: ArmId[] = ['ban_only', ...ZILL_ARMS]
   const sens = (factor: string, label: string, value: number, extra: Partial<VariantSpec>, arms: readonly ArmId[]): VariantSpec => ({ id: `${factor}=${value}`, group: 'sensitivity', factor, label, value, arms, strata: st, ...extra })
   const rob = (factor: string, label: string, value: number | string, disruptions: Partial<SimDisruptions>, arms: readonly ArmId[]): VariantSpec => ({ id: `${factor}=${value}`, group: 'robustness', factor, label, value, disruptions, arms, strata: st })
   return [
@@ -262,6 +298,10 @@ export function cohortVariants(spec: Pick<CohortSpec, 'sweepStrata' | 'shift' | 
     sens('hazardScale', 'Symptom hazard ×2', 2, { truthParams: { symptoms: { hazardScale: 2 } } }, withShadow),
     sens('ppgNoise', 'PPG noise ×2', 2, { disruptions: { ppgNoiseMultiplier: 2 } }, wearableArms),
     sens('supervisorFollowThrough', 'Supervisor follow-through 0.5', 0.5, { behaviour: { supervisorFollowThrough: 0.5 } }, closed),
+    sens('habitualDrinkFraction', 'Drinking floor 1.0 (v0.1 floor)', 1, { id: 'habitualDrinkFraction=1.0', truthParams: { behaviour: { habitualDrinkFraction: 1 } } }, closed),
+    sens('habitualDrinkFraction', 'Drinking floor 0.4 (v0.2 floor)', 0.4, { truthParams: { behaviour: { habitualDrinkFraction: 0.4 } } }, closed),
+    sens('drinkLogging', 'Drink logging 50 % of drinks', 0.5, { id: 'drinkLogging=50%', behaviour: { drinkLogging: { loggedFraction: 0.5 } } }, zillLoop),
+    sens('drinkLogging', 'Drink logging ×1.5 (over-reported volumes)', 1.5, { id: 'drinkLogging=x1.5', behaviour: { drinkLogging: { overReportFactor: 1.5 } } }, zillLoop),
     rob('wearableDropout', 'Wearable dropout 20 %', 0.2, { wearableDropout: 0.2 }, wearableArms),
     rob('wearableDropout', 'Wearable dropout 50 %', 0.5, { wearableDropout: 0.5 }, wearableArms),
     rob('wearableDropout', 'Wearable dropout 100 %', 1, { wearableDropout: 1 }, wearableArms),
@@ -528,6 +568,10 @@ export interface Headline {
   individualAlarmsPerShift: Estimate
   individualStopAlarmsPerShift: Estimate
   exposureAdvisoriesPerShift: Estimate
+  /** Exposure advisories logged under designed suppression and never notified, per worker-shift (metrics 1.2.0). */
+  suppressedAdvisoriesPerShift: Estimate
+  /** Supervisor notifications that require an acknowledgement, per worker-shift (both bases; metrics.ts burdenPerWorkerShift). */
+  supervisorAcksPerShift: number
   /** Shadow arms only: detection by individual alarms at ≥ high. */
   detection: { excessive: DetectionHeadline; severe: DetectionHeadline } | null
 }
@@ -565,6 +609,11 @@ export interface VariantArmSummary {
   vsBanOnly: PairedHeadline | null
   /** This arm − the same arm of the base case on the same site-days (paired; isolates the variant's effect). */
   vsBase: PairedHeadline | null
+  /**
+   * The base case's arm − base ban_only on the variant's site-days (paired; backtest ≥ 1.2.0): the base headline delta
+   * to read `vsBanOnly` against, on exactly the same worker-shifts (variants run on the sweep strata only).
+   */
+  baseVsBanOnly: PairedHeadline | null
 }
 
 /** One sensitivity / robustness variant. */
@@ -600,7 +649,8 @@ export interface CohortReport {
   kind: 'zill.validation.cohort/v1'
   evidenceClass: 'simulated_cohort'
   disclaimer: string
-  versions: { backtest: string; metrics: string; worldsim: string }
+  /** Module versions; `truth` (sim/truth.ts TRUTH_MODEL_VERSION, the ground-truth defaults) since backtest 1.2.0. */
+  versions: { backtest: string; metrics: string; worldsim: string; truth: string }
   spec: CohortSpec
   /** Metric parameters in force (metrics.ts METRIC_PARAMS). */
   metricParams: typeof METRIC_PARAMS
@@ -659,6 +709,8 @@ export function headline(records: readonly WorkerShiftRecord[], runs: readonly R
     individualAlarmsPerShift: c.individualAlarmsPerShift.high,
     individualStopAlarmsPerShift: c.individualAlarmsPerShift.stop,
     exposureAdvisoriesPerShift: c.exposureAdvisoriesPerWorkerShift,
+    suppressedAdvisoriesPerShift: c.suppressedAdvisoriesPerWorkerShift,
+    supervisorAcksPerShift: c.burdenPerWorkerShift.total.supervisor?.requiringAck ?? 0,
     detection: BACKTEST_ARMS[arm].shadow ? { excessive: detectionHeadline(records, 'excessive_strain', o), severe: detectionHeadline(records, 'severe_strain', o) } : null,
   }
 }
@@ -754,11 +806,14 @@ export function summariseBacktest(result: BacktestResult): CohortReport {
       const o = opt(`${v.id}|${arm}`)
       const baseArm = get('base', arm)
       const baseSame = baseArm ? baseArm.records.filter((r) => b.clusters.has(r.cluster)) : []
+      const baseBanSame = baseBan ? baseBan.records.filter((r) => b.clusters.has(r.cluster)) : []
       arms.push({
         arm,
         headline: headline(b.records, b.alerts, arm, o),
         vsBanOnly: arm !== 'ban_only' && ban ? pickPaired(pairedComparison(b.records, ban.records, o)) : null,
         vsBase: baseSame.length > 0 ? pickPaired(pairedComparison(b.records, baseSame, opt(`${v.id}|${arm}|vsBase`))) : null,
+        baseVsBanOnly:
+          arm !== 'ban_only' && baseSame.length > 0 && baseBanSame.length > 0 ? pickPaired(pairedComparison(baseSame, baseBanSame, opt(`${v.id}|${arm}|baseVsBanOnly`))) : null,
       })
     }
     variantSummaries.push({ id: v.id, group: v.group, factor: v.factor, label: v.label, value: v.value, supported: vs.supported, note: vs.note, siteDays: siteDays.size, arms })
@@ -775,7 +830,7 @@ export function summariseBacktest(result: BacktestResult): CohortReport {
     kind: 'zill.validation.cohort/v1',
     evidenceClass: 'simulated_cohort',
     disclaimer: COHORT_DISCLAIMER,
-    versions: { backtest: BACKTEST_VERSION, metrics: METRICS_VERSION, worldsim: WORLDSIM_VERSION },
+    versions: { backtest: BACKTEST_VERSION, metrics: METRICS_VERSION, worldsim: WORLDSIM_VERSION, truth: TRUTH_MODEL_VERSION },
     spec,
     metricParams: METRIC_PARAMS,
     strata: stratumCuts(result.dayHeats),

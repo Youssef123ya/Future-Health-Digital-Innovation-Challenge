@@ -21,18 +21,29 @@
  *   occupational health on every emergency;
  * - repeat suppression: the same worker is not told the same level + actions again within 20 min unless the level
  *   escalates;
+ * - designed suppression (ANSI/ISA-18.2-2016: an alarm must call for a new operator action): an exposure alert at
+ *   caution or high whose required action the active day plan already enforces, or that is only the WBGT screen in
+ *   monitored mode, is recorded with `suppression` (one pooled reason, 'action_in_force': the monitored-mode cause
+ *   would reveal wearable consent; the cause stays in AlertRecord.suppressionCause) and notified to nobody, with no
+ *   acknowledgement timer; the worker's device still shows the guidance. It is lifted, and notified at once, when the
+ *   alert gains an individual basis or the condition ends; an escalation to stop raises a new, notified alert. Stop and
+ *   emergency, individual, symptom, physiology, hydration and first-aid alerts are never suppressed;
  * - acknowledgement timers (via {@link tick}): stop unacknowledged → supervisor + buddy; emergency unacknowledged →
  *   re-notify + siren; high unacknowledged → supervisor reminder.
  *
  * Privacy (ARCHITECTURE §1.5, §7): alerts and notifications carry level + actions + a short NON-clinical reason only.
- * Reasons are built exclusively from drivers whose channel ∉ {physiology, symptoms, hydration}, and a defensive text
- * filter drops any driver text that still looks clinical or reveals conservative mode. Clinical detail reaches
+ * Reasons are built exclusively from drivers whose channel ∉ {physiology, symptoms, hydration}, through their
+ * supervisor view (privacy.ts supervisorDriver: the generic `driver.<id>` phrase or a pooled phrase, site numbers only,
+ * never an individual number), and a defensive text filter drops any driver that still looks clinical, reveals
+ * conservative mode or names fasting or the wearable consent state ({@link supervisorSafeText}). Supervisors and
+ * buddies get the console actions (privacy.ts supervisorActions: no device-only prompt). Clinical detail reaches
  * occupational health only through `privacy.project` after a consented escalation, never through this module.
  */
 
-import type { ActionId, Alert, AlertBasis, ChannelId, RiskAssessment, RiskDriver, RiskLevel, Role } from './types'
+import type { ActionId, Alert, AlertBasis, AlertSuppression, ChannelId, RiskAssessment, RiskDriver, RiskLevel, Role } from './types'
 import { RISK_LEVELS, RISK_ORDER } from './types'
 import { MINUTE_MS } from './time'
+import { CONFIDENTIAL_ACTIONS, POOLED_DRIVER_IDS, supervisorActions, supervisorDriver } from './privacy'
 
 // ─────────────────────────────── Policy constants ───────────────────────────────
 
@@ -121,10 +132,12 @@ export const INDIVIDUAL_CHANNELS: readonly ChannelId[] = ['projection', 'physiol
 
 /**
  * Driver ids that make an alert 'individual' on whichever channel carries them [ENG, defensive]. They are the clinical
- * latch and its no-hot-work consequence, and the ISO 7933 recovery review after a reached limit (risk.ts). risk.ts puts
- * them on individual channels today. The list keeps the basis right if a producer ever moves them to an exposure channel.
+ * latch and its no-hot-work consequence, the ISO 7933 recovery review after a reached limit (risk.ts), and the
+ * worker's own acclimatisation allowance used up (wave 2d: a personal budget, not a shared site condition, so it is
+ * never framed as "Site heat"; its reason is the pooled "not cleared" phrase). risk.ts puts the first four on
+ * individual channels today; the list keeps the basis right if a producer ever moves them to an exposure channel.
  */
-export const INDIVIDUAL_DRIVER_IDS: readonly string[] = ['clinical_latch', 'no_hot_work_today', 'phs_limit_reached', 'phs_recovery_review_required']
+export const INDIVIDUAL_DRIVER_IDS: readonly string[] = ['clinical_latch', 'no_hot_work_today', 'phs_limit_reached', 'phs_recovery_review_required', 'acclimatization_budget_exhausted']
 
 /** Channels that may be crew-bundled: shared conditions, not individual state (ARCHITECTURE §6). Same as {@link EXPOSURE_CHANNELS}. */
 export const BUNDLE_CHANNELS: readonly ChannelId[] = EXPOSURE_CHANNELS
@@ -165,6 +178,61 @@ export const EMERGENCY_RESPONDER_ROLES: readonly Role[] = ['buddy', 'supervisor'
  */
 export const CLINICAL_TEXT_PATTERN =
   /\b(heart|pulse|bpm|hr\s*\d|core\s*temp|body\s*temp|skin\s*temp|rectal|ectemp|psi\b|physiolog|strain index|symptom|dizz|headache|nause|vomit|faint|collaps|seizure|convuls|confus|slurred|unsteady|chest|cramp|urine|dehydrat|hyponatr|medicat|medicine|beta[-\s]?block|pacemaker|pregnan|diagnos|heat\s*stroke|illness|sick|rash|blood|unconscious|unrespons|swollen|vital|extra[-\s]?care|conservative|risk flag|health flag)/i
+
+/**
+ * Second defensive filter for supervisor-facing text [ENG, privacy]: words that name a private factor the clinical
+ * pattern does not cover: fasting (a religious practice and a risk flag) and the wearable consent state. A driver whose
+ * text or supervisor phrase matches is never used in an alert reason, and state/selectors.ts replaces a console text
+ * that matches. Worker-device texts may use these words (they are the worker's own data). Kept apart from
+ * {@link CLINICAL_TEXT_PATTERN}, whose contract (driver phrases safe on a supervisor screen) other modules test.
+ * Basis: wave 2d principle 4 (no inference of clinical, fasting or consent status); GOVERNANCE §13 item 18.
+ */
+export const PRIVATE_FACTOR_TEXT_PATTERN = /\b(fasting|ramadan|iftar|suhoor|sehri|consent\w*|wearable|wristband)\b/i
+
+/** True when a text may be shown on a supervisor-facing surface: neither pattern matches. Pure. */
+export function supervisorSafeText(text: string): boolean {
+  return !CLINICAL_TEXT_PATTERN.test(text) && !PRIVATE_FACTOR_TEXT_PATTERN.test(text)
+}
+
+/**
+ * Highest level designed suppression may apply to (ANSI/ISA-18.2-2016 designed suppression; wave 2d principle 5).
+ * Stop and emergency always call for an operator action and are never suppressed.
+ */
+export const DESIGNED_SUPPRESSION_MAX_LEVEL: RiskLevel = 'high'
+
+/**
+ * Drivers showing that the active day plan already sets this worker's work/rest: engine/risk.ts `work_rest_planned`,
+ * emitted only when the plan's cap binds (it is at least as strict as the live exposure limit), i.e. the engine's
+ * `detail.plannedCapApplied`.
+ */
+export const PLAN_IN_FORCE_DRIVER_IDS: readonly string[] = ['work_rest_planned']
+
+/**
+ * Drivers showing monitored mode, where the WBGT tables are only a screen and the worker's own ISO 7933 projection and
+ * physiological limits enforce (engine/risk.ts `wbgt_screen_monitored`; ISO 7243:2017, ACGIH TLV, NIOSH 2016).
+ */
+export const MONITORED_SCREEN_DRIVER_IDS: readonly string[] = ['wbgt_screen_monitored']
+
+/**
+ * Console actions an active plan already puts in force [ENG]: the work/rest cycle, task rotation and the work pace
+ * (planner.ts plans work/rest, rotation and water by hour; drink reminders are device-only, privacy.ts
+ * DEVICE_ONLY_ACTIONS). An exposure alert whose console actions include anything else (no lone work, a sensor check,
+ * the acclimatisation plan …) asks for a new operator action and is never suppressed (protective).
+ */
+export const PLAN_COVERED_ACTIONS: readonly ActionId[] = ['shade_breaks', 'rotate_task', 'reduce_intensity']
+
+/**
+ * What put an alert under designed suppression, kept in the engine's own state only ({@link AlertRecord.suppressionCause};
+ * the published alert carries the pooled 'action_in_force', see types.ts AlertSuppressionReason):
+ * - 'plan_in_force': the active day plan already sets the work/rest ({@link PLAN_IN_FORCE_DRIVER_IDS});
+ * - 'monitored_screen': monitored mode, where the WBGT tables are only a screen ({@link MONITORED_SCREEN_DRIVER_IDS}).
+ */
+export type DesignedSuppressionCause = 'plan_in_force' | 'monitored_screen'
+
+/** True while an alert is under designed suppression (recorded, notified to nobody). Basis: {@link AlertSuppression}. */
+export function isAlertSuppressed(a: Pick<Alert, 'suppression'>): boolean {
+  return a.suppression !== undefined && a.suppression.liftedAt === undefined
+}
 
 /** Tunable alert policy (every field defaults to the exported constant of the same meaning). */
 export interface AlertPolicy {
@@ -237,12 +305,16 @@ export interface Notification {
 }
 
 /**
- * An {@link Alert} as published by this engine. `basis` and `acks` are always present. Crew alerts also list their
- * members.
+ * An {@link Alert} as published by this engine. `basis`, `acks`, `consoleActions` and `reasonKey` are always present.
+ * Crew alerts also list their members.
  */
 export interface EngineAlert extends Alert {
   basis: AlertBasis
   acks: Array<{ role: Role; t: number }>
+  /** Console-safe actions (see {@link Alert.consoleActions}); a crew alert's `actions` equal them. */
+  consoleActions: ActionId[]
+  /** i18n key of `reason` (see {@link Alert.reasonKey}). */
+  reasonKey: string
   /** Crew alerts only: the bundled workers' pseudonymous ids, in joining order. */
   memberIds?: string[]
 }
@@ -302,6 +374,16 @@ export interface AlertRecord {
   stopEscalatedAt?: number
   renotifiedAt?: number
   remindedAt?: number
+  /**
+   * When the alert was first notified, if later than its raise (designed suppression lifted). The acknowledgement
+   * timers and the crew-bundling window count from here, so a lifted alert gets the full acknowledgement time.
+   */
+  notifiedAt?: number
+  /**
+   * Designed suppression: what put the alert under it ({@link DesignedSuppressionCause}). Engine state only, never
+   * published (it can reveal monitored mode, hence wearable consent).
+   */
+  suppressionCause?: DesignedSuppressionCause
   closedReason?: AlertCloseReason
   resolvedBy?: Role
 }
@@ -395,6 +477,16 @@ export interface BasisCounts {
   unacknowledged: number
 }
 
+/** Designed-suppression counts in {@link AlertStats} (alerts by their latest version). */
+export interface DesignedSuppressionStats {
+  /** Distinct alerts recorded under designed suppression (also counted in `AlertStats.alerts` and the breakdowns). */
+  alerts: number
+  /** Of those, never notified: still suppressed in their latest version. */
+  stillSuppressed: number
+  /** Of those, lifted later (individual basis or the condition ended) and notified then. */
+  lifted: number
+}
+
 /** Counts for the challenge's safety measures and pilot reporting (see {@link alertStats}). */
 export interface AlertStats {
   alerts: number
@@ -419,7 +511,13 @@ export interface AlertStats {
     emergencyRenotified: number
     highReminders: number
   }
+  /** Repeat suppressions (the same level + actions within 20 min), from `state.suppressed`. */
   suppressed: number
+  /**
+   * Designed suppression (ANSI/ISA-18.2): exposure alerts recorded but notified to nobody because the plan already
+   * enforces their action or they are the monitored-mode screen. Counted separately from repeat suppressions.
+   */
+  designedSuppression: DesignedSuppressionStats
   /** Worker alerts carried by crew alerts (Σ crew-alert members). */
   crewBundledWorkerAlerts: number
   notifications: number
@@ -479,7 +577,7 @@ const PERSONAL_REASON: Record<RiskLevel, { text: string; key: string }> = {
   emergency: { text: 'Emergency response needed now', key: 'reason.emergency' },
 }
 
-const usableText = (s: string): boolean => !CLINICAL_TEXT_PATTERN.test(s)
+const usableText = (s: string): boolean => supervisorSafeText(s)
 
 /** Collapse whitespace, neutralise REL/RAL (which can hint at conservative mode) and bound the length. */
 function tidyReason(text: string): string {
@@ -520,6 +618,12 @@ const ruleReason = (text: string): string => tidyReason(`Site rule: ${text}`)
 /** Site-rule reason when no usable regulation driver text exists. */
 const SITE_RULE_GENERIC = 'Site rule: a heat-work regulation applies now'
 
+/** i18n key of a reason taken from a driver's supervisor view: `reason.<pooled id>` or `driver.<id>`. */
+const reasonKeyOf = (view: RiskDriver): string => ((POOLED_DRIVER_IDS as readonly string[]).includes(view.id) ? `reason.${view.id}` : `driver.${view.id}`)
+
+/** Console actions of an alert; derived with the privacy rule for alerts from older producers (no drivers known). */
+const consoleActionsOf = (al: Alert): ActionId[] => (al.consoleActions ? [...al.consoleActions] : supervisorActions(al.actions, []))
+
 /**
  * Crew alert reason: the shared condition plus the member count. A site-heat reason is rebuilt with the crew's
  * strictest work/rest; a site rule keeps the first member's rule text.
@@ -546,6 +650,10 @@ interface Classified {
   /** The non-clinical individual reason (equals `reason` when `basis` is 'individual'). Used when a carried clinical latch makes an exposure classification individual. */
   individual: { reason: string; reasonKey: string }
   workMinPerHour?: number
+  /** privacy.ts supervisorActions of the assessment: what supervisors and the crew alert may show. */
+  consoleActions: ActionId[]
+  /** Designed suppression that would apply to an alert raised from this assessment (no carried latch), or null. */
+  suppressibleBy: DesignedSuppressionCause | null
 }
 
 /** Copy-on-write bookkeeping of one call: what it has already copied and may therefore mutate. */
@@ -582,7 +690,8 @@ const copyAck = (x: { role: Role; t: number }): { role: Role; t: number } => ({ 
 
 /** Deep copy of a published alert (alerts are small: arrays and nested objects are copied). */
 function copyAlert(a: EngineAlert): EngineAlert {
-  const c: EngineAlert = { ...a, actions: [...a.actions], acks: (a.acks ?? []).map(copyAck) }
+  const c: EngineAlert = { ...a, actions: [...a.actions], consoleActions: [...(a.consoleActions ?? [])], acks: (a.acks ?? []).map(copyAck) }
+  if (a.suppression) c.suppression = { ...a.suppression }
   if (a.memberIds) c.memberIds = [...a.memberIds]
   if (a.escalatedTo) c.escalatedTo = [...a.escalatedTo]
   if (a.ack) c.ack = copyAck(a.ack)
@@ -718,11 +827,30 @@ function nextAlertId(s: AlertEngineState): string {
   return `${s.idPrefix}A-${s.alertSeq}`
 }
 
-/** Queues a notification; it carries the alert's current basis ('individual' if the alert is unknown, protective). */
+/**
+ * Actions a notification may carry for its recipient [ENG, privacy]: the worker's own device gets the alert's actions;
+ * the clinical responders (first aider, occupational health) get them without the confidential ones; a buddy gets the
+ * console actions plus its buddy-check prompt; every other recipient, and a crew-wide broadcast (siren), gets the
+ * console actions (privacy.ts supervisorActions). Basis: ARCHITECTURE §1 principle 5; GOVERNANCE §13 item 18.
+ */
+function notificationActions(al: Alert, to: Notification['to'], given: readonly ActionId[]): ActionId[] {
+  if (to.role === 'worker' && to.id !== undefined) return [...given]
+  if (to.role === 'first_aider' || to.role === 'occ_health') return given.filter((x) => !CONFIDENTIAL_ACTIONS.includes(x))
+  const shown = consoleActionsOf(al)
+  if (to.role === 'buddy' && given.includes('buddy_check') && !shown.includes('buddy_check')) shown.push('buddy_check')
+  return shown
+}
+
+/**
+ * Queues a notification; it carries the alert's current basis ('individual' if the alert is unknown, protective) and
+ * the actions its recipient may see ({@link notificationActions}).
+ */
 function push(work: Work, n: Omit<Notification, 'id' | 't' | 'basis'>): void {
   work.s.notificationSeq += 1
-  const basis: AlertBasis = work.s.alerts[n.alertId]?.alert.basis ?? 'individual'
-  work.notes.push({ id: `${work.s.idPrefix}N-${work.s.notificationSeq}`, t: work.now, ...n, basis })
+  const al = work.s.alerts[n.alertId]?.alert
+  const basis: AlertBasis = al?.basis ?? 'individual'
+  const actions = al ? notificationActions(al, n.to, n.actions) : [...n.actions]
+  work.notes.push({ id: `${work.s.idPrefix}N-${work.s.notificationSeq}`, t: work.now, ...n, actions, basis })
 }
 
 function touch(work: Work, id: string): void {
@@ -775,6 +903,48 @@ function basisOf(driving: readonly ChannelId[], clinical: boolean, pool: readonl
   return individual ? 'individual' : 'exposure'
 }
 
+/**
+ * True when a cause that is not a shared condition sits AT `level`: a channel at that level outside
+ * {@link EXPOSURE_CHANNELS}, or a raising {@link INDIVIDUAL_DRIVER_IDS} driver on a channel at that level. The
+ * drivingChannels() fallback to the highest channel below the level never counts: a dwell-held level is not a new
+ * cause (safety review wave 2c: a dwell-held stop with the projection at caution re-labelled an exposure alert).
+ */
+function individualCauseAt(a: RiskAssessment, level: RiskLevel): boolean {
+  const at = a.channels.filter((c) => c.level === level).map((c) => c.channel)
+  if (at.length === 0) return false
+  if (at.some((c) => !EXPOSURE_CHANNELS.includes(c))) return true
+  return [...a.drivers, ...a.channels.flatMap((c) => c.drivers)].some(
+    (d) => d.direction === 'raises' && INDIVIDUAL_DRIVER_IDS.includes(d.id) && at.includes(d.channel),
+  )
+}
+
+/**
+ * Designed suppression of an alert raised from an assessment (ANSI/ISA-18.2-2016 designed / state-based suppression;
+ * wave 2d principle 5): only an exposure, non-clinical alert at caution or high whose console actions are all
+ * {@link PLAN_COVERED_ACTIONS}, and then
+ * - 'plan_in_force' when the active plan already sets the work/rest ({@link PLAN_IN_FORCE_DRIVER_IDS});
+ * - 'monitored_screen' when only the environment channel drives it and monitored mode makes the WBGT tables a screen
+ *   ({@link MONITORED_SCREEN_DRIVER_IDS}).
+ * Never for stop or emergency, an individual basis, a symptom, physiology or hydration cause, or a first-aid case.
+ */
+function designedSuppressionOf(
+  basis: AlertBasis,
+  level: RiskLevel,
+  clinical: boolean,
+  driving: readonly ChannelId[],
+  consoleActions: readonly ActionId[],
+  pool: readonly RiskDriver[],
+): DesignedSuppressionCause | null {
+  if (basis !== 'exposure' || clinical || RISK_ORDER[level] > RISK_ORDER[DESIGNED_SUPPRESSION_MAX_LEVEL]) return null
+  if (driving.length === 0 || driving.some((c) => !EXPOSURE_CHANNELS.includes(c))) return null
+  if (!consoleActions.every((x) => PLAN_COVERED_ACTIONS.includes(x))) return null
+  if (pool.some((d) => PLAN_IN_FORCE_DRIVER_IDS.includes(d.id))) return 'plan_in_force'
+  if (driving.every((c) => c === 'environment') && pool.some((d) => d.channel === 'environment' && MONITORED_SCREEN_DRIVER_IDS.includes(d.id))) {
+    return 'monitored_screen'
+  }
+  return null
+}
+
 function classify(a: RiskAssessment): Classified {
   const level: RiskLevel = RISK_ORDER[a.level] === undefined ? 'stop' : a.level // fail-safe on a corrupt level [ENG]
   const driving = drivingChannels(a)
@@ -788,22 +958,27 @@ function classify(a: RiskAssessment): Classified {
   // Crew bundling stays exposure-only (shared conditions, ARCHITECTURE §6).
   const bundleEligible = basis === 'exposure' && (level === 'high' || level === 'stop')
 
-  const primary = pool.find(
-    (d) =>
-      d.direction === 'raises' &&
-      !CLINICAL_CHANNELS.includes(d.channel) &&
-      exposureDriving.includes(d.channel) &&
-      typeof d.text === 'string' &&
-      usableText(d.text) &&
-      usableText(d.id),
-  )
+  // The most important usable non-clinical raising driver on a driving channel, as a supervisor may see it (privacy.ts
+  // supervisorDriver: the generic `driver.<id>` phrase or a pooled phrase, site numbers only; a withheld driver is
+  // skipped). Reasons never carry an individual number (GOVERNANCE §13 item 16) [wave 2d].
+  let primary: RiskDriver | undefined
+  let view: RiskDriver | undefined
+  for (const d of pool) {
+    if (d.direction !== 'raises' || CLINICAL_CHANNELS.includes(d.channel) || !exposureDriving.includes(d.channel)) continue
+    if (typeof d.text !== 'string' || !usableText(d.text) || !usableText(d.id)) continue
+    const v = supervisorDriver(d)
+    if (v === null || !usableText(v.text)) continue
+    primary = d
+    view = v
+    break
+  }
   // The non-clinical individual reason (the reason every alert had before the basis split).
   let individual: { reason: string; reasonKey: string }
   if (clinical || exposureDriving.length === 0) {
     const base = PERSONAL_REASON[level]
-    individual = { reason: primary ? `${base.text}; ${tidyReason(primary.text)}` : base.text, reasonKey: base.key }
-  } else if (primary) {
-    individual = { reason: tidyReason(primary.text), reasonKey: `driver.${primary.id}` }
+    individual = { reason: view ? `${base.text}; ${tidyReason(view.text)}` : base.text, reasonKey: base.key }
+  } else if (view) {
+    individual = { reason: tidyReason(view.text), reasonKey: reasonKeyOf(view) }
   } else {
     const g = GENERIC_REASON[exposureDriving[0] as 'environment' | 'regulation' | 'projection'] ?? GENERIC_REASON.environment
     individual = { reason: g.text, reasonKey: g.key }
@@ -816,15 +991,17 @@ function classify(a: RiskAssessment): Classified {
     // A site or crew condition: the risk engine's most important exposure driver picks the frame.
     if (primary ? primary.channel === 'regulation' : exposureDriving[0] === 'regulation') {
       frame = 'rule'
-      reason = primary ? ruleReason(primary.text) : SITE_RULE_GENERIC
-      reasonKey = primary ? `driver.${primary.id}` : GENERIC_REASON.regulation.key
+      reason = view ? ruleReason(view.text) : SITE_RULE_GENERIC
+      reasonKey = view ? reasonKeyOf(view) : GENERIC_REASON.regulation.key
     } else {
       frame = 'heat'
       reason = heatReason(level, wmph)
-      reasonKey = primary ? `driver.${primary.id}` : GENERIC_REASON.environment.key
+      reasonKey = view ? reasonKeyOf(view) : GENERIC_REASON.environment.key
     }
   }
   const actions = [...new Set(a.actions)]
+  const consoleActions = supervisorActions(actions, pool)
+  const suppressibleBy = designedSuppressionOf(basis, level, clinical, driving, consoleActions, pool)
   return {
     level,
     actions,
@@ -837,6 +1014,8 @@ function classify(a: RiskAssessment): Classified {
     ...(frame ? { frame } : {}),
     individual,
     ...(wmph !== undefined ? { workMinPerHour: wmph } : {}),
+    consoleActions,
+    suppressibleBy,
   }
 }
 
@@ -893,7 +1072,7 @@ function notifySupervisorIndividual(work: Work, id: string, kind: 'alert' | 'dee
   const rec = recW(work, id)
   const al = rec.alert
   const name = track.roster.displayName
-  const phrase = phraseActions(al.actions, rec.workMinPerHour)
+  const phrase = phraseActions(consoleActionsOf(al), rec.workMinPerHour)
   push(work, {
     alertId: al.id,
     to: supervisorTo(track.roster),
@@ -911,9 +1090,13 @@ function notifySupervisorIndividual(work: Work, id: string, kind: 'alert' | 'dee
   addRoutedRole(work, rec, 'supervisor')
 }
 
-/** Raises a worker alert and routes it. `track` must be writable (trackW). */
+/**
+ * Raises a worker alert and routes it, unless designed suppression applies: then it is recorded with `suppression`,
+ * notified to nobody and left out of the repeat-suppression memory (the worker was not told). `track` must be writable
+ * (trackW).
+ */
 function raiseWorkerAlert(work: Work, track: WorkerAlertTrack, info: Classified, origin: Exclude<AlertOrigin, 'crew'>, carryLatch: boolean): AlertRecord {
-  const { s, p, now } = work
+  const { s, now } = work
   const id = nextAlertId(s)
   const level = info.level
   const latched = info.clinical || carryLatch
@@ -921,6 +1104,7 @@ function raiseWorkerAlert(work: Work, track: WorkerAlertTrack, info: Classified,
   const basis: AlertBasis = latched ? 'individual' : info.basis
   const why = basis === info.basis ? { reason: info.reason, reasonKey: info.reasonKey } : info.individual
   const requiresAck = origin !== 'deescalation' && atLeast(level, 'high')
+  const suppression = basis === 'exposure' && !latched ? info.suppressibleBy : null
   const roster = track.roster
   const alert: EngineAlert = {
     id,
@@ -931,11 +1115,15 @@ function raiseWorkerAlert(work: Work, track: WorkerAlertTrack, info: Classified,
     scope: 'worker',
     level,
     actions: [...info.actions],
+    consoleActions: [...info.consoleActions],
     reason: why.reason,
+    reasonKey: why.reasonKey,
+    ...(basis === 'exposure' && info.frame ? { frame: info.frame } : {}),
     basis,
     status: 'active',
     escalatedTo: [],
     acks: [],
+    ...(suppression ? { suppression: { reason: 'action_in_force', t: now } } : {}),
   }
   const rec: AlertRecord = {
     alert,
@@ -949,6 +1137,7 @@ function raiseWorkerAlert(work: Work, track: WorkerAlertTrack, info: Classified,
     reasonKey: why.reasonKey,
     ...(basis === 'exposure' && info.frame ? { exposureFrame: info.frame } : {}),
     ...(info.workMinPerHour !== undefined ? { workMinPerHour: info.workMinPerHour } : {}),
+    ...(suppression ? { suppressionCause: suppression } : {}),
   }
   addRecord(work, rec)
   work.raised.push(id)
@@ -956,7 +1145,23 @@ function raiseWorkerAlert(work: Work, track: WorkerAlertTrack, info: Classified,
   track.belowSince = null
   track.suppressedKey = null
   delete track.resolutionHold
+  // Designed suppression: recorded, notified to nobody; the worker's device still shows the guidance.
+  if (!suppression) routeWorkerAlert(work, track, rec)
+  return rec
+}
 
+/**
+ * Routes worker alert `rec` (writable; raised in this call, or lifted from designed suppression) as at its raise:
+ * worker, supervisor at ≥ high (bundling decided at the end of the batch), first aider, emergency responders, offline
+ * SMS. `track` must be writable. Basis: ARCHITECTURE §6.
+ */
+function routeWorkerAlert(work: Work, track: WorkerAlertTrack, rec: AlertRecord): void {
+  const { p, now } = work
+  const alert = rec.alert
+  const id = alert.id
+  const level = alert.level
+  const origin = rec.origin
+  const roster = track.roster
   const offline = roster.network === 'offline'
   const phrase = phraseActions(alert.actions, rec.workMinPerHour)
   // 1. The worker, always, on their own device (ARCHITECTURE §6).
@@ -971,7 +1176,7 @@ function raiseWorkerAlert(work: Work, track: WorkerAlertTrack, info: Classified,
       origin === 'deescalation'
         ? `${LEVEL_TEXT[level]} — conditions have eased: ${phrase}. Reason: ${alert.reason}`
         : `${LEVEL_TEXT[level]}: ${phrase}. Reason: ${alert.reason}`,
-    requiresAck: requiresAck && level !== 'emergency',
+    requiresAck: rec.requiresAck && level !== 'emergency',
     kind: origin === 'deescalation' ? 'deescalation' : 'alert',
   })
   track.told[toldKey(level, alert.actions)] = now
@@ -984,7 +1189,11 @@ function raiseWorkerAlert(work: Work, track: WorkerAlertTrack, info: Classified,
   }
 
   // 3. First aider on symptom/physiology-driven stops and every emergency.
-  if (origin !== 'deescalation' && (level === 'emergency' || (level === 'stop' && info.clinical))) {
+  if (origin !== 'deescalation' && (level === 'emergency' || (level === 'stop' && rec.clinical))) {
+    const responderPhrase = phraseActions(
+      alert.actions.filter((x) => !CONFIDENTIAL_ACTIONS.includes(x)),
+      rec.workMinPerHour,
+    )
     push(work, {
       alertId: id,
       to: { role: 'first_aider' },
@@ -995,7 +1204,7 @@ function raiseWorkerAlert(work: Work, track: WorkerAlertTrack, info: Classified,
       text:
         level === 'emergency'
           ? `EMERGENCY — go to ${roster.displayName}${roster.crewId ? ` (crew ${roster.crewId})` : ''} now: call 998, cool first, stay with them.`
-          : `${roster.displayName}${roster.crewId ? ` (crew ${roster.crewId})` : ''} — first-aid check needed now (${LEVEL_TEXT[level]}): ${phrase}.`,
+          : `${roster.displayName}${roster.crewId ? ` (crew ${roster.crewId})` : ''} — first-aid check needed now (${LEVEL_TEXT[level]}): ${responderPhrase}.`,
       requiresAck: true,
       kind: 'alert',
     })
@@ -1038,13 +1247,12 @@ function raiseWorkerAlert(work: Work, track: WorkerAlertTrack, info: Classified,
       level,
       actions: [...alert.actions],
       reasonKey: 'policy.device_offline',
-      text: `${roster.displayName}’s phone is offline — tell them in person: ${LEVEL_TEXT[level]}: ${phrase}.`,
+      text: `${roster.displayName}’s phone is offline — tell them in person: ${LEVEL_TEXT[level]}: ${phraseActions(consoleActionsOf(alert), rec.workMinPerHour)}.`,
       requiresAck: true,
       kind: 'device_offline',
     })
     addRoutedRole(work, rec, 'supervisor')
   }
-  return rec
 }
 
 /** Raise unless the repeat-suppression rule applies (never for escalations, clinical alerts or emergencies). `track` must be writable. */
@@ -1092,34 +1300,56 @@ function handleAssessment(work: Work, a: RiskAssessment, roster: RosterEntry): v
       const before = new Set(open.alert.actions)
       const changed = info.actions.length !== before.size || info.actions.some((x) => !before.has(x))
       // Sticky individual [ENG, protective]: an individual cause joining at the alert's level re-labels the open alert
-      // (reason replaced, routing unchanged); it never goes back to 'exposure' while it stays open. A level that no
-      // channel explains (the risk engine's de-escalation dwell holding the displayed level while every channel has
-      // dropped, e.g. the worker rests in the cabin) is not a new cause: the open alert keeps its basis (integration
-      // fix, wave 2c — without it nearly every exposure alert turned 'individual' during its dwell, just before it
-      // resolved).
-      const relabel = open.alert.basis === 'exposure' && info.basis === 'individual' && info.driving.length > 0
-      if (changed || relabel) {
+      // (reason replaced, routing unchanged); it never goes back to 'exposure' while it stays open. Only a channel AT
+      // the alert's level counts ({@link individualCauseAt}). A level that no channel explains (the risk engine's
+      // de-escalation dwell holding the displayed level while every channel has dropped, e.g. the worker rests in the
+      // cabin) is not a new cause, and neither is a lower channel that the drivingChannels() fallback would pick
+      // (safety review wave 2c): the open alert keeps its basis.
+      const relabel = open.alert.basis === 'exposure' && individualCauseAt(a, open.alert.level)
+      // Designed suppression holds while the alert stays exposure and its condition holds at the level; it is lifted,
+      // and the alert notified at once, when the alert gains an individual basis or the condition ends (a channel at
+      // the level no longer qualifies). A dwell-held level keeps it as it is.
+      const suppressed = isAlertSuppressed(open.alert)
+      const atLevel = a.channels.some((c) => c.level === open.alert.level)
+      const lift = suppressed && (relabel || (atLevel && info.suppressibleBy === null))
+      // An individual alert keeps a current reason when its cause changes at the same level (e.g. the projection limit
+      // is now reached: the pooled "not cleared" phrase), published in `updated` without notification [ENG].
+      const refresh = !relabel && atLevel && open.alert.basis === 'individual' && info.basis === 'individual' && open.alert.reason !== info.reason
+      if (changed || relabel || lift || refresh) {
         const rec = recW(work, openId)
+        if (refresh) {
+          rec.alert.reason = info.reason
+          rec.alert.reasonKey = info.reasonKey
+          rec.reasonKey = info.reasonKey
+        }
         if (relabel) {
           rec.alert.basis = 'individual'
           rec.alert.reason = info.reason
+          rec.alert.reasonKey = info.reasonKey
           rec.reasonKey = info.reasonKey
           rec.bundleEligible = false
           delete rec.exposureFrame
+          delete rec.alert.frame
         }
         if (changed) {
           const added = info.actions.filter((x) => !before.has(x))
           rec.alert.actions = [...info.actions]
+          rec.alert.consoleActions = [...info.consoleActions]
           if (info.workMinPerHour !== undefined) rec.workMinPerHour = info.workMinPerHour
           if (rec.alert.basis === 'exposure' && info.basis === 'exposure') {
             // Keep the site/crew reason in step with the work/rest refreshed above.
             rec.alert.reason = info.reason
+            rec.alert.reasonKey = info.reasonKey
             rec.reasonKey = info.reasonKey
-            if (info.frame) rec.exposureFrame = info.frame
+            if (info.frame) {
+              rec.exposureFrame = info.frame
+              rec.alert.frame = info.frame
+            }
           }
           const key = toldKey(level, info.actions)
           const last = track.told[key]
-          if (added.length > 0 && !(last !== undefined && now - last < p.repeatSuppressionMin * MINUTE_MS)) {
+          // A suppressed alert tells nobody; a lifted one is notified in full just below.
+          if (!suppressed && added.length > 0 && !(last !== undefined && now - last < p.repeatSuppressionMin * MINUTE_MS)) {
             push(work, {
               alertId: openId,
               to: workerTo(track.workerId),
@@ -1134,14 +1364,21 @@ function handleAssessment(work: Work, a: RiskAssessment, roster: RosterEntry): v
             track.told[key] = now
           }
         }
+        if (lift) {
+          rec.alert.suppression = { ...(rec.alert.suppression as AlertSuppression), liftedAt: now }
+          rec.notifiedAt = now
+          routeWorkerAlert(work, track, rec)
+        }
         touch(work, openId)
       }
     } else {
       if (track.belowSince === null) track.belowSince = now
       if (!open.latched && now - track.belowSince >= p.deescalationDwellMin * MINUTE_MS) {
+        // A suppressed alert was never notified, so the lower alert is not a "conditions eased" message.
+        const neverNotified = isAlertSuppressed(open.alert)
         closeAlert(work, openId, 'auto_dwell')
         // A clinical cause at the lower level is a new case (acknowledged, routed), not a quiet de-escalation.
-        if (atLeast(level, p.minAlertLevel)) considerRaise(work, track, info, info.clinical ? 'new' : 'deescalation', false, false)
+        if (atLeast(level, p.minAlertLevel)) considerRaise(work, track, info, info.clinical || neverNotified ? 'new' : 'deescalation', false, false)
       }
     }
   } else {
@@ -1206,8 +1443,9 @@ function settleSupervisorNotifications(work: Work): void {
         r.alert.level === level &&
         r.alert.status !== 'resolved' &&
         r.bundleEligible &&
+        !isAlertSuppressed(r.alert) &&
         !r.crewAlertId &&
-        now - r.alert.t <= p.crewBundleWindowMin * MINUTE_MS
+        now - (r.notifiedAt ?? r.alert.t) <= p.crewBundleWindowMin * MINUTE_MS
       )
     })
     const workers = new Set(candidates.map((id) => s.alerts[id].alert.workerId))
@@ -1235,7 +1473,11 @@ function joinCrew(work: Work, crewAlertId: string, id: string): void {
   const active = crew.activeMemberIds ?? []
   if (!active.includes(wid)) active.push(wid)
   crew.activeMemberIds = active
-  for (const a of rec.alert.actions) if (!crew.alert.actions.includes(a)) crew.alert.actions.push(a)
+  // A crew alert shows console actions only (supervisors): its `actions` and `consoleActions` are the same list.
+  for (const a of consoleActionsOf(rec.alert)) {
+    if (!crew.alert.actions.includes(a)) crew.alert.actions.push(a)
+    if (!crew.alert.consoleActions.includes(a)) crew.alert.consoleActions.push(a)
+  }
   // The crew shows its strictest work/rest (protective).
   if (rec.workMinPerHour !== undefined && (crew.workMinPerHour === undefined || rec.workMinPerHour < crew.workMinPerHour)) crew.workMinPerHour = rec.workMinPerHour
   crew.alert.reason = crewReason(crew.exposureFrame, crew.alert.level, crew.workMinPerHour, crew.alert.reason, members.length)
@@ -1251,7 +1493,7 @@ function createCrewAlert(work: Work, crewId: string, level: RiskLevel, candidate
   const first = members[0]
   const id = nextAlertId(s)
   const actions: ActionId[] = []
-  for (const m of members) for (const a of m.alert.actions) if (!actions.includes(a)) actions.push(a)
+  for (const m of members) for (const a of consoleActionsOf(m.alert)) if (!actions.includes(a)) actions.push(a)
   const memberIds = [...new Set(members.map((m) => m.alert.workerId as string))]
   const wmphs = members.map((m) => m.workMinPerHour).filter((v): v is number => v !== undefined)
   const workMinPerHour = wmphs.length > 0 ? Math.min(...wmphs) : undefined
@@ -1267,7 +1509,10 @@ function createCrewAlert(work: Work, crewId: string, level: RiskLevel, candidate
     scope: 'crew',
     level,
     actions,
+    consoleActions: [...actions],
     reason,
+    reasonKey: first.reasonKey,
+    ...(first.exposureFrame ? { frame: first.exposureFrame } : {}),
     basis: 'exposure', // crew bundling is exposure-only
     status: 'active',
     escalatedTo: ['supervisor'],
@@ -1322,8 +1567,9 @@ function runTimers(work: Work): void {
   for (const id of Object.keys(s.alerts)) {
     // Read-only checks first; a timer that fires takes the writable copy (recW) before changing anything.
     const cur = s.alerts[id]
-    if (cur.alert.status === 'resolved' || !cur.requiresAck || cur.alert.ack) continue
-    const ageMs = now - cur.alert.t
+    // A suppressed alert asked no one, so no timer runs for it; a lifted one counts from its first notification.
+    if (cur.alert.status === 'resolved' || !cur.requiresAck || cur.alert.ack || isAlertSuppressed(cur.alert)) continue
+    const ageMs = now - (cur.notifiedAt ?? cur.alert.t)
     if (cur.alert.scope === 'worker') {
       const track = cur.alert.workerId ? s.workers[cur.alert.workerId] : undefined
       if (!track) continue
@@ -1409,7 +1655,7 @@ function runTimers(work: Work): void {
             level: al.level,
             actions: [...al.actions],
             reasonKey: 'policy.high_unacknowledged',
-            text: `Reminder: ${name} — HIGH RISK alert not acknowledged for ${Math.floor(ageMs / MINUTE_MS)} min: ${phraseActions(al.actions, rec.workMinPerHour)}.`,
+            text: `Reminder: ${name} — HIGH RISK alert not acknowledged for ${Math.floor(ageMs / MINUTE_MS)} min: ${phraseActions(consoleActionsOf(al), rec.workMinPerHour)}.`,
             requiresAck: true,
             kind: 'reminder',
           })
@@ -1583,9 +1829,11 @@ function median(xs: readonly number[]): number | null {
 /**
  * Safety-measure and pilot-reporting counts from a log of alerts (later versions of the same id replace earlier ones)
  * and notifications: alerts by level and scope, acknowledgement rate and median time to acknowledge, escalations by
- * timer, suppressed repeats (pass `state.suppressed` or a count), crew-bundled worker alerts, notifications by channel,
- * role and kind, and the split by basis (`byBasis`: exposure vs individual alerts, notifications, acknowledgement
- * requests and unacknowledged alerts). Basis: ARCHITECTURE.md §6, §8 (alert burden, false alarms per worker-shift).
+ * timer, suppressed repeats (pass `state.suppressed` or a count), designed suppression (`designedSuppression`: alerts
+ * recorded but notified to nobody: still suppressed or lifted), crew-bundled worker alerts, notifications
+ * by channel, role and kind, and the split by basis (`byBasis`: exposure vs individual alerts, notifications,
+ * acknowledgement requests and unacknowledged alerts). Basis: ARCHITECTURE.md §6, §8 (alert burden, false alarms per
+ * worker-shift); ANSI/ISA-18.2-2016 (suppressed alarms are recorded and reported, not announced).
  */
 export function alertStats(
   alerts: readonly Alert[],
@@ -1605,6 +1853,7 @@ export function alertStats(
   let crewBundledWorkerAlerts = 0
   const zero = (): BasisCounts => ({ alerts: 0, notifications: 0, notificationsRequiringAck: 0, unacknowledged: 0 })
   const byBasis: Record<AlertBasis, BasisCounts> = { exposure: zero(), individual: zero() }
+  const designedSuppression: DesignedSuppressionStats = { alerts: 0, stillSuppressed: 0, lifted: 0 }
   // A missing basis (older producers) counts as 'individual' [ENG]: the exposure share is never overstated.
   const basisOfAlert = (a: Alert | undefined): AlertBasis => (a?.basis === 'exposure' ? 'exposure' : 'individual')
   for (const a of latest.values()) {
@@ -1623,6 +1872,11 @@ export function alertStats(
     }
     if (a.status === 'resolved') resolved += 1
     if (a.scope === 'crew') crewBundledWorkerAlerts += a.memberIds?.length ?? 0
+    if (a.suppression) {
+      designedSuppression.alerts += 1
+      if (a.suppression.liftedAt === undefined) designedSuppression.stillSuppressed += 1
+      else designedSuppression.lifted += 1
+    }
   }
   for (const n of notifications) {
     const sent = (n as { basis?: AlertBasis }).basis
@@ -1666,6 +1920,7 @@ export function alertStats(
       highReminders: reminders.size,
     },
     suppressed: typeof suppressed === 'number' ? suppressed : suppressed.length,
+    designedSuppression,
     crewBundledWorkerAlerts,
     notifications: notifications.length,
     notificationsByChannel,

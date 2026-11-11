@@ -1,19 +1,24 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { MINUTE_MS } from '../engine/time'
-import { RISK_ORDER, type Alert, type RiskAssessment, type RiskLevel, type SymptomId, type WorkerProfile } from '../engine/types'
-import { CLINICAL_DRIVER_CHANNELS, CLINICAL_FIELDS, CONFIDENTIAL_ACTIONS, CONSENT_SCOPES, type ConsentScope, type PublishedCell } from '../engine/privacy'
-import { ACK_ROLES, CLINICAL_TEXT_PATTERN, acknowledge, createAlertEngine, processAssessments, tick } from '../engine/alerts'
-import { SYMPTOM_IDS } from '../i18n'
+import { RISK_ORDER, type Alert, type RiskAssessment, type RiskDriver, type RiskLevel, type SymptomId, type WorkerProfile } from '../engine/types'
+import { CLINICAL_DRIVER_CHANNELS, CLINICAL_FIELDS, CONFIDENTIAL_ACTIONS, CONSENT_SCOPES, DEVICE_ONLY_ACTIONS, supervisorDriverRule, type ConsentScope, type PublishedCell } from '../engine/privacy'
+import { ACK_ROLES, CLINICAL_TEXT_PATTERN, STOP_ACK_TIMEOUT_MIN, acknowledge, createAlertEngine, processAssessments, supervisorSafeText, tick } from '../engine/alerts'
+import { SYMPTOM_IDS, driverText } from '../i18n'
+import { CONSOLE_PHRASES, CONSOLE_PHRASE_IDS, consolePhrase } from '../i18n/messages'
 import { createRng, type Rng } from '../sim/rng'
 import { createNodeSimDataLoader, type SimDataLoader } from '../sim/simdata'
 import { loadScenarioData, type ScenarioId } from '../sim/scenarios'
 import type { SimConfigInput } from '../sim/worldsim'
 import type { PolicyId, SimData, WorldInjection, WorldView } from '../sim/types'
-import { createSimStore, type SimStore } from './simStore'
+import { createSimStore, emptyDeviceRecord, type SimStore } from './simStore'
 import { createGovernanceStore, type GovernanceStore } from './governanceStore'
 import {
+  alertCounts,
+  alertItem,
   caseIndex,
+  caseLocation,
   caseStatus,
+  locationText,
   deviceSnapshot,
   selectAggregate,
   selectBuddyCards,
@@ -32,8 +37,8 @@ import {
   type SelectorInput,
 } from './selectors'
 
-// Fields each role may ever receive (privacy.ts ACCESS_MATRIX views).
-const SUPERVISOR_FIELDS: readonly string[] = ['displayName', 'crewId', 'level', 'actions', 'workMinPerHour', 'ackStatus', 'drivers_nonclinical', 'waterMlPerHour']
+// Fields each role may ever receive (privacy.ts ACCESS_MATRIX views). Wave 2d: no individual water figure for supervisors.
+const SUPERVISOR_FIELDS: readonly string[] = ['displayName', 'crewId', 'level', 'actions', 'workMinPerHour', 'ackStatus', 'drivers_nonclinical']
 const BUDDY_FIELDS: readonly string[] = ['displayName', 'level', 'actions', 'ackStatus']
 const FIRST_AID_FIELDS: readonly string[] = ['displayName', 'level', 'actions', 'location', 'symptoms']
 const TRUTH_MARK = '__TRUTH_SENTINEL__'
@@ -150,12 +155,24 @@ function checkInvariants(input: SelectorInput, label: string, seen: { escalated:
       for (const row of crew.rows) {
         seen.rows += 1
         for (const k of Object.keys(row.data)) expect(SUPERVISOR_FIELDS, `${label} supervisor field ${k}`).toContain(k)
-        for (const d of row.data.drivers_nonclinical ?? []) expect(CLINICAL_DRIVER_CHANNELS).not.toContain(d.channel)
-        for (const a of row.data.actions ?? []) expect(CONFIDENTIAL_ACTIONS).not.toContain(a)
+        for (const d of row.data.drivers_nonclinical ?? []) {
+          expect(CLINICAL_DRIVER_CHANNELS).not.toContain(d.channel)
+          // Wave 2d: numbers only in site drivers; no clinical, fasting or consent wording.
+          if (supervisorDriverRule(d.id) !== 'site') expect(d.text, `${label} driver ${d.id}`).not.toMatch(/\d/)
+          expect(supervisorSafeText(d.text), `${label} driver '${d.text}'`).toBe(true)
+        }
+        for (const a of row.data.actions ?? []) {
+          expect(CONFIDENTIAL_ACTIONS).not.toContain(a)
+          expect(DEVICE_ONLY_ACTIONS, `${label} device-only action ${a}`).not.toContain(a)
+        }
       }
     }
-    for (const a of board.model.alerts) expect(CLINICAL_TEXT_PATTERN.test(a.reason), `${label} alert reason '${a.reason}'`).toBe(false)
-    for (const n of board.model.notifications) expect(CLINICAL_TEXT_PATTERN.test(n.text), `${label} notification '${n.text}'`).toBe(false)
+    for (const a of [...board.model.alerts, ...board.model.suppressedAlerts]) {
+      expect(CLINICAL_TEXT_PATTERN.test(a.reason), `${label} alert reason '${a.reason}'`).toBe(false)
+      expect(supervisorSafeText(a.reason) && supervisorSafeText(a.reasonText), `${label} alert reason '${a.reason}' / '${a.reasonText}'`).toBe(true)
+      for (const x of a.actions) expect(DEVICE_ONLY_ACTIONS, `${label} alert action ${x}`).not.toContain(x)
+    }
+    for (const n of board.model.notifications) expect(supervisorSafeText(n.text), `${label} notification '${n.text}'`).toBe(true)
     for (const d of board.audit) expect(d).toMatchObject({ actorRole: 'supervisor', actorId: actor.actorId, purpose: 'safety_alerting' })
   }
   expect(selectSupervisorBoard(input, 'nobody:supervisor').model.crews).toEqual([])
@@ -434,5 +451,221 @@ describe('selectors — caseIndex escalation record (escalatedAt / acks)', () =>
     expect(caseStatus([legacy({ acks: [{ role: 'supervisor', t: at(1) }, { role: 'first_aider', t: at(2) }], ack: { role: 'supervisor', t: at(1) } })], 'W1').escalated).toBe(true)
     expect(caseStatus([legacy({ acks: [], escalatedAt: at(1) })], 'W1').escalated).toBe(true)
     expect(caseStatus([legacy({ acks: [], level: 'emergency' })], 'W1').escalated).toBe(true)
+  })
+})
+
+// ─────────────────────────────── Wave 2d: alert items, counts, localisation, disclosure timing ───────────────────────────────
+
+describe('selectors — alert items for consoles (wave 2d)', () => {
+  const T0 = Date.UTC(2025, 7, 1, 6, 0)
+  const at = (m: number): number => T0 + m * MINUTE_MS
+  const ROSTER = { W1: { crewId: 'C1', siteId: 'site', displayName: 'Worker 1', buddyId: 'W2', supervisorId: 'S1' } }
+  const WBGT: RiskDriver = { id: 'wbgt_over_limit', channel: 'environment', text: 'Effective WBGT 33.1 °C is 2.0 °C over the personal exposure limit for Rebar (412 W)', value: 33.1, unit: '°C', direction: 'raises', basis: 'NIOSH 2016' }
+  const PLANNED: RiskDriver = { id: 'work_rest_planned', channel: 'environment', text: 'Day plan: at most 30 min work per hour on this task, rest the remainder', value: 30, unit: 'min/h', direction: 'info', basis: 'planner' }
+  const mk = (t: number, level: RiskLevel, channels: Partial<Record<'environment' | 'projection' | 'symptoms', RiskLevel>>, drivers: RiskDriver[], actions: RiskAssessment['actions']): RiskAssessment => ({
+    workerId: 'W1',
+    t,
+    level,
+    channels: (['environment', 'regulation', 'projection', 'physiology', 'symptoms', 'hydration'] as const).map((c) => ({
+      channel: c,
+      level: (channels as Record<string, RiskLevel | undefined>)[c] ?? 'safe',
+      available: true,
+      drivers: drivers.filter((d) => d.channel === c),
+    })),
+    drivers,
+    actions,
+    workMinPerHour: level === 'high' ? 30 : 0,
+    minutesToLimit: null,
+    waterMlPerHour: 750,
+    confidence: 'high',
+    dataQuality: { env: 'forecast', physiology: 'absent', network: 'online', stale: false },
+  })
+  const raise = (a: RiskAssessment): Alert => processAssessments(createAlertEngine(), [a], { now: a.t, roster: ROSTER }).raised[0]
+
+  it('exposure alert: console actions only, basis and frame with labels, the reason phrase of its key (known answers, en and ar)', () => {
+    const a = raise(mk(at(0), 'high', { environment: 'high' }, [WBGT], ['shade_breaks', 'drink_water', 'rotate_task']))
+    const en = alertItem(a)
+    expect(en).toMatchObject({
+      basis: 'exposure',
+      basisLabel: 'Site condition',
+      frame: 'heat',
+      frameLabel: 'Site heat',
+      reason: 'Site heat: work/rest 30/30 in effect',
+      reasonKey: 'driver.wbgt_over_limit',
+      reasonText: driverText('en', 'wbgt_over_limit'),
+      suppressed: false,
+      actions: ['rotate_task', 'shade_breaks'],
+    })
+    expect(en.suppressedLabel).toBeUndefined()
+    const ar = alertItem(a, 'ar')
+    expect(ar).toMatchObject({ basisLabel: CONSOLE_PHRASES.ar.basis_exposure, frameLabel: CONSOLE_PHRASES.ar.frame_heat, reasonText: driverText('ar', 'wbgt_over_limit') })
+    expect(ar.frameLabel).toBe('حرارة الموقع')
+  })
+
+  it('individual alert: basis label without the channel; a pooled reason is localised; no frame', () => {
+    const hold: RiskDriver = { id: 'phs_resume_hold', channel: 'projection', text: 'Rest before going back to this task: about 25 min of rest needed', direction: 'raises', basis: 'ISO 7933' }
+    const a = raise(mk(at(0), 'stop', { projection: 'stop' }, [hold], ['rest_shade_now', 'cool_down']))
+    const hi = alertItem(a, 'hi')
+    expect(hi).toMatchObject({ basis: 'individual', basisLabel: CONSOLE_PHRASES.hi.basis_individual, reasonKey: 'reason.not_cleared_for_heat_work', reasonText: CONSOLE_PHRASES.hi.not_cleared })
+    expect(hi.frame).toBeUndefined()
+    expect(hi.actions).toEqual(['rest_shade_now', 'cool_down', 'rotate_task'])
+  })
+
+  it('older producers: a missing basis is individual; a site-rule prefix gives the frame; actions go through the console rule', () => {
+    const legacy = (o: Partial<Alert>): Alert => ({ id: 'A', t: at(0), siteId: 'site', workerId: 'W1', scope: 'worker', level: 'high', actions: ['shade_breaks', 'drink_water', 'symptom_checkin', 'occ_health_review'], reason: 'r', status: 'active', ...o })
+    expect(alertItem(legacy({}))).toMatchObject({ basis: 'individual', basisLabel: 'This worker', suppressed: false, actions: ['shade_breaks'], reasonText: 'r' })
+    expect(alertItem(legacy({ basis: 'exposure', reason: 'Site rule: Midday work ban in force (12:30–15:00)' }))).toMatchObject({ frame: 'rule', frameLabel: 'Site rule' })
+    expect(alertItem(legacy({ basis: 'exposure', reason: 'Something else' })).frame).toBeUndefined()
+  })
+
+  it('a reason that names a clinical or private factor is replaced on consoles', () => {
+    const legacy = (reason: string): Alert => ({ id: 'A', t: at(0), siteId: 'site', workerId: 'W1', scope: 'worker', level: 'high', actions: [], reason, status: 'active' })
+    for (const r of ['Dizziness reported', 'Fasting: no more hot work this shift', 'Wearable consent off']) {
+      expect(alertItem(legacy(r)).reason).toBe(CONSOLE_PHRASES.en.reason_withheld)
+      expect(alertItem(legacy(r), 'ur').reasonText).toBe(CONSOLE_PHRASES.en.reason_withheld) // no key: the filtered English reason
+    }
+  })
+
+  it('a suppressed alert is flagged with a pooled label (never its cause) and is not a case to acknowledge', () => {
+    const a = raise(mk(at(0), 'high', { environment: 'high' }, [WBGT, PLANNED], ['shade_breaks', 'drink_water', 'rotate_task']))
+    expect(a.suppression).toBeDefined()
+    const item = alertItem(a, 'bn')
+    expect(item).toMatchObject({ suppressed: true, suppressedLabel: CONSOLE_PHRASES.bn.suppressed })
+    expect(JSON.stringify(item)).not.toMatch(/plan_in_force|monitor|suppression/)
+    expect(caseIndex([a]).get('W1')).toBeUndefined()
+    expect(caseStatus([a], 'W1')).toMatchObject({ alert: null, ackStatus: 'none', escalated: false })
+  })
+
+  it('alertCounts: per basis, suppressed apart (known answer)', () => {
+    const exposure = alertItem(raise(mk(at(0), 'high', { environment: 'high' }, [WBGT], ['shade_breaks'])))
+    const individual = alertItem(raise(mk(at(0), 'high', { projection: 'high' }, [{ id: 'phs_minutes_to_limit', channel: 'projection', text: 'about 20 min', direction: 'raises', basis: 'b' }], ['shade_breaks'])))
+    const suppressed = alertItem(raise(mk(at(0), 'high', { environment: 'high' }, [WBGT, PLANNED], ['shade_breaks'])))
+    expect(alertCounts([exposure, individual, suppressed, exposure])).toEqual({ exposure: 2, individual: 1, suppressed: 1 })
+    expect(alertCounts([])).toEqual({ exposure: 0, individual: 0, suppressed: 0 })
+  })
+
+  it('every console phrase exists in every language (English fallback never needed) and the selector falls back for an unknown language', () => {
+    for (const lang of Object.keys(CONSOLE_PHRASES) as (keyof typeof CONSOLE_PHRASES)[]) {
+      for (const id of CONSOLE_PHRASE_IDS) expect(CONSOLE_PHRASES[lang][id].trim().length, `${lang}.${id}`).toBeGreaterThan(0)
+    }
+    expect(consolePhrase('xx' as never, 'frame_rule')).toBe('Site rule')
+    expect(locationText('ar', 'shade')).toBe(CONSOLE_PHRASES.ar.location_shade)
+  })
+})
+
+describe('selectors — supervisor board counts, suppressed list and console language (wave 2d)', () => {
+  const SUP = 'musaffah-demo:supervisor'
+
+  it('suppressed alerts are listed apart and counted separately; counts per basis on the board and per crew; labels in the console language', async () => {
+    const { sim, gov } = await world('peak-day')
+    await sim.getState().jumpTo('10:00')
+    const base = inputOf(sim, gov)
+    const crew = base.crews.find((c) => supervisedCrewIds(base, SUP).includes(c.id))!
+    const [wa, wb, wc] = crew.workerIds
+    const t = base.view.t
+    const roster = Object.fromEntries([wa, wb, wc].map((id) => [id, { crewId: crew.id, siteId: base.view.site.id, displayName: id, supervisorId: SUP }]))
+    const env: RiskDriver = { id: 'wbgt_over_limit', channel: 'environment', text: 'Effective WBGT 33.1 °C is over the limit', direction: 'raises', basis: 'b' }
+    const planned: RiskDriver = { id: 'work_rest_planned', channel: 'environment', text: 'Day plan: at most 30 min work per hour', direction: 'info', basis: 'b' }
+    const proj: RiskDriver = { id: 'phs_minutes_to_limit', channel: 'projection', text: 'about 20 min', direction: 'raises', basis: 'b' }
+    const mk = (workerId: string, channels: Partial<Record<'environment' | 'projection', RiskLevel>>, drivers: RiskDriver[]): RiskAssessment => ({
+      workerId,
+      t,
+      level: 'high',
+      channels: (['environment', 'regulation', 'projection', 'physiology', 'symptoms', 'hydration'] as const).map((c) => ({
+        channel: c,
+        level: (channels as Record<string, RiskLevel | undefined>)[c] ?? 'safe',
+        available: true,
+        drivers: drivers.filter((d) => d.channel === c),
+      })),
+      drivers,
+      actions: ['shade_breaks', 'drink_water', 'rotate_task'],
+      workMinPerHour: 30,
+      minutesToLimit: null,
+      waterMlPerHour: 750,
+      confidence: 'high',
+      dataQuality: { env: 'forecast', physiology: 'absent', network: 'online', stale: false },
+    })
+    const r = processAssessments(createAlertEngine({ idPrefix: 'T-' }), [mk(wa, { environment: 'high' }, [env, planned]), mk(wb, { environment: 'high' }, [env]), mk(wc, { projection: 'high' }, [proj])], { now: t, roster })
+    const input: SelectorInput = { ...base, view: { ...base.view, alerts: r.raised }, lang: 'ar' }
+    const board = selectSupervisorBoard(input, SUP).model
+    const suppressedId = r.raised.find((a) => a.workerId === wa)!.id
+    expect(board.alerts.map((a) => a.id)).not.toContain(suppressedId)
+    expect(board.suppressedAlerts.map((a) => a.id)).toEqual([suppressedId])
+    expect(board.alertCounts).toEqual({ exposure: 1, individual: 1, suppressed: 1 })
+    const crewBoard = board.crews.find((c) => c.crew.id === crew.id)!
+    expect(crewBoard.alertCounts).toEqual({ exposure: 1, individual: 1, suppressed: 1 })
+    // Nobody is asked to acknowledge a suppressed alert: the row shows no open case.
+    const row = crewBoard.rows.find((x) => x.workerId === wa)!
+    expect(row.alertId).toBeNull()
+    expect(row.data.ackStatus).toBe('none')
+    // Labels in the console language.
+    expect(board.alerts.find((a) => a.basis === 'exposure')?.frameLabel).toBe(CONSOLE_PHRASES.ar.frame_heat)
+    expect(board.suppressedAlerts[0].suppressedLabel).toBe(CONSOLE_PHRASES.ar.suppressed)
+    expect(JSON.stringify(board.suppressedAlerts)).not.toMatch(/plan_in_force|monitor/)
+  })
+
+  it('first-aider location words and the no-data notice follow the console language', async () => {
+    const { sim, gov } = await world('peak-day')
+    await sim.getState().jumpTo('10:00')
+    const input = { ...inputOf(sim, gov), lang: 'ar' as const }
+    const wv = input.view.workers[0]
+    expect(caseLocation(input.view, wv, 'ar').label).toContain(CONSOLE_PHRASES.ar[wv.location === 'sun' ? 'location_sun' : wv.location === 'shade' ? 'location_shade' : 'location_indoor_cool'])
+    expect(caseLocation(input.view, { task: null, location: 'shade' }, 'ar').label).toContain(CONSOLE_PHRASES.ar.no_task)
+    expect(caseLocation(input.view, { task: null, location: 'shade' }).label).toContain('not on a task · in shade')
+    const off = await world('peak-day', { policy: 'ban_only' })
+    off.sim.getState().step(30)
+    const board = selectSupervisorBoard({ ...inputOf(off.sim, off.gov), lang: 'ar' }, SUP).model
+    expect(board.crews[0].rows[0]).toMatchObject({ decision: 'no_data', reason: CONSOLE_PHRASES.ar.no_data })
+  })
+})
+
+describe('selectors — escalatedAt disclosure timing (vital interest, wave 2d)', () => {
+  const RAMESH = 'W-D2F6' // all consents on
+  it('a symptom-driven stop releases the reported symptoms to the paged first aider at raise; an exposure stop only after its acknowledgement timeout', async () => {
+    const { sim, gov } = await world('peak-day')
+    await sim.getState().jumpTo('10:00')
+    const base = inputOf(sim, gov)
+    const t = base.view.t
+    const roster = { [RAMESH]: { crewId: base.roster[RAMESH].crewId, siteId: base.view.site.id, displayName: 'Ramesh', supervisorId: base.roster[RAMESH].supervisorId } }
+    const device = { ...base.device, [RAMESH]: { ...(base.device[RAMESH] ?? emptyDeviceRecord()), checkins: [{ t, workerId: RAMESH, by: 'self' as const, symptoms: ['dizziness' as SymptomId] }] } }
+    const stop = (channel: 'symptoms' | 'environment'): RiskAssessment => ({
+      workerId: RAMESH,
+      t,
+      level: 'stop',
+      channels: (['environment', 'regulation', 'projection', 'physiology', 'symptoms', 'hydration'] as const).map((c) => ({ channel: c, level: c === channel ? 'stop' : 'safe', available: true, drivers: [] })),
+      drivers: [],
+      actions: ['stop_work', 'rest_shade_now', 'cool_down', 'first_aider_check'],
+      workMinPerHour: 0,
+      minutesToLimit: null,
+      waterMlPerHour: 750,
+      confidence: 'high',
+      dataQuality: { env: 'forecast', physiology: 'absent', network: 'online', stale: false },
+    })
+    // The worker's own device shows the stop too (the first aider's view requires an active stop or emergency case).
+    const workers = base.view.workers.map((w) => (w.profile.id === RAMESH && w.assessment ? { ...w, assessment: { ...w.assessment, level: 'stop' as const } } : w))
+    const firstAid = (alerts: Alert[], now: number) =>
+      selectFirstAiderCases({ ...base, device, view: { ...base.view, t: now, alerts, workers } }, STAFF.first_aider).model.cases.find((c) => c.workerId === RAMESH)
+
+    // Symptom-driven stop: the first aider is paged at raise, so the case is escalated from that minute.
+    const clinical = processAssessments(createAlertEngine(), [stop('symptoms')], { now: t, roster })
+    expect(clinical.raised[0].escalatedAt).toBe(t)
+    expect(clinical.notifications.some((n) => n.to.role === 'first_aider')).toBe(true)
+    const atRaise = firstAid(clinical.raised, t)!
+    expect(atRaise.escalated).toBe(true)
+    expect(atRaise.data.symptoms).toEqual(['dizziness'])
+
+    // Exposure stop: an active case for the first aider (name, level, actions, location) but no symptoms until the
+    // stop-acknowledgement timeout escalates it.
+    const exposure = processAssessments(createAlertEngine(), [stop('environment')], { now: t, roster })
+    expect(exposure.raised[0].escalatedAt).toBeUndefined()
+    const before = firstAid(exposure.raised, t)!
+    expect(before.escalated).toBe(false)
+    expect(before.data.symptoms).toBeUndefined()
+    expect(before.withheld).toContain('symptoms')
+    const timedOut = tick(exposure.state, t + STOP_ACK_TIMEOUT_MIN * MINUTE_MS)
+    expect(timedOut.updated[0].escalatedAt).toBe(t + STOP_ACK_TIMEOUT_MIN * MINUTE_MS)
+    const after = firstAid(timedOut.updated, t + STOP_ACK_TIMEOUT_MIN * MINUTE_MS)!
+    expect(after.escalated).toBe(true)
+    expect(after.data.symptoms).toEqual(['dizziness'])
   })
 })

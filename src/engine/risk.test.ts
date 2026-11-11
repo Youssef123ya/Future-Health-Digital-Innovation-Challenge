@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import {
   ACTION_PRIORITY,
@@ -18,7 +19,7 @@ import {
   sortDrivers,
   stepWorkerEngine,
 } from './risk'
-import type { WorkerContext, WorkerEngineOptions, WorkerEngineState, WorkerInputs, WorkerLocation, WorkerStepDetail, WorkerStepResult } from './risk'
+import type { MonitoringFallbackReason, PlanBasis, WorkerContext, WorkerEngineOptions, WorkerEngineState, WorkerInputs, WorkerLocation, WorkerStepDetail, WorkerStepResult } from './risk'
 import { computeSiteHeat } from './indices'
 import type { SiteHeat } from './indices'
 import { CLOTHING, allowedWorkFraction, clothingAdjustmentC, duBoisAreaM2, taskMetabolicW, wbgtEffectiveC } from './limits'
@@ -228,11 +229,18 @@ describe('environment channel', () => {
     expect(stoppedAt).toBe(192)
     expect(last!.a.actions).toEqual(expect.arrayContaining(['acclimatization_plan', 'rotate_task']))
     expect(ids(last!.a)).toContain('acclimatization_budget_exhausted')
-    // Resting is not hot work; a cooled room does not count either.
+    // Resting is not hot work (no minutes counted); a cooled room does not count either. Wave 2d: the task hold keeps
+    // the resting worker at stop for the hot task (no release this shift: infeasible, rotate_task), and a non-hot
+    // assignment (the same task in a cooled room) releases it.
     const rest = stepWorkerEngine(state, ctx(NEW_ARRIVAL, start + 201 * MIN, null, 'shade', mild))
-    expect(ch(rest.assessment, 'environment').level).not.toBe('stop')
+    expect(rest.detail.hotWorkMinToday).toBe(last!.d.hotWorkMinToday)
+    expect(ch(rest.assessment, 'environment').level).toBe('stop')
+    expect(rest.detail.resume).toMatchObject({ held: true, heldBy: ['environment'], infeasibleNow: true, nextCheckT: null })
+    expect(rest.assessment.actions).toEqual(expect.arrayContaining(['rest_shade_now', 'acclimatization_plan', 'rotate_task']))
     const indoor = stepWorkerEngine(rest.state, ctx(NEW_ARRIVAL, start + 202 * MIN, INSPECTION, 'indoor_cool', mild))
     expect(indoor.detail.hotWorkMinToday).toBe(rest.detail.hotWorkMinToday)
+    expect(ch(indoor.assessment, 'environment').level).not.toBe('stop')
+    expect(indoor.state.taskHold).toBeNull()
   })
 })
 
@@ -1047,7 +1055,7 @@ describe('water-loss limit with logged drinking (RISK_THRESHOLDS.hydrationCredit
     expect(noConsent.map((s) => [s.a.level, s.a.minutesToLimit])).toEqual(run.map((s) => [s.a.level, s.a.minutesToLimit]))
   })
 
-  it('logged drinking: threshold max(5 %, 3 % + credit), net loss sweat − max(credit, 0.4 × sweat), and a later limit', () => {
+  it('logged drinking: threshold min(7.5 %, max(5 %, 3 % + credit)), net loss sweat − max(credit, 0.4 × sweat), and a later limit', () => {
     const logged = loop(heat, MODERATE_SUN, 300, { comply: false, inputs: drinks(15, 250) })
     const iso = loop(heat, MODERATE_SUN, 300, { comply: false })
     for (const m of [60, 120, 180, 240, 300]) {
@@ -1055,7 +1063,7 @@ describe('water-loss limit with logged drinking (RISK_THRESHOLDS.hydrationCredit
       const C = creditedIntakeL(s.s.intakes, T0, T0 + m * MIN, REF.id)
       const w = s.d.water as NonNullable<WorkerStepDetail['water']>
       expect(w.creditedIntakeL).toBeCloseTo(C, 12)
-      expect(w.thresholdL).toBeCloseTo(Math.max(3.75, 2.25 + C), 9)
+      expect(w.thresholdL).toBeCloseTo(Math.min(5.625, Math.max(3.75, 2.25 + C)), 9)
       expect(w.netLossPctBM).toBeCloseTo((100 * (w.sweatLossL - Math.max(C, 0.4 * w.sweatLossL))) / 75, 9)
       expect(w.restricted).toBe(false)
       expect(s.a.minutesToLimit ?? Infinity).toBeGreaterThanOrEqual(iso[m].a.minutesToLimit ?? Infinity)
@@ -1080,12 +1088,17 @@ describe('water-loss limit with logged drinking (RISK_THRESHOLDS.hydrationCredit
     expect(b[100].d.water?.restricted).toBe(true)
     expect(b[100].d.water?.thresholdL).toBeCloseTo(2.25, 12)
     expect(ids(b[100].a)).not.toContain('phs_water_credit')
-    // A reached drink-restricted limit keeps the "no more heat work this shift" wording.
+    // A reached drink-restricted limit: the projection text is the neutral one (wave 2d privacy fix: identical for
+    // fasting and other workers); "no more heat work this shift" moved to the worker-only hydration channel.
     const reached = a.find((s) => s.d.phsRecovery !== null) as LoopStep
     expect(reached.d.phsRecovery?.blockedBy).toBe('dehydration')
     const txt = reached.a.drivers.find((d) => d.id === 'phs_recovery_review_required')?.text ?? ''
-    expect(txt).toMatch(/no more heat work this shift/)
-    expect(txt).not.toMatch(/drink and rest/)
+    expect(txt).toMatch(/^Heat-strain limit reached: work resumes only after /)
+    expect(txt).toMatch(/the water-loss limit is not yet restored/)
+    expect(txt).not.toMatch(/no more heat work this shift|drink|fasting/i)
+    const own = reached.a.drivers.find((d) => d.id === 'phs_no_drink_no_restart')
+    expect(own?.channel).toBe('hydration')
+    expect(own?.text).toMatch(/no more heat work this shift/)
   })
 
   it('a reached water-loss limit is recoverable by drinking: blocked while net > 2 % of body mass, then the reviewed restart', () => {
@@ -1116,12 +1129,16 @@ describe('water-loss limit with logged drinking (RISK_THRESHOLDS.hydrationCredit
     const blocked = run.filter((s) => s.d.phsRecovery?.blockedBy === 'dehydration')
     expect(blocked.length).toBeGreaterThan(0)
     for (const s of blocked) {
-      expect(s.d.water!.netLossPctBM).toBeGreaterThan(2)
+      // Net > 2 % of body mass — or a drink logged in this very step brought it lower: that drink counts from the next
+      // step (wave 2d: a logged drink never lifts the block in the step it is logged).
+      if (s.d.water!.netLossPctBM <= 2) expect(s.m % 15).toBe(0)
+      else expect(s.d.water!.netLossPctBM).toBeGreaterThan(2)
       expect(s.d.phsRecovery?.restartable).toBe(false)
       const txt = s.a.drivers.find((d) => d.id === 'phs_recovery_review_required')?.text ?? ''
-      expect(txt).toMatch(/drink and rest: the water-loss limit is not yet restored/)
-      expect(txt).not.toMatch(/no more heat work this shift/)
+      expect(txt).toMatch(/the water-loss limit is not yet restored/)
+      expect(txt).not.toMatch(/no more heat work this shift|drink/i)
       expect(s.a.drivers.find((d) => d.id === 'phs_drink_to_restart')?.channel).toBe('hydration')
+      expect(ids(s.a)).not.toContain('phs_no_drink_no_restart')
       expect(s.a.actions).toContain('drink_water')
     }
     const firstOk = run.find((s) => s.m > limitM && s.d.phsRecovery !== null && s.d.phsRecovery.blockedBy === null) as LoopStep
@@ -1300,5 +1317,605 @@ describe('performance memo (cooled-cabin TWL)', () => {
     }
     expect(cooledCabinTwlWm2(undefined)).toBe(exact(101.325))
     expect(cooledCabinTwlWm2(Number.NaN)).toBe(exact(101.325))
+  })
+})
+
+// ─────────────────────────────── Wave 2d ───────────────────────────────
+
+const MON_PROFILE: WorkerProfile = { ...REF, id: 'W-MON', consent: { ...REF.consent, wearable: true }, hasWearable: true }
+const NEW_REF: WorkerProfile = { ...REF, id: 'W-NEW', daysOnSite: 2, experiencedInHeat: false }
+const VB_SUN: Task = { id: 'vb', name: 'Tank cleaning', workClass: 'light', inSun: true, clothing: 'vapour_barrier', durationMin: 600, flexible: true }
+const T10 = epochFromLocal('2025-11-26T10:00')
+
+interface HStep {
+  m: number
+  working: boolean
+  a: RiskAssessment
+  d: WorkerStepDetail
+  s: WorkerEngineState
+}
+interface HoldRun {
+  profile?: WorkerProfile
+  task: Task
+  taskAt?: (m: number) => Task
+  minutes: number
+  t0: number
+  heat: (m: number) => SiteHeat
+  /** Where the worker rests (default: the air-conditioned cabin). */
+  restLoc?: WorkerLocation
+  restArea?: WorkerContext['restArea']
+  /** true: rest at stop and go back below stop (default); false: keep working. */
+  comply?: boolean
+  activity?: (m: number, prev: HStep | null) => 'work' | 'rest' | null
+  extra?: (m: number) => Partial<WorkerContext>
+  inputs?: (m: number) => WorkerInputs
+}
+/** One worker stepped minute by minute from t0 with a per-minute site heat (the wave-2d scenarios). */
+function holdRun(o: HoldRun): HStep[] {
+  const profile = o.profile ?? REF
+  let state = createWorkerEngine(profile, o.t0)
+  let working = true
+  let prev: HStep | null = null
+  const out: HStep[] = []
+  for (let m = 0; m <= o.minutes; m++) {
+    const forced: 'work' | 'rest' | null = o.activity?.(m, prev) ?? null
+    if (forced !== null) working = forced === 'work'
+    const task = working ? (o.taskAt?.(m) ?? o.task) : null
+    const c: WorkerContext = {
+      now: o.t0 + m * MIN,
+      profile,
+      task,
+      location: task !== null ? (task.inSun ? 'sun' : 'shade') : (o.restLoc ?? 'indoor_cool'),
+      heat: o.heat(m),
+      network: 'online',
+      restArea: o.restArea ?? 'cooled_cabin',
+      ...(o.extra?.(m) ?? {}),
+    }
+    const r = stepWorkerEngine(state, c, o.inputs?.(m) ?? {})
+    state = r.state
+    prev = { m, working, a: r.assessment, d: r.detail, s: r.state }
+    out.push(prev)
+    if (o.comply !== false && forced === null) {
+      if (working && isStop(r.assessment.level)) working = false
+      else if (!working && !isStop(r.assessment.level)) working = true
+    }
+  }
+  return out
+}
+const nonEnvChannels = (a: RiskAssessment) => a.channels.filter((c) => c.channel !== 'environment')
+
+describe('monitored mode in the environment channel (RISK_THRESHOLDS.monitoring)', () => {
+  // Hot, still air: the WBGT tables say stop (f < 0.25) for moderate work in the sun with a shade rest area, while the
+  // ISO 7933 projection stays above 15 min for 44 min from the start (cloth coveralls: verified, applicable).
+  const heat = heatFrom({ t: T10, taC: 36, rhPct: 50, ghiWm2: 500, wind10Ms: 0.5 })
+  const HR = (): WorkerInputs => ({ physioMinute: CLEAN_HR })
+  const run = (basis: PlanBasis | undefined, over: Partial<HoldRun> = {}) =>
+    holdRun({ profile: MON_PROFILE, task: MODERATE_SUN, minutes: 44, t0: T10, heat: () => heat, restArea: 'shade', comply: false, inputs: HR, extra: () => (basis ? { planBasis: basis } : {}), ...over })
+  const ctxAtStep = (m: number, over: Partial<WorkerContext> = {}): WorkerContext => ({
+    now: T10 + m * MIN,
+    profile: MON_PROFILE,
+    task: MODERATE_SUN,
+    location: 'sun',
+    heat,
+    network: 'online',
+    restArea: 'shade',
+    planBasis: 'monitored',
+    ...over,
+  })
+
+  it('constants carry their basis: at least 4 of the last 5 minutes SQI-valid [ENG]', () => {
+    const M = RISK_THRESHOLDS.monitoring
+    expect([M.minValidInWindow, M.recentWindowMin]).toEqual([4, 5])
+    expect(M.basis).toMatch(/ISO 7243:2017/)
+    expect(M.basis).toMatch(/ACGIH/)
+    expect(M.basis).toMatch(/NIOSH 2016/)
+    expect(M.basis).toMatch(/\[ENG\]/)
+    for (const id of ['wbgt_screen_monitored', 'monitoring_fallback_tables']) expect(RISK_DRIVER_IDS).toContain(id)
+  })
+
+  it('valid monitoring caps the environment level at caution where the tables say stop; the table cycle becomes an info guide', () => {
+    const mon = run('monitored')
+    const tab = run('tables')
+    for (const s of tab) expect(ch(s.a, 'environment').level).toBe('stop')
+    const m = 35
+    expect(mon[m].d.environment).toEqual({ basis: 'monitored', monitored: true, enforced: false, workMinPerHour: tab[m].d.environment.workMinPerHour, fallbackReason: null })
+    expect(tab[m].d.environment).toMatchObject({ basis: 'tables', monitored: false, enforced: true, fallbackReason: null })
+    expect(tab[m].d.environment.workMinPerHour as number).toBeLessThan(15)
+    expect(ch(mon[m].a, 'environment').level).toBe('caution')
+    const screen = mon[m].a.drivers.find((d) => d.id === 'wbgt_screen_monitored')
+    expect(screen).toMatchObject({ channel: 'environment', direction: 'raises' })
+    expect(screen?.text).toBe('WBGT is above the table limit: your own heat-strain projection (ISO 7933) and wearable monitoring are in use')
+    expect(screen?.text).not.toMatch(CLINICAL_TEXT_PATTERN)
+    // The table result is still computed and shown: the over-limit driver is identical, the cycle is an info guide.
+    expect(mon[m].a.drivers.find((d) => d.id === 'wbgt_over_limit')).toEqual(tab[m].a.drivers.find((d) => d.id === 'wbgt_over_limit'))
+    const guide = mon[m].a.drivers.find((d) => d.id === 'work_rest_cycle')
+    const cycle = tab[m].a.drivers.find((d) => d.id === 'work_rest_cycle')
+    expect(guide?.direction).toBe('info')
+    expect(cycle?.direction).toBe('raises')
+    expect(guide?.value).toBe(cycle?.value)
+    expect(guide?.text).toMatch(/^Work\/rest guide: about \d+ min work per hour/)
+    // The table cycle no longer limits work minutes (the projection and physiology channels enforce).
+    expect(mon[41].a.level).toBe('high')
+    expect(mon[41].a.workMinPerHour).toBeGreaterThan(tab[41].a.workMinPerHour)
+    // No other channel changes.
+    for (let k = 0; k < mon.length; k++) expect(nonEnvChannels(mon[k].a)).toEqual(nonEnvChannels(tab[k].a))
+  })
+
+  it('before wearable data accrue at shift start monitoring is not valid (data): the table level applies, without a fallback driver', () => {
+    const mon = run('monitored', { minutes: 30 })
+    const tab = run('tables', { minutes: 30 })
+    for (let k = 0; k < 30; k++) {
+      expect(mon[k].d.environment).toMatchObject({ basis: 'monitored', monitored: false, enforced: true, fallbackReason: 'data' })
+      expect(ch(mon[k].a, 'environment')).toEqual(ch(tab[k].a, 'environment'))
+    }
+    // Valid from the end of the 30-min physiology warm-up (and ≥ 4 of the last 5 minutes valid).
+    expect(mon[30].d.environment.monitored).toBe(true)
+  })
+
+  it('each failing condition restores the table level in the same step, with a worker-device fallback driver naming the reason', () => {
+    const mon = run('monitored', { minutes: 35 })
+    const at35 = mon[35]
+    expect(at35.d.environment.monitored).toBe(true)
+    const cases: Array<{ name: string; over: Partial<WorkerContext>; reason: MonitoringFallbackReason }> = [
+      { name: 'consent revoked', over: { profile: { ...MON_PROFILE, consent: { ...MON_PROFILE.consent, wearable: false } } }, reason: 'consent' },
+      { name: 'no wearable', over: { profile: { ...MON_PROFILE, hasWearable: false } }, reason: 'consent' },
+      { name: 'not acclimatised', over: { profile: { ...MON_PROFILE, daysOnSite: 3, experiencedInHeat: false } }, reason: 'status' },
+      { name: 'stricter personal mode', over: { profile: { ...MON_PROFILE, riskFlags: ['prior_heat_illness'] } }, reason: 'status' },
+      { name: 'unverified clothing values', over: { task: { ...MODERATE_SUN, clothing: 'fr_coveralls' } }, reason: 'model' },
+      { name: 'vapour barrier', over: { task: { ...MODERATE_SUN, clothing: 'vapour_barrier' } }, reason: 'model' },
+    ]
+    for (const c of cases) {
+      const lapsed = stepWorkerEngine(at35.s, ctxAtStep(36, c.over), HR())
+      const tables = stepWorkerEngine(at35.s, ctxAtStep(36, { ...c.over, planBasis: 'tables' }), HR())
+      expect(lapsed.detail.environment, c.name).toMatchObject({ basis: 'monitored', monitored: false, enforced: true, fallbackReason: c.reason })
+      const envL = ch(lapsed.assessment, 'environment')
+      const envT = ch(tables.assessment, 'environment')
+      expect(envL.level, c.name).toBe(envT.level)
+      expect(envL.level, c.name).toBe('stop')
+      const fb = envL.drivers.find((d) => d.id === 'monitoring_fallback_tables')
+      expect(fb, c.name).toMatchObject({ channel: 'environment', direction: 'raises' })
+      expect(fb?.text, c.name).toMatch(/the table work\/rest limits apply again$/)
+      // Apart from the fallback driver, the environment channel is the tables one.
+      expect(envL.drivers.filter((d) => d.id !== 'monitoring_fallback_tables'), c.name).toEqual(envT.drivers)
+      expect(lapsed.assessment.workMinPerHour, c.name).toBe(tables.assessment.workMinPerHour)
+    }
+    // planBasis switched back to tables: the tables apply, with no fallback driver (nothing lapsed).
+    const back = stepWorkerEngine(at35.s, ctxAtStep(36, { planBasis: 'tables' }), HR())
+    expect(back.detail.environment).toMatchObject({ basis: 'tables', monitored: false, enforced: true, fallbackReason: null })
+    expect(ids(back.assessment)).not.toContain('monitoring_fallback_tables')
+  })
+
+  it('a mid-shift data dropout falls back within the 4-of-5 window and recovers when data return', () => {
+    // No physiology minute from minute 36 to 39: at 36 the window (31, 36] still has 4 valid minutes; at 37 only 3.
+    const mon = run('monitored', { minutes: 44, inputs: (m) => (m >= 36 && m < 40 ? {} : HR()) })
+    expect(mon[36].d.environment.monitored).toBe(true)
+    expect(mon[37].d.environment).toMatchObject({ monitored: false, enforced: true, fallbackReason: 'data' })
+    expect(ch(mon[37].a, 'environment').level).toBe('stop')
+    expect(mon[37].a.drivers.find((d) => d.id === 'monitoring_fallback_tables')?.text).toBe(
+      'Wearable data is not valid (too few good minutes): the table work/rest limits apply again',
+    )
+    // Data again from minute 40: valid again at 43 (40–43 in (38, 43]).
+    expect(mon[42].d.environment.monitored).toBe(false)
+    expect(mon[43].d.environment.monitored).toBe(true)
+    // SQI-rejected minutes count as missing.
+    const bad = run('monitored', { minutes: 37, inputs: (m) => ({ physioMinute: m >= 35 ? { ...CLEAN_HR, minuteValid: false } : CLEAN_HR }) })
+    expect(bad[35].d.environment.monitored).toBe(true)
+    expect(bad[36].d.environment.fallbackReason).toBe('data')
+  })
+
+  it('a conservative or unacclimatised worker is never monitored, nor vapour-barrier work: identical to the tables', () => {
+    const variants: Array<{ name: string; over: Partial<HoldRun>; reason: MonitoringFallbackReason }> = [
+      { name: 'unacclimatised', over: { profile: { ...MON_PROFILE, daysOnSite: 2, experiencedInHeat: false } }, reason: 'status' },
+      { name: 'conservative', over: { profile: { ...MON_PROFILE, riskFlags: ['prior_heat_illness'] } }, reason: 'status' },
+      { name: 'vapour barrier', over: { task: { ...MODERATE_SUN, clothing: 'vapour_barrier' } }, reason: 'model' },
+    ]
+    for (const v of variants) {
+      const mon = run('monitored', { ...v.over, minutes: 40 })
+      const tab = run('tables', { ...v.over, minutes: 40 })
+      for (let k = 0; k < mon.length; k++) {
+        expect(mon[k].d.environment.monitored, v.name).toBe(false)
+        if (k >= 30) expect(mon[k].d.environment.fallbackReason, v.name).toBe(v.reason)
+        expect(mon[k].a.channels, v.name).toEqual(tab[k].a.channels)
+        expect(mon[k].a.level, v.name).toBe(tab[k].a.level)
+      }
+    }
+  })
+})
+
+describe('planBasis tables or absent: bit-identical to the engine before wave 2d (recorded fixture)', () => {
+  it('reproduces fixtures/risk-tables-baseline.json: sha256 of every step assessment, demo crew, two days', () => {
+    const fix = JSON.parse(readFileSync(new URL('../../fixtures/risk-tables-baseline.json', import.meta.url), 'utf8')) as {
+      runs: Array<{ dayId: string; from: string; to: string; workerId: string; taskId: string; steps: number; sha256: string }>
+    }
+    expect(fix.runs.length).toBe(14)
+    for (const basis of [undefined, 'tables'] as const) {
+      for (const r of fix.runs) {
+        const day = DEMO.find((d) => d.id === r.dayId) as DemoDay
+        const w = W(r.workerId)
+        const task = crew.tasks.find((t) => t.id === r.taskId) as Task
+        const start = local(day, r.from)
+        const end = local(day, r.to)
+        let st = createWorkerEngine(w, start)
+        const h = createHash('sha256')
+        let n = 0
+        for (let now = start; now <= end; now += MIN) {
+          const { env, heat } = siteAt(day, now)
+          const c: WorkerContext = { now, profile: w, task, location: task.inSun ? 'sun' : 'shade', heat, env, network: 'online', fastingNow: false, restArea: SITE.restArea, ...(basis ? { planBasis: basis } : {}) }
+          const res = stepWorkerEngine(st, c, w.hasWearable ? { physioMinute: CLEAN_HR } : {})
+          st = res.state
+          h.update(JSON.stringify(res.assessment))
+          n++
+        }
+        expect(n).toBe(r.steps)
+        expect(h.digest('hex'), `${basis ?? 'absent'} ${r.dayId} ${r.workerId}`).toBe(r.sha256)
+      }
+    }
+  })
+})
+
+describe('task hold: engine-owned resume for regulation and environment stops (RISK_THRESHOLDS.taskHold)', () => {
+  it('constants carry their basis', () => {
+    const TH = RISK_THRESHOLDS.taskHold
+    expect(TH.checkEveryStep).toBe(true)
+    expect(TH.basis).toMatch(/ADOSH/)
+    expect(TH.basis).toMatch(/ISA-18\.2/)
+    for (const id of ['resume_hold_regulation', 'resume_hold_environment']) expect(RISK_DRIVER_IDS).toContain(id)
+  })
+
+  it('ADOSH zone exclusion: held at stop through rest until the zone allows the task, then released at once; no flapping', () => {
+    // TWL ≈ 136 W/m² (unacclimatised workers excluded) until minute 40, then a breezier, drier hour.
+    const A = heatFrom({ t: T10, taC: 32, rhPct: 50, ghiWm2: 500, wind10Ms: 0.5 })
+    const B = heatFrom({ t: T10, taC: 30, rhPct: 35, ghiWm2: 500, wind10Ms: 2 })
+    const run = holdRun({ profile: NEW_REF, task: MODERATE_SUN, minutes: 70, t0: T10, heat: (m) => (m < 40 ? A : B) })
+    expect(ch(run[0].a, 'regulation').level).toBe('stop')
+    expect(ids(run[0].a)).toContain('unacclimatized_excluded')
+    expect(run[0].s.taskHold).toMatchObject({ taskId: MODERATE_SUN.id, heldBy: ['regulation'], causes: ['heat_zone'] })
+    // Resting in the cabin: the live regulation level is safe there, but the hold keeps stop with its own driver.
+    for (const s of run.slice(1, 40)) {
+      expect(s.working).toBe(false)
+      expect(s.a.level).toBe('stop')
+      expect(ch(s.a, 'regulation').level).toBe('stop')
+      expect(s.d.resume).toMatchObject({ held: true, heldBy: ['regulation'], taskId: MODERATE_SUN.id, infeasibleNow: false, nextCheckT: s.a.t + MIN })
+      const d = s.a.drivers.find((x) => x.id === 'resume_hold_regulation')
+      expect(d?.text).toBe('Rest before going back to this task: the heat-zone rules do not allow it now')
+      expect(d?.text).not.toMatch(CLINICAL_TEXT_PATTERN)
+      expect(s.a.actions).toEqual(expect.arrayContaining(['rest_shade_now', 'rotate_task']))
+    }
+    // The zone eases at minute 40: released in that step without the dwell (the hold was the hysteresis).
+    expect(run[40].d.resume).toMatchObject({ held: false, heldBy: [], ready: true, taskId: MODERATE_SUN.id, estRestMin: 0 })
+    expect(isStop(run[40].a.level)).toBe(false)
+    expect(run[40].s.taskHold).toBeNull()
+    // No flapping at constant conditions: working for the rest of the run (≥ minBoutMin minutes) without a stop.
+    const after = run.slice(41)
+    expect(after.length).toBeGreaterThanOrEqual(RISK_THRESHOLDS.resume.minBoutMin)
+    expect(after.every((s) => s.working && !isStop(s.a.level))).toBe(true)
+  })
+
+  it('environment table stop: held until the task to resume is below the table stop at the current conditions', () => {
+    const A = heatFrom({ t: T10, taC: 36, rhPct: 50, ghiWm2: 500, wind10Ms: 0.5 })
+    const B = heatFrom({ t: T10, taC: 30, rhPct: 35, ghiWm2: 500, wind10Ms: 2 })
+    const run = holdRun({ task: MODERATE_SUN, minutes: 50, t0: T10, heat: (m) => (m < 30 ? A : B), restArea: 'shade', restLoc: 'shade' })
+    expect(ch(run[0].a, 'environment').level).toBe('stop')
+    expect(run[0].s.taskHold?.causes).toEqual(['exposure_limit'])
+    for (const s of run.slice(1, 30)) {
+      expect(s.a.level).toBe('stop')
+      expect(s.d.resume).toMatchObject({ held: true, heldBy: ['environment'] })
+      expect(s.a.drivers.find((x) => x.id === 'resume_hold_environment')?.text).toBe('Rest before going back to this task: the heat-exposure limit does not allow it now')
+    }
+    expect(run[30].d.resume).toMatchObject({ held: false, ready: true })
+    expect(isStop(run[30].a.level)).toBe(false)
+    expect(run.slice(31).every((s) => s.working && !isStop(s.a.level))).toBe(true)
+  })
+
+  it('midday break: held until the break ends (nextCheckT = its end) and released at that minute', () => {
+    const t0 = epochFromLocal('2025-07-20T12:20')
+    const heat = heatFrom({ t: t0, taC: 34, rhPct: 35, ghiWm2: 500, wind10Ms: 2 })
+    const run = holdRun({ task: MODERATE_SUN, minutes: 175, t0, heat: () => heat })
+    const breakEnd = epochFromLocal('2025-07-20T15:00')
+    expect(isStop(run[9].a.level)).toBe(false)
+    expect(ids(run[10].a)).toContain('midday_break')
+    expect(run[10].s.taskHold?.causes).toEqual(['midday_break'])
+    for (const s of run.slice(11, 160)) {
+      expect(s.a.level).toBe('stop')
+      expect(s.d.resume).toMatchObject({ held: true, heldBy: ['regulation'], nextCheckT: breakEnd })
+      expect(s.a.drivers.find((x) => x.id === 'resume_hold_regulation')?.text).toBe('Midday work ban: rest until it ends at 15:00')
+      expect(s.a.actions).toContain('midday_break')
+    }
+    expect(run[160].a.t).toBe(breakEnd)
+    expect(run[160].d.resume).toMatchObject({ held: false, ready: true })
+    expect(isStop(run[160].a.level)).toBe(false)
+    expect(run.slice(161).every((s) => s.working)).toBe(true)
+  })
+
+  it('a resting worker held by a projection stop is also held for a regulation stop of the task to resume (the former simulator check)', () => {
+    const t0 = epochFromLocal('2025-07-20T12:00')
+    const heat = heatFrom({ t: t0, taC: 38, rhPct: 35, ghiWm2: 800 })
+    const run = holdRun({ task: HEAVY_FR, minutes: 185, t0, heat: () => heat, extra: () => ({ resumeTask: HEAVY_FR }) })
+    const i0 = run.findIndex((s) => s.d.resume?.heldBy.includes('projection') === true)
+    expect(i0).toBeGreaterThan(0)
+    expect(run[i0].a.t).toBeLessThan(epochFromLocal('2025-07-20T12:30'))
+    // From 12:30 the midday break stops the task to resume: both holds, then the regulation one alone.
+    const both = run.find((s) => s.d.resume?.heldBy.length === 2) as HStep
+    expect(both.d.resume?.heldBy).toEqual(['projection', 'regulation'])
+    expect(both.a.t).toBe(epochFromLocal('2025-07-20T12:30'))
+    const projReleased = run.find((s) => s.m > both.m && s.d.resume?.held === true && !s.d.resume.heldBy.includes('projection')) as HStep
+    expect(projReleased.d.resume?.heldBy).toEqual(['regulation'])
+    expect(projReleased.a.level).toBe('stop')
+    expect(run.filter((s) => s.m > i0 && s.a.t < epochFromLocal('2025-07-20T15:00')).every((s) => !s.working && isStop(s.a.level))).toBe(true)
+    const rel = run.find((s) => s.a.t === epochFromLocal('2025-07-20T15:00')) as HStep
+    expect(rel.d.resume).toMatchObject({ held: false, ready: true })
+    expect(isStop(rel.a.level)).toBe(false)
+  })
+
+  it('when the stops clear but the resume check fails, a projection hold takes over (rest estimate, no release)', () => {
+    // Qatar WBGT stop-work rule (32.1 °C) for two minutes while FR welding in the sun has used up most of the projection.
+    const A = heatFrom({ t: T10, taC: 34, rhPct: 35, ghiWm2: 800, wind10Ms: 0.5 })
+    const B = heatFrom({ t: T10, taC: 30, rhPct: 20, ghiWm2: 800, wind10Ms: 2 })
+    const run = holdRun({ task: HEAVY_FR, minutes: 30, t0: T10, heat: (m) => (m === 16 || m === 17 ? A : B), extra: () => ({ pack: QATAR_RULE_PACK }) })
+    expect(ids(run[16].a)).toContain('wbgt_stop_limit')
+    expect(run[17].d.resume).toMatchObject({ held: true, heldBy: ['regulation'] })
+    expect(run[17].s.taskHold?.causes).toEqual(['wbgt_stop'])
+    // Minute 18: the WBGT is back under the limit, but the welding task projects < 25 min: no release.
+    expect(run[18].s.taskHold).toBeNull()
+    expect(run[18].d.resume).toMatchObject({ held: true, heldBy: ['projection'], taskId: HEAVY_FR.id })
+    expect(run[18].s.projectionHold?.resumeMin as number).toBeLessThan(25)
+    expect(run[18].a.level).toBe('stop')
+    expect(ids(run[18].a)).toContain('phs_resume_hold')
+  })
+
+  it('working another task free of those stops ends the hold (no stop forced at work), and the level follows the normal dwell', () => {
+    const A = heatFrom({ t: T10, taC: 32, rhPct: 50, ghiWm2: 500, wind10Ms: 0.5 })
+    const run = holdRun({
+      profile: NEW_REF,
+      task: MODERATE_SUN,
+      taskAt: (m) => (m >= 10 ? LIGHT_SHADE : MODERATE_SUN),
+      minutes: 25,
+      t0: T10,
+      heat: () => A,
+      activity: (m) => (m === 0 ? 'work' : m < 10 ? 'rest' : 'work'),
+    })
+    expect(run[9].d.resume?.held).toBe(true)
+    expect(ch(run[10].a, 'regulation').level).not.toBe('stop')
+    expect(run[10].s.taskHold).toBeNull()
+    expect(run[10].d.resume).toBeNull()
+    // The forced stop of minutes 1–9 dwells 10 min (no release shortcut at work), then drops.
+    for (const s of run.slice(10, 20)) {
+      expect(s.a.level).toBe('stop')
+      expect(s.d.held).toBe(true)
+    }
+    expect(isStop(run[20].a.level)).toBe(false)
+  })
+
+  it('acclimatisation budget used up: no release this shift for hot work, even after a long rest', () => {
+    // Unacclimatised worker in mild heat: the exposure budget ends hot work; then rest in shade.
+    const heat = heatFrom({ t: T10, taC: 28, rhPct: 40, ghiWm2: 500, wind10Ms: 2 })
+    const run = holdRun({ profile: NEW_REF, task: MODERATE_SUN, minutes: 300, t0: T10, heat: () => heat, restLoc: 'shade' })
+    const i = run.findIndex((s) => s.d.resume?.infeasibleNow === true)
+    expect(i).toBeGreaterThan(0)
+    expect(ids(run[i].a)).toContain('acclimatization_budget_exhausted')
+    expect(run.length - i).toBeGreaterThan(60)
+    for (const s of run.slice(i + 1)) {
+      expect(s.working).toBe(false)
+      expect(s.a.level).toBe('stop')
+      expect(s.d.resume).toMatchObject({ held: true, heldBy: ['environment'], infeasibleNow: true, nextCheckT: null })
+      expect(s.a.actions).toEqual(expect.arrayContaining(['rotate_task', 'acclimatization_plan']))
+    }
+  })
+
+  it('state: a new shift clears the hold, and states serialised before wave 2d still load', () => {
+    const A = heatFrom({ t: T10, taC: 32, rhPct: 50, ghiWm2: 500, wind10Ms: 0.5 })
+    const run = holdRun({ profile: NEW_REF, task: MODERATE_SUN, minutes: 5, t0: T10, heat: () => A })
+    const held = run[5].s
+    expect(held.taskHold).not.toBeNull()
+    const tomorrow = stepWorkerEngine(held, { now: T10 + 14 * 60 * MIN, profile: NEW_REF, task: null, location: 'shade', heat: A, network: 'online' })
+    expect(tomorrow.state.taskHold).toBeNull()
+    const old: Partial<WorkerEngineState> = { ...held }
+    delete old.taskHold
+    delete old.monitorValidT
+    delete old.lastHotWorkT
+    delete old.dwellExTaskHold
+    const r = stepWorkerEngine(old as WorkerEngineState, { now: T10 + 6 * MIN, profile: NEW_REF, task: null, location: 'indoor_cool', heat: A, network: 'online', restArea: 'cooled_cabin' })
+    expect(r.assessment.level).toBe('stop') // the fused dwell keeps the stop of a state that knew no task hold
+    expect(r.state.dwellExTaskHold).toBeDefined()
+  })
+})
+
+describe('out-of-scope ISO 7933 paths never release without a passing projection or the dwell (safety review 2c)', () => {
+  const heat = heatFrom({ t: T0, taC: 38, rhPct: 35, ghiWm2: 800 })
+  const dwellMin = RISK_THRESHOLDS.dwell.dwellMin
+
+  it('projection hold, task to resume in vapour-barrier clothing: no hold, no release shortcut; the stop dwells', () => {
+    const base = loop(heat, HEAVY_FR, 40, { extra: () => ({ resumeTask: VB_SUN }) })
+    const i0 = base.findIndex((s) => isStop(s.a.level))
+    expect(i0).toBeGreaterThan(0)
+    expect(base[i0].a.minutesToLimit as number).toBeLessThan(15)
+    // A milder hour from i0 + 1, so that the vapour-barrier task itself is free of table stops (no task hold either).
+    const mild = heatFrom({ t: T0, taC: 24, rhPct: 30, ghiWm2: 400, wind10Ms: 4 })
+    const run = loop(heat, HEAVY_FR, i0 + dwellMin + 3, { extra: (m) => ({ resumeTask: VB_SUN, ...(m > i0 ? { heat: mild } : {}) }) })
+    expect(run.every((s) => s.s.projectionHold === null && s.s.taskHold === null)).toBe(true)
+    expect(run.every((s) => s.d.resume === null || s.d.resume.ready === false)).toBe(true)
+    // Resting from i0 + 1: the projection channel computes below stop at once, but the displayed stop dwells 10 min.
+    expect(isStop(ch(run[i0 + 1].a, 'projection').level)).toBe(false)
+    for (const s of run.slice(i0, i0 + dwellMin + 1)) expect(s.a.level).toBe('stop')
+    expect(isStop(run[i0 + dwellMin + 1].a.level)).toBe(false)
+  })
+
+  it('projection hold, current activity leaves the model scope: the hold ends and the stop dwells', () => {
+    const mild = heatFrom({ t: T0, taC: 24, rhPct: 30, ghiWm2: 400, wind10Ms: 4 })
+    const base = loop(heat, HEAVY_FR, 60, { extra: () => ({ resumeTask: HEAVY_FR }) })
+    const i0 = base.findIndex((s) => s.d.resume?.held === true && !s.working)
+    let st = base[i0].s
+    const steps: WorkerStepResult[] = []
+    for (let k = 1; k <= dwellMin + 2; k++) {
+      const r = stepWorkerEngine(st, { now: base[i0].a.t + k * MIN, profile: REF, task: VB_SUN, location: 'sun', heat: mild, network: 'online', restArea: 'cooled_cabin' })
+      st = r.state
+      steps.push(r)
+    }
+    expect(steps[0].state.projectionHold).toBeNull()
+    expect(ch(steps[0].assessment, 'projection').available).toBe(false)
+    expect(isStop(ch(steps[0].assessment, 'environment').level)).toBe(false)
+    expect(steps[0].detail.resume).toBeNull()
+    for (const r of steps.slice(0, dwellMin)) expect(r.assessment.level).toBe('stop')
+    expect(isStop(steps[dwellMin].assessment.level)).toBe(false)
+  })
+
+  it('task hold, task to resume in vapour-barrier clothing: the stops clear but the hold ends without the shortcut (dwell)', () => {
+    const t0 = epochFromLocal('2025-07-20T12:20')
+    const mildJuly = heatFrom({ t: t0, taC: 24, rhPct: 30, ghiWm2: 400, wind10Ms: 4 })
+    const run = holdRun({ task: VB_SUN, minutes: 175, t0, heat: () => mildJuly })
+    expect(run[10].s.taskHold?.causes).toEqual(['midday_break'])
+    const end = run.findIndex((s) => s.a.t === epochFromLocal('2025-07-20T15:00'))
+    expect(run[end].s.taskHold).toBeNull()
+    expect(run[end].d.resume).toBeNull()
+    for (const s of run.slice(end, end + dwellMin)) expect(s.a.level).toBe('stop')
+    expect(isStop(run[end + dwellMin].a.level)).toBe(false)
+  })
+})
+
+describe('drink reminders follow heat exposure (clinical.drinkReminderExposure; FLUID cadence)', () => {
+  const hot = heatFrom({ t: T10, taC: 38, rhPct: 40, ghiWm2: 700 })
+  const cool = heatFrom({ t: T10, taC: 22, rhPct: 40, ghiWm2: 300 })
+  const idle = (heat: SiteHeat, over: Partial<HoldRun> = {}) =>
+    holdRun({ task: MODERATE_SUN, minutes: 45, t0: T10, heat: () => heat, activity: () => 'rest', restLoc: 'shade', ...over })
+
+  it('idle or resting outside a cooled area at WBGT_eff ≥ 25.6 °C counts as exposed: 250 mL every 20 min after the last drink', () => {
+    expect(hot.wbgtShadeC).toBeGreaterThan(FLUID.EXPOSED_REST_WBGT_C)
+    const run = idle(hot, { inputs: (m) => (m === 2 ? { intake: { t: T10 + 2 * MIN, workerId: REF.id, ml: 250 } } : {}) })
+    expect(run[0].d.drink).toMatchObject({ exposed: true, exposure: 'heat_rest', reminder: 'drink', nextReminderAtMs: T10 })
+    expect(run[0].d.drink.locationWbgtEffC).toBeCloseTo(wbgtEffectiveC(hot.wbgtShadeC, 'cloth_coveralls', false), 9)
+    expect(run[0].a.actions).toContain('drink_water')
+    for (const s of run.slice(2, 22)) expect(s.d.drink.reminder).toBeNull()
+    expect(run[22].d.drink).toMatchObject({ reminder: 'drink', nextReminderAtMs: T10 + 22 * MIN })
+    expect(run[22].a.actions).toContain('drink_water')
+  })
+
+  it('cooled rest does not count (after the 30 min that follow hot work), nor shade below 25.6 °C', () => {
+    const cabin = holdRun({ task: MODERATE_SUN, minutes: 50, t0: T10, heat: () => hot, comply: false, activity: (m) => (m < 5 ? 'work' : 'rest') })
+    expect(cabin[4].d.drink.exposure).toBe('hot_work')
+    expect(cabin[33].d.drink.exposure).toBe('hot_work') // last hot-work minute 4 → 29 min later
+    expect(cabin[34].d.drink).toMatchObject({ exposed: false, exposure: null, reminder: null, nextReminderAtMs: null })
+    for (const s of cabin.slice(34)) expect(s.d.drink).toMatchObject({ exposed: false, reminder: null, nextReminderAtMs: null })
+    const shade = idle(cool)
+    expect(cool.wbgtShadeC).toBeLessThan(FLUID.EXPOSED_REST_WBGT_C)
+    for (const s of shade) expect(s.d.drink).toMatchObject({ exposed: false, reminder: null })
+  })
+
+  it('fasting: no drink reminder while exposed, but rest-in-shade guidance', () => {
+    const run = idle(hot, { extra: () => ({ fastingNow: true }) })
+    for (const s of run) {
+      expect(s.d.drink).toMatchObject({ exposed: true, reminder: 'shade', nextReminderAtMs: null })
+      expect(s.a.actions).not.toContain('drink_water')
+      expect(ids(s.a)).toContain('fasting_no_drink_reminders')
+    }
+  })
+})
+
+describe('privacy-neutral projection wording (safety review 2c, HIGH)', () => {
+  it('a reached water-loss limit reads the same in the projection channel for fasting and other workers', () => {
+    const heat = heatFrom({ t: T0, taC: 36, rhPct: 30, ghiWm2: 700 })
+    const SHADE_MOD: Task = { id: 'T', name: 'T', workClass: 'moderate', inSun: false, durationMin: 600, flexible: true }
+    const first = (fasting: boolean): LoopStep => {
+      const run = loop(heat, SHADE_MOD, 480, { comply: false, extra: () => ({ fastingNow: fasting, resumeTask: SHADE_MOD }) })
+      return run.find((s) => s.d.phsRecovery !== null) as LoopStep
+    }
+    const a = first(false)
+    const b = first(true)
+    expect(a.d.phsRecovery?.binding).toBe('dehydration')
+    expect(b.d.phsRecovery?.binding).toBe('dehydration')
+    const view = (s: LoopStep) => ch(s.a, 'projection').drivers.map((d) => ({ id: d.id, text: d.text, basis: d.basis, direction: d.direction, unit: d.unit }))
+    expect(view(b)).toEqual(view(a))
+    // The drink / no-drink detail is in worker-only hydration drivers.
+    expect(a.a.drivers.find((d) => d.id === 'phs_drink_to_restart')?.channel).toBe('hydration')
+    expect(b.a.drivers.find((d) => d.id === 'phs_no_drink_no_restart')?.channel).toBe('hydration')
+    expect(ids(a.a)).not.toContain('phs_no_drink_no_restart')
+    expect(ids(b.a)).not.toContain('phs_drink_to_restart')
+  })
+})
+
+describe('water-loss credit ceiling and logging rules (safety review 2c, MEDIUM)', () => {
+  const heat = heatFrom({ t: T0, taC: 38, rhPct: 30, ghiWm2: 800 })
+  const drinks = (every: number, ml: number) => (m: number): WorkerInputs => (m % every === 0 ? { intake: { t: T0 + m * MIN, workerId: REF.id, ml } } : {})
+
+  it('constants: ceiling 7.5 % of body mass (ISO 7933:2004 D_max50) [ASSUMPTION]; logs within 15 min [ENG]', () => {
+    const H = RISK_THRESHOLDS.hydrationCredit
+    expect(H.maxLossFraction).toBe(0.075)
+    expect(H.maxLogDelayMin).toBe(15)
+    expect(H.basis).toMatch(/7\.5 %/)
+    expect(H.basis).toMatch(/\[ASSUMPTION/)
+  })
+
+  it('logged 250 mL every 15 min: the threshold stops at 7.5 % of body mass, electrolytes are advised beyond 5 %', () => {
+    const run = loop(heat, MODERATE_SUN, 420, { comply: false, inputs: drinks(15, 250) })
+    let sawExtended = false
+    for (const s of run) {
+      const w = s.d.water as NonNullable<WorkerStepDetail['water']>
+      expect(w.thresholdL).toBeLessThanOrEqual(0.075 * 75 + 1e-9)
+      expect(w.extended).toBe(w.thresholdL > 0.05 * 75 + 1e-9)
+      if (w.extended) {
+        sawExtended = true
+        expect(s.a.actions).toContain('electrolytes')
+        expect(s.a.drivers.find((d) => d.id === 'phs_water_credit')?.text).toMatch(/add an electrolyte drink$/)
+      }
+    }
+    expect(sawExtended).toBe(true)
+    const capped = run.find((s) => s.d.water?.capped === true) as LoopStep
+    expect(capped.d.water?.thresholdL).toBeCloseTo(5.625, 12)
+    expect(capped.a.drivers.find((d) => d.id === 'phs_water_credit')?.text).toMatch(/at the 7\.5 % ceiling, add an electrolyte drink$/)
+    // The first limit is the water-loss limit at the ceiling (before the fix: 9.4 % of body mass, safety-review probe).
+    const reached = run.find((s) => s.d.phsRecovery !== null) as LoopStep
+    expect(reached.d.phsRecovery?.binding).toBe('dehydration')
+    expect(reached.d.water?.thresholdL).toBeCloseTo(5.625, 12)
+    expect(reached.d.water?.sweatLossL as number).toBeLessThan(5.625 + 0.05)
+  })
+
+  it('creditedIntakeL counts only drinks logged within 15 min of the drink time, either side', () => {
+    const t = T0 + 60 * MIN
+    const x = (dMin: number | undefined): FluidIntake => ({ t, workerId: REF.id, ml: 500, ...(dMin === undefined ? {} : { loggedAt: t + dMin * MIN }) })
+    const c = (i: FluidIntake) => creditedIntakeL([i], T0, T0 + 120 * MIN, REF.id)
+    expect(c(x(undefined))).toBeCloseTo(0.4, 12)
+    expect(c(x(0))).toBeCloseTo(0.4, 12)
+    expect(c(x(15))).toBeCloseTo(0.4, 12)
+    expect(c(x(-15))).toBeCloseTo(0.4, 12)
+    expect(c(x(15.01))).toBe(0)
+    expect(c(x(-16))).toBe(0)
+    expect(c({ ...x(0), loggedAt: Number.NaN })).toBe(0)
+  })
+
+  it('the engine stamps a log without loggedAt at the step that receives it: a back-dated drink earns no credit', () => {
+    const at = (m: number): WorkerContext => ({ now: T0 + m * MIN, profile: REF, task: MODERATE_SUN, location: 'sun', heat, network: 'online' })
+    let r = stepWorkerEngine(createWorkerEngine(REF, T0), at(0))
+    r = stepWorkerEngine(r.state, at(40), { intake: { t: T0 + 10 * MIN, workerId: REF.id, ml: 500 } }) // entered 30 min late
+    expect(r.state.intakes[0].loggedAt).toBe(T0 + 40 * MIN)
+    expect(r.detail.water?.creditedIntakeL).toBe(0)
+    r = stepWorkerEngine(r.state, at(41), { intake: { t: T0 + 30 * MIN, workerId: REF.id, ml: 500 } }) // 11 min late
+    expect(r.detail.water?.creditedIntakeL).toBeCloseTo(0.4, 12)
+  })
+
+  it('a drink logged in a step never skips the reviewed recovery of a water-loss limit reached in that step', () => {
+    const base = loop(heat, MODERATE_SUN, 420, { comply: false, inputs: drinks(20, 250) })
+    const k = base.findIndex((s) => s.d.phsRecovery !== null)
+    expect(k).toBeGreaterThan(0)
+    expect(base[k].d.phsRecovery?.binding).toBe('dehydration')
+    // The same run with an extra 400 mL logged in step k: it lifts the threshold above the loss at once.
+    const extra = loop(heat, MODERATE_SUN, k, { comply: false, inputs: (m) => (m === k ? { intake: { t: T0 + m * MIN, workerId: REF.id, ml: 400 } } : drinks(20, 250)(m)) })
+    const w = extra[k].d.water as NonNullable<WorkerStepDetail['water']>
+    expect(w.thresholdL).toBeGreaterThan(w.sweatLossL)
+    expect(extra[k].d.phsRecovery).not.toBeNull()
+    expect(extra[k].a.level).toBe('stop')
+  })
+
+  it('a drink logged in a step never releases a projection hold in that step (it counts from the next check)', () => {
+    // Water-bound hold: moderate sun work at 38 °C with logged drinking; the worker rests in shade (slow recovery).
+    const run = loop(heat, MODERATE_SUN, 360, { inputs: drinks(30, 250), extra: () => ({ resumeTask: MODERATE_SUN }) })
+    const held = run.filter((s) => s.d.resume?.held === true && !s.working)
+    expect(held.length).toBeGreaterThan(0)
+    // For every held step, re-run that step with a large logged drink: never released in that step.
+    for (const s of held.slice(0, 20)) {
+      const prev = run[s.m - 1].s
+      const c: WorkerContext = { now: T0 + s.m * MIN, profile: REF, task: null, location: 'indoor_cool', heat, network: 'online', restArea: 'cooled_cabin', resumeTask: MODERATE_SUN }
+      const r = stepWorkerEngine(prev, c, { intake: { t: c.now, workerId: REF.id, ml: 1400 } })
+      expect(r.detail.resume?.held ?? false).toBe(s.d.resume?.held ?? false)
+      expect(r.assessment.level).toBe(s.a.level)
+    }
   })
 })

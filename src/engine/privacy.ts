@@ -36,6 +36,9 @@ import type {
 } from './types'
 import { PROHIBITED_PURPOSES, RISK_ORDER } from './types'
 import { DAY_MS, HOUR_MS } from './time'
+// The English `driver.<id>` phrases are the generic, localisable texts shown to supervisors (data only; the catalog
+// imports nothing but types from the engine, so there is no cycle).
+import { CATALOGS } from '../i18n/messages'
 
 // ─────────────────────────────── Sources ───────────────────────────────
 
@@ -191,6 +194,346 @@ export const CLINICAL_DRIVER_CHANNELS: readonly ChannelId[] = deepFreeze(['physi
  * [primary, S73]. [ENG]
  */
 export const CONFIDENTIAL_ACTIONS: readonly ActionId[] = deepFreeze(['occ_health_review'])
+
+// ─────────────────────────────── Supervisor-facing drivers and actions ───────────────────────────────
+
+/**
+ * Pooled driver ids shown to recipients who are not cleared for individual numbers (supervisors) [ENG, privacy].
+ * Several private causes share one id, text, channel, direction and basis, so no field tells them apart
+ * (ARCHITECTURE §1 principle 5, §7; GOVERNANCE §2 and §13 items 16 and 18):
+ * - `not_cleared_for_heat_work`: the worker may not return to heat work now, whatever the reason: an ISO 7933 limit
+ *   reached or not yet restored (drinking restricted while fasting, or the rest, check-in and sign-off still pending),
+ *   a resume hold, the task not feasible at the worker's own limit, the acclimatisation allowance used up, a clinical
+ *   latch, a monitored-mode fallback that stops the work;
+ * - `device_directed_rest`: the worker's device sets their work and rest: a stricter personal limit or tier (a health
+ *   factor, fasting, a new or returning worker, heat rash today), monitored mode, or its fallback to the WBGT tables
+ *   (which depends on wearable consent and data validity).
+ * Basis: wave 2d principles 1 and 4 (private factors are enforced on the device and pooled; supervisors see what they
+ * need to act, no individual numbers, no inference of clinical, fasting or consent status).
+ */
+export type PooledDriverId = 'not_cleared_for_heat_work' | 'device_directed_rest'
+
+/** The pooled driver ids, in display order (a pooled driver is listed before the other reasons). */
+export const POOLED_DRIVER_IDS: readonly PooledDriverId[] = deepFreeze(['not_cleared_for_heat_work', 'device_directed_rest'])
+
+/**
+ * Channel, text, direction and basis of each pooled driver. They are fixed, so the source driver cannot be read from
+ * any field. The texts carry no number and pass alerts.ts CLINICAL_TEXT_PATTERN (tested). Translations:
+ * i18n/messages.ts `CONSOLE_PHRASES` (`not_cleared`, `device_rest`; English equal, tested).
+ */
+export const POOLED_DRIVERS: Readonly<Record<PooledDriverId, Readonly<Omit<RiskDriver, 'id' | 'value' | 'unit'>>>> = deepFreeze({
+  not_cleared_for_heat_work: {
+    channel: 'projection',
+    text: 'Not cleared for heat work now: assign cooler work; the device will say when to return.',
+    direction: 'raises',
+    basis:
+      'ISO 7933:2023 strain limits and recovery; NIOSH 2016 and ADOSH-SF CoP 11.0 v4.0 exposure limits and acclimatisation; the reason stays on the worker device (ARCHITECTURE §1 principle 5) [ENG pooled wording]',
+  },
+  device_directed_rest: {
+    channel: 'environment',
+    text: "Device-directed rest: follow the work and rest times on the worker's device.",
+    direction: 'info',
+    basis:
+      'NIOSH 2016 REL/RAL; ACGIH TLV; ISO 7243:2017 screen and ISO 7933:2023 detailed analysis; the reason stays on the worker device (ARCHITECTURE §1 principle 5) [ENG pooled wording]',
+  },
+})
+
+/**
+ * How a driver is shown to a supervisor (see {@link supervisorDriver}):
+ * - `site`: site-level text kept with its numbers (site WBGT and TWL, zone, midday-break times, rest-area WBGT, weather
+ *   and sensor data). Explicit allow-list;
+ * - `phrase`: the generic localisable phrase `driver.<id>` (i18n/messages.ts), no value or unit, a generic basis;
+ * - a {@link PooledDriverId}: the pooled driver;
+ * - `withhold`: never shown.
+ */
+export type SupervisorDriverRule = 'site' | 'phrase' | PooledDriverId | 'withhold'
+
+const SITE: SupervisorDriverRule = 'site'
+const PHRASE: SupervisorDriverRule = 'phrase'
+const NOT_CLEARED: SupervisorDriverRule = 'not_cleared_for_heat_work'
+const DEVICE_REST: SupervisorDriverRule = 'device_directed_rest'
+const WITHHOLD: SupervisorDriverRule = 'withhold'
+
+/**
+ * Supervisor rule per driver id [ENG, privacy]. Ids that are not listed get the generic phrase when the catalog has
+ * one and are withheld otherwise (default-deny: an engine text never reaches a supervisor unreviewed).
+ * - Site allow-list: the rule pack (regulation.ts), the weather and site-heat data drivers (indices.ts,
+ *   data/weather.ts), the cooled rest area (a fixed site WBGT) and the site meter check. Their numbers describe the
+ *   site, not the person.
+ * - Phrase: every environment and projection driver whose text carries an individual number or a personal-limit
+ *   margin: the effective WBGT against the personal limit and the mass-scaled metabolic rate ("… (412 W)"), the
+ *   allowed work minutes (released as the operational `workMinPerHour` field instead), the acclimatisation minutes
+ *   left, minutes to a heat-strain limit, the work-bout countdown. Acclimatisation status is operational (the employer
+ *   runs the acclimatisation schedule, ADOSH-SF CoP 11.0 v4.0): its phrase is shown, never its history.
+ * - Not cleared (pooled): every driver that keeps the worker off heat work now, whatever the reason.
+ * - Device-directed rest (pooled): the stricter personal limit or tier and the monitored-mode drivers.
+ * - Withheld: drivers that reveal logged drinking (check-in consent), fasting or extra-care mode, and every
+ *   physiology, symptom and hydration driver should a producer ever put one on a non-clinical channel.
+ */
+export const SUPERVISOR_DRIVER_RULES: Readonly<Record<string, SupervisorDriverRule>> = deepFreeze({
+  // engine/regulation.ts (rule pack: site rules)
+  twl_zone_high: SITE,
+  twl_zone_medium: SITE,
+  twl_zone_low: SITE,
+  twl_zone_unrestricted: SITE,
+  twl_unavailable: SITE,
+  ordinary_work_prohibited: SITE,
+  permit_to_work: SITE,
+  unacclimatized_excluded: SITE,
+  unacclimatized_not_alone: SITE,
+  acclimatization_programme: SITE,
+  midday_break: SITE,
+  midday_break_window: SITE,
+  wbgt_unavailable: SITE,
+  wbgt_stop_limit: SITE,
+  lone_work_not_allowed: SITE,
+  // engine/indices.ts (site heat data)
+  env_wind_default: SITE,
+  env_solar_clear_sky: SITE,
+  env_pressure_default: SITE,
+  env_radiant_boost_ignored: SITE,
+  env_radiant_boost_site_default: SITE,
+  wbgt_measured: SITE,
+  wbgt_meter_model_mismatch: SITE,
+  wbgt_solver_not_converged: SITE,
+  twl_out_of_valid_range: SITE,
+  bb2002_backstop: SITE,
+  // data/weather.ts (weather source and freshness)
+  env_conservative_default: SITE,
+  env_data_stale: SITE,
+  env_sensor_unavailable: SITE,
+  env_series_wrong_site: SITE,
+  env_source_no_coverage: SITE,
+  env_stale_margin: SITE,
+  env_source_site_sensor: SITE,
+  env_source_forecast: SITE,
+  env_source_archive: SITE,
+  env_source_cached_forecast: SITE,
+  env_source_conservative_default: SITE,
+  // engine/risk.ts: environment (site rest area and meter)
+  rest_area_cooled: SITE,
+  meter_check_advised: SITE,
+  // engine/risk.ts: environment (individual numbers → generic phrase)
+  wbgt_over_limit: PHRASE,
+  wbgt_near_limit: PHRASE,
+  wbgt_within_limit: PHRASE,
+  work_rest_cycle: PHRASE,
+  work_rest_planned: PHRASE,
+  clothing_adjustment: PHRASE,
+  limit_ral_unacclimatized: PHRASE,
+  limit_ral_acclimatizing: PHRASE,
+  acclimatization_budget: PHRASE,
+  metabolic_rate_extrapolated: PHRASE,
+  wbgt_method_not_applicable: PHRASE,
+  rest_area_shade_only: PHRASE,
+  level_held_dwell: PHRASE,
+  buddy_required: PHRASE,
+  // engine/risk.ts: projection
+  phs_minutes_to_limit: PHRASE,
+  phs_beyond_horizon: PHRASE,
+  phs_out_of_validity: PHRASE,
+  phs_clothing_unverified: PHRASE,
+  phs_not_applicable: PHRASE,
+  phs_restarted_after_review: PHRASE,
+  phs_work_bout: PHRASE,
+  step_gap_capped: PHRASE,
+  // not cleared for heat work now (pooled)
+  phs_limit_reached: NOT_CLEARED,
+  phs_recovery_not_modelled: NOT_CLEARED,
+  phs_recovery_review_required: NOT_CLEARED,
+  phs_resume_hold: NOT_CLEARED,
+  task_not_feasible_now: NOT_CLEARED,
+  phs_drink_to_restart: NOT_CLEARED,
+  acclimatization_budget_exhausted: NOT_CLEARED,
+  resume_hold_environment: NOT_CLEARED,
+  resume_hold_regulation: NOT_CLEARED,
+  no_hot_work_today: NOT_CLEARED,
+  clinical_latch: NOT_CLEARED,
+  // device-directed rest (pooled)
+  limit_stricter_personal: DEVICE_REST,
+  stricter_work_rest: DEVICE_REST,
+  wbgt_screen_monitored: DEVICE_REST,
+  monitoring_fallback_tables: DEVICE_REST,
+  // withheld: logged drinking (check-in consent), fasting, extra-care mode
+  phs_water_credit: WITHHOLD,
+  phs_no_drinking: WITHHOLD,
+  phs_no_drink_no_restart: WITHHOLD,
+  water_paused_fasting: WITHHOLD,
+  water_restricted: WITHHOLD,
+  fasting_no_drink_reminders: WITHHOLD,
+  conservative_checkin_due: WITHHOLD,
+})
+
+/** English `driver.<id>` phrases (i18n/messages.ts), by id. A Map, so an id such as "constructor" finds nothing. */
+const EN_DRIVER_PHRASE: ReadonlyMap<string, string> = new Map(Object.entries(CATALOGS.en.driver))
+
+/** Basis shown with a generic phrase: the standards behind the channel, never the individual detail. [ENG] */
+const SUPERVISOR_PHRASE_BASIS: Readonly<Record<'environment' | 'regulation' | 'projection', string>> = deepFreeze({
+  environment:
+    'NIOSH 2016 REL/RAL, ACGIH TLV and ISO 7243:2017 WBGT limits; ADOSH-SF CoP 11.0 v4.0; details stay on the worker device (ARCHITECTURE §1 principle 5)',
+  regulation: 'Jurisdiction rule pack (MoHRE MR 44/2022; ADOSH-SF CoP 11.0 v4.0)',
+  projection: 'ISO 7933:2023 Predicted Heat Strain; details stay on the worker device (ARCHITECTURE §1 principle 5)',
+})
+
+const isPooledId = (id: string): id is PooledDriverId => (POOLED_DRIVER_IDS as readonly string[]).includes(id)
+
+/**
+ * Direction shown with a generic phrase where the engine's direction depends on a private state [ENG, privacy]: the
+ * table work/rest cycle is 'info' (a guide) while monitored mode is in force and 'raises' otherwise, so its direction
+ * would reveal monitored mode, hence wearable consent and the absence of a stricter personal mode. Supervisors always
+ * see 'raises' (protective: the cycle reads as binding). Every other phrase keeps the engine's direction, which is fixed
+ * per id (tested over the engine's drivers).
+ */
+const SUPERVISOR_FIXED_DIRECTION: Readonly<Record<string, RiskDriver['direction']>> = deepFreeze({ work_rest_cycle: 'raises' })
+
+/**
+ * Ids of the physiology, symptom and hydration producers (engine/physio.ts, engine/clinical.ts). They are withheld
+ * whatever channel carries them (defence in depth for the types.ts RiskDriver contract). [ENG, privacy]
+ */
+const CLINICAL_DRIVER_ID_PATTERN = /^(symptom_|symptoms_|physio_|hr_|ectemp_|psi_|urine_|fluid_)|^(no_checkin_today|no_symptoms|suspected_hyponatraemia)$/
+
+/**
+ * The supervisor rule of a driver id: {@link SUPERVISOR_DRIVER_RULES}; else withheld for an id of the clinical
+ * producers; else the generic phrase when the catalog has one; else withheld (default-deny). Pure.
+ * Basis: see {@link SUPERVISOR_DRIVER_RULES}.
+ */
+export function supervisorDriverRule(id: string): SupervisorDriverRule {
+  if (Object.prototype.hasOwnProperty.call(SUPERVISOR_DRIVER_RULES, id)) return SUPERVISOR_DRIVER_RULES[id]
+  if (CLINICAL_DRIVER_ID_PATTERN.test(id)) return WITHHOLD
+  return EN_DRIVER_PHRASE.has(id) ? PHRASE : WITHHOLD
+}
+
+/**
+ * One driver as a supervisor may see it, or null when it is withheld. Clinical channels are always withheld. A site
+ * driver keeps its text, value and unit; a phrase driver gets the English `driver.<id>` phrase, no value or unit and a
+ * generic basis; a pooled driver gets the pooled id, text, channel, direction and basis. Pure; returns a new object.
+ * Basis: ARCHITECTURE §1 principle 5 ("supervisors see what to do, never clinical detail"); GOVERNANCE §13 item 16
+ * (no minute counts in supervisor texts); wave 2d principle 4 (no individual numbers).
+ */
+export function supervisorDriver(driver: RiskDriver): RiskDriver | null {
+  if (CLINICAL_DRIVER_CHANNELS.includes(driver.channel)) return null
+  const rule = supervisorDriverRule(driver.id)
+  if (rule === 'withhold') return null
+  if (rule === 'site') {
+    const out: RiskDriver = { id: driver.id, channel: driver.channel, text: driver.text, direction: driver.direction, basis: driver.basis }
+    if (driver.value !== undefined) out.value = driver.value
+    if (driver.unit !== undefined) out.unit = driver.unit
+    return out
+  }
+  if (rule === 'phrase') {
+    const text = EN_DRIVER_PHRASE.get(driver.id)
+    if (text === undefined) return null
+    const channel = driver.channel as 'environment' | 'regulation' | 'projection'
+    const direction = Object.prototype.hasOwnProperty.call(SUPERVISOR_FIXED_DIRECTION, driver.id) ? SUPERVISOR_FIXED_DIRECTION[driver.id] : driver.direction
+    return { id: driver.id, channel: driver.channel, text, direction, basis: SUPERVISOR_PHRASE_BASIS[channel] }
+  }
+  return { id: rule, ...POOLED_DRIVERS[rule] }
+}
+
+/**
+ * The drivers a supervisor may see, from a worker's drivers: clinical channels dropped, each driver mapped by
+ * {@link supervisorDriver}, every pooled driver listed once and first (in {@link POOLED_DRIVER_IDS} order, so neither
+ * its position nor a count tells its sources apart), then the others in their original order. Pure.
+ * Basis: see {@link supervisorDriver}.
+ */
+export function supervisorDrivers(drivers: readonly RiskDriver[]): RiskDriver[] {
+  const pooled = new Set<PooledDriverId>()
+  const rest: RiskDriver[] = []
+  for (const d of drivers) {
+    const view = supervisorDriver(d)
+    if (view === null) continue
+    if (isPooledId(view.id)) pooled.add(view.id)
+    else rest.push(view)
+  }
+  const head = POOLED_DRIVER_IDS.filter((id) => pooled.has(id)).map((id): RiskDriver => ({ id, ...POOLED_DRIVERS[id] }))
+  return [...head, ...rest]
+}
+
+/**
+ * True when a worker is not cleared for heat work now: a non-clinical driver maps to `not_cleared_for_heat_work`.
+ * Pure. Basis: see {@link POOLED_DRIVERS}.
+ */
+export function notClearedForHeatWork(drivers: readonly RiskDriver[]): boolean {
+  return drivers.some((d) => !CLINICAL_DRIVER_CHANNELS.includes(d.channel) && supervisorDriverRule(d.id) === NOT_CLEARED)
+}
+
+/**
+ * Actions that only the worker's own device acts on, and whose presence varies with private factors [ENG, privacy]:
+ * the drink reminder and electrolytes (withheld on the device while fasting, while drinking is restricted and over a
+ * fluid cap), the check-in prompt (extra-care cadence, symptom and recovery follow-up) and the buddy-check prompt
+ * (extra-care mode, wearable readings). Supervisors organise water through the crew plan and buddies through the
+ * roster. Basis: GOVERNANCE §13 item 18 (fasting inferable from the water figure and wording); wave 2d principle 4.
+ */
+export const DEVICE_ONLY_ACTIONS: readonly ActionId[] = deepFreeze(['drink_water', 'electrolytes', 'symptom_checkin', 'buddy_check'])
+
+/**
+ * Drivers that make a 'check_sensor' action a site matter (the site WBGT meter or weather sensor). Without one, the
+ * action is about the worker's band (wearable consent) and stays off supervisor screens. [ENG, privacy]
+ */
+export const SITE_SENSOR_DRIVER_IDS: readonly string[] = deepFreeze([
+  'meter_check_advised',
+  'wbgt_meter_model_mismatch',
+  'env_sensor_unavailable',
+  'twl_unavailable',
+  'wbgt_unavailable',
+])
+
+/** Display order of actions; mirrors engine/risk.ts ACTION_PRIORITY (compared in a test). */
+const ACTION_ORDER: Readonly<Record<ActionId, number>> = deepFreeze({
+  call_998: 0,
+  cool_first: 1,
+  stay_with_worker: 2,
+  stop_work: 3,
+  rest_shade_now: 4,
+  cool_down: 5,
+  first_aider_check: 6,
+  no_hot_work_today: 7,
+  midday_break: 8,
+  restrict_fluids: 9,
+  medical_evaluation: 10,
+  acclimatization_plan: 11,
+  rotate_task: 12,
+  shade_breaks: 13,
+  reduce_intensity: 14,
+  no_lone_work: 15,
+  buddy_check: 16,
+  symptom_checkin: 17,
+  drink_water: 18,
+  electrolytes: 19,
+  occ_health_review: 20,
+  check_sensor: 21,
+})
+
+/** Options of {@link supervisorActions}. */
+export interface SupervisorActionOptions {
+  /** Device-only actions this recipient still needs (the buddy keeps 'buddy_check'). */
+  keep?: readonly ActionId[]
+}
+
+/**
+ * The actions a supervisor may see [ENG, privacy]: confidential actions and {@link DEVICE_ONLY_ACTIONS} removed,
+ * 'check_sensor' kept only for a site sensor ({@link SITE_SENSOR_DRIVER_IDS}), and 'rotate_task' ("assign cooler
+ * work") added for every worker who is not cleared for heat work ({@link notClearedForHeatWork}), so the action list
+ * matches the pooled phrase whatever the reason (protective: a re-assignment is never less safe). Sorted in the
+ * engine's action order. Pure. Basis: ARCHITECTURE §1 principle 5 ("level + action"); GOVERNANCE §13 item 18.
+ */
+export function supervisorActions(
+  actions: readonly ActionId[],
+  drivers: readonly RiskDriver[],
+  opts: SupervisorActionOptions = {},
+): ActionId[] {
+  const keep = new Set<ActionId>(opts.keep ?? [])
+  const siteSensor = drivers.some((d) => SITE_SENSOR_DRIVER_IDS.includes(d.id))
+  const out = new Set<ActionId>()
+  for (const a of actions) {
+    if (CONFIDENTIAL_ACTIONS.includes(a)) continue
+    if (DEVICE_ONLY_ACTIONS.includes(a) && !keep.has(a)) continue
+    if (a === 'check_sensor' && !siteSensor) continue
+    out.add(a)
+  }
+  if (notClearedForHeatWork(drivers)) out.add('rotate_task')
+  return [...out].sort((x, y) => (ACTION_ORDER[x] ?? 99) - (ACTION_ORDER[y] ?? 99))
+}
 
 // ─────────────────────────────── Consent scopes ───────────────────────────────
 
@@ -477,6 +820,13 @@ export const REGULATOR_MIN_CELL_SIZE = 10
  */
 export const EMPLOYER_MIN_CELL_SIZE = 10
 
+/**
+ * What a supervisor sees of a crew member. No individual water figure [ENG, privacy]: it is scaled to body size and
+ * logged intake, and it is 0 while a worker fasts or may not drink, so it would reveal fasting, a drinking restriction
+ * or body mass; supervisors take the water schedule from the crew plan (planner.ts water logistics) and the zone's
+ * water guidance. Basis: GOVERNANCE §13 item 18 ("send the crew's water schedule (or no figure) instead"); wave 2d
+ * principle 4 (no individual numbers, no inference of fasting).
+ */
 const SUPERVISOR_VIEW: readonly DataField[] = [
   'displayName',
   'crewId',
@@ -485,7 +835,6 @@ const SUPERVISOR_VIEW: readonly DataField[] = [
   'workMinPerHour',
   'ackStatus',
   'drivers_nonclinical',
-  'waterMlPerHour',
 ]
 const BUDDY_VIEW: readonly DataField[] = ['displayName', 'level', 'actions', 'ackStatus']
 const FIRST_AID_CASE_VIEW: readonly DataField[] = ['displayName', 'level', 'actions', 'location']
@@ -569,10 +918,10 @@ const PERMITTED_MATRIX: Record<Role, Record<PermittedPurpose, AccessRule>> = {
   },
   supervisor: {
     safety_alerting: supervisorView(
-      'Supervisors see what to do — level, actions, work/rest, water, acknowledgement and non-clinical reasons — never clinical detail.',
+      'Supervisors see what to do — level, actions, work/rest, acknowledgement and non-clinical reasons without individual numbers — never clinical detail.',
     ),
     operational_planning: supervisorView(
-      'Planning rest, rotation and water needs the same non-clinical view, never clinical detail.',
+      'Planning rest and rotation needs the same non-clinical view, never clinical detail; water comes from the crew plan.',
     ),
     clinical_care: deny(
       'Supervisors are not clinicians: heart rate, strain estimates, health factors and symptoms are never shown to them.',
@@ -598,13 +947,14 @@ const PERMITTED_MATRIX: Record<Role, Record<PermittedPurpose, AccessRule>> = {
         {
           fields: ['symptoms'],
           requires: ['active_case', 'escalated'],
-          reason: 'Reported symptoms guide first aid once the case is escalated (vital-interest exception).',
+          reason:
+            'Reported symptoms guide first aid once the case is escalated (vital-interest exception). A symptom- or physiology-driven stop and every emergency page the first aider when raised, so they are escalated from that minute.',
         },
       ],
       aggregateMinCell: null,
       reason:
-        'First aiders see active STOP/EMERGENCY cases — name, level, actions, location — and the reported symptoms once the case is escalated.',
-      basis: `${SRC.archActors} (First aider: active stop and emergency cases, protocol, location; never history or flags); ${SRC.ilo101} — symptoms are released under its vital-interest exception; ${SRC.ilo614}`,
+        'First aiders see active STOP/EMERGENCY cases — name, level, actions, location — and the reported symptoms once the case is escalated. The first aider is the responder of a symptom- or physiology-driven stop and of every emergency, which page them when raised: those cases count as escalated from raise.',
+      basis: `${SRC.archActors} (First aider: active stop and emergency cases, protocol, location; never history or flags); ${SRC.ilo101} — symptoms are released under its vital-interest exception, to the responder paged for the case (alerts.ts ESCALATION_ROUTING_ROLES: routing sets Alert.escalatedAt at raise); ${SRC.ilo614}`,
     },
     clinical_care: deny(
       'First aid is given under safety alerting; ongoing clinical care belongs to occupational health, with consent.',
@@ -727,7 +1077,8 @@ const PROHIBITED_CELLS = Object.fromEntries(
  * - worker: everything about themselves, for every permitted purpose;
  * - buddy (safety_alerting): displayName, level, actions, ackStatus;
  * - supervisor (safety_alerting, operational_planning): displayName, crewId, level, actions, workMinPerHour,
- *   ackStatus, drivers_nonclinical, waterMlPerHour — never clinical fields, age or minutes-to-limit;
+ *   ackStatus, drivers_nonclinical (generic or pooled phrases, no individual numbers) — never clinical fields, age,
+ *   minutes-to-limit or the individual water figure;
  * - first_aider (safety_alerting): active STOP/EMERGENCY cases — displayName, level, actions, location; symptoms only
  *   once escalated;
  * - occ_health: escalated cases; clinical fields only for clinical_care with the worker's sharing consent;
@@ -766,7 +1117,21 @@ export interface AccessRequest {
 export interface ProjectionContext {
   /** Request time (epoch ms); stamped on the audit entry. */
   now: number
-  /** True once the subject's case has been escalated (stop unacknowledged, emergency, first-aider hand-over). */
+  /**
+   * True once the subject's case has been escalated: a stop left unacknowledged, an emergency, routing to the first
+   * aider or occupational health, or a first-aider hand-over (state/selectors.ts caseIndex reads `Alert.escalatedAt`
+   * and `Alert.acks`).
+   *
+   * Disclosure timing (vital interest, accepted in wave 2d): a symptom- or physiology-driven stop and every emergency
+   * page the first aider when they are raised (alerts.ts ESCALATION_ROUTING_ROLES set `escalatedAt` at raise). Such a
+   * case is therefore escalated from the minute it is raised, with no acknowledgement timeout first:
+   * - the first aider, who is the responder for that case, sees the reported symptoms at once (ILO code §10.1
+   *   exception: to prevent a serious and imminent threat to life or health);
+   * - occupational health sees the case view (who, where, level, actions, acknowledgement) at once, and clinical
+   *   detail only for clinical care with the worker's `shareWithMedicOnEscalation` consent.
+   * An exposure-driven stop is escalated only by its acknowledgement timeout (alerts.ts STOP_ACK_TIMEOUT_MIN).
+   * Pinned by state/selectors.test.ts › "escalatedAt disclosure timing (vital interest, wave 2d)".
+   */
   escalated: boolean
   /**
    * Actor ids paired as the subject's buddy. When supplied, buddy access requires membership; when omitted, pairing
@@ -827,7 +1192,7 @@ function normaliseFields(fields: readonly DataField[] | undefined): DataField[] 
   return fields === undefined ? [...DATA_FIELDS] : DATA_FIELDS.filter((f) => fields.includes(f))
 }
 
-function copyDriver(driver: RiskDriver, keepNumbers: boolean): RiskDriver {
+function copyDriver(driver: RiskDriver): RiskDriver {
   const out: RiskDriver = {
     id: driver.id,
     channel: driver.channel,
@@ -835,8 +1200,8 @@ function copyDriver(driver: RiskDriver, keepNumbers: boolean): RiskDriver {
     direction: driver.direction,
     basis: driver.basis,
   }
-  if (keepNumbers && driver.value !== undefined) out.value = driver.value
-  if (keepNumbers && driver.unit !== undefined) out.unit = driver.unit
+  if (driver.value !== undefined) out.value = driver.value
+  if (driver.unit !== undefined) out.unit = driver.unit
   return out
 }
 
@@ -848,30 +1213,37 @@ function clinicalDriverAllowed(driver: RiskDriver, consent: ConsentState): boole
 }
 
 type Extractors = {
-  readonly [F in DataField]: (snapshot: WorkerSnapshot, released: ReadonlySet<DataField>) => FieldValues[F]
+  readonly [F in DataField]: (snapshot: WorkerSnapshot, released: ReadonlySet<DataField>, role: Role) => FieldValues[F]
 }
 
 /**
  * Value extraction per field. Copies are returned so a recipient can never mutate the on-device record.
- * - actions: confidential follow-up actions only for recipients cleared for clinical drivers;
- * - drivers_nonclinical: environment/regulation/projection drivers; a projection driver's number (the individual
- *   minutes-to-limit or sweat projection) is kept only when minutesToLimit itself is released [ENG].
+ * - actions: every action for recipients cleared for clinical drivers (the worker, consented occupational health);
+ *   the first aider (the responder) gets all but the confidential ones; a buddy and every other recipient get
+ *   {@link supervisorActions} (the buddy keeps its buddy-check prompt) [ENG, privacy];
+ * - drivers_nonclinical: environment/regulation/projection drivers. With the individual numbers (texts, values and
+ *   units unchanged) only when minutesToLimit itself is released (the worker, consented occupational health);
+ *   otherwise {@link supervisorDrivers}: generic or pooled phrases, site numbers only [ENG, privacy].
  */
 const EXTRACT: Extractors = {
   displayName: (s) => s.displayName,
   crewId: (s) => s.crewId,
   level: (s) => s.level,
-  actions: (s, released) =>
-    released.has('drivers_clinical') ? [...s.actions] : s.actions.filter((a) => !CONFIDENTIAL_ACTIONS.includes(a)),
+  actions: (s, released, role) =>
+    released.has('drivers_clinical')
+      ? [...s.actions]
+      : role === 'first_aider'
+        ? s.actions.filter((a) => !CONFIDENTIAL_ACTIONS.includes(a))
+        : supervisorActions(s.actions, s.drivers, role === 'buddy' ? { keep: ['buddy_check'] } : {}),
   workMinPerHour: (s) => s.workMinPerHour,
   ackStatus: (s) => s.ackStatus,
   minutesToLimit: (s) => s.minutesToLimit,
   waterMlPerHour: (s) => s.waterMlPerHour,
   drivers_nonclinical: (s, released) =>
-    s.drivers
-      .filter((d) => !CLINICAL_DRIVER_CHANNELS.includes(d.channel))
-      .map((d) => copyDriver(d, d.channel !== 'projection' || released.has('minutesToLimit'))),
-  drivers_clinical: (s) => s.drivers.filter((d) => clinicalDriverAllowed(d, s.consent)).map((d) => copyDriver(d, true)),
+    released.has('minutesToLimit')
+      ? s.drivers.filter((d) => !CLINICAL_DRIVER_CHANNELS.includes(d.channel)).map(copyDriver)
+      : supervisorDrivers(s.drivers),
+  drivers_clinical: (s) => s.drivers.filter((d) => clinicalDriverAllowed(d, s.consent)).map(copyDriver),
   hrBpm: (s) => s.hrBpm,
   ctEstC: (s) => s.ctEstC,
   psi: (s) => s.psi,
@@ -887,8 +1259,9 @@ function assignField<F extends DataField>(
   field: F,
   snapshot: WorkerSnapshot,
   released: ReadonlySet<DataField>,
+  role: Role,
 ): void {
-  data[field] = EXTRACT[field](snapshot, released)
+  data[field] = EXTRACT[field](snapshot, released, role)
 }
 
 const join = (fields: readonly DataField[]): string => fields.join(', ')
@@ -910,7 +1283,7 @@ export function project(snapshot: WorkerSnapshot, request: AccessRequest, ctx: P
   const finish = (decision: 'allowed' | 'denied', fields: DataField[], reason: string): ProjectionResult => {
     const released = new Set(fields)
     const data: ProjectedData = {}
-    for (const field of fields) assignField(data, field, snapshot, released)
+    for (const field of fields) assignField(data, field, snapshot, released, role)
     return {
       decision,
       subjectId: snapshot.workerId,
@@ -2040,13 +2413,27 @@ export interface SyncPayload {
   pseudonym: string
   crewId: string
   level: RiskLevel
+  /** {@link supervisorActions}: what the supervisor console may show, nothing device-only. */
   actions: ActionId[]
   workMinPerHour: number
+  /**
+   * Legacy key, always {@link SYNC_WATER_NOT_SENT_ML}: the individual water figure stays on the device (see
+   * {@link payloadForSync}). Kept only because payload v1 receivers require the key; remove it in payload v2.
+   */
   waterMlPerHour: number
   ack: AckStatus
   t: number
   confidence: RiskAssessment['confidence']
 }
+
+/**
+ * The value the payload's legacy `waterMlPerHour` key carries for every worker [ENG, privacy]. The individual figure is
+ * scaled to body size and logged intake and is 0 while a worker fasts or may not drink, so it never leaves the device;
+ * the supervisor console takes the water schedule from the crew plan. A constant tells a receiver nothing about anyone.
+ * Basis: GOVERNANCE §13 item 18 ("send the crew's water schedule (or no figure) instead of 0 for that worker"); ILO
+ * code §6.14(1) minimise the intrusion [primary, S73].
+ */
+export const SYNC_WATER_NOT_SENT_ML = 0
 
 /** The exact keys of `SyncPayload`, in serialisation order. Basis: ARCHITECTURE §3 outbound payload. */
 export const SYNC_PAYLOAD_KEYS: readonly (keyof SyncPayload)[] = deepFreeze([
@@ -2064,10 +2451,13 @@ export const SYNC_PAYLOAD_KEYS: readonly (keyof SyncPayload)[] = deepFreeze([
 
 /**
  * Builds the minimal "level + action" payload that leaves the device: no name, no clinical key, no driver text.
- * Confidential follow-up actions are dropped; work minutes are floored to whole minutes (never more work than the
- * engine allowed) and water rounded to 10 mL — data minimisation [ENG]. Throws if the assessment belongs to another
+ * The actions are the supervisor-facing ones ({@link supervisorActions}: no confidential or device-only action, the
+ * re-assignment action for a worker not cleared for heat work), so the payload and the supervisor projection agree;
+ * work minutes are floored to whole minutes (never more work than the engine allowed); the individual water figure
+ * is not sent ({@link SYNC_WATER_NOT_SENT_ML}) — data minimisation [ENG]. Throws if the assessment belongs to another
  * worker. Basis: ARCHITECTURE §1 principle 5 and §3 ("outbound: {pseudonym, level, actions, workMinPerHour, ack}");
- * ILO code §6.14(1) minimise the intrusion, §10.8–10.9 [primary, S73]; UAE PDPL sensitive data [secondary, S62].
+ * ILO code §6.14(1) minimise the intrusion, §10.8–10.9 [primary, S73]; UAE PDPL sensitive data [secondary, S62];
+ * GOVERNANCE §13 item 18.
  */
 export function payloadForSync(
   assessment: RiskAssessment,
@@ -2082,9 +2472,9 @@ export function payloadForSync(
     pseudonym: profile.id,
     crewId: profile.crewId,
     level: assessment.level,
-    actions: assessment.actions.filter((a) => !CONFIDENTIAL_ACTIONS.includes(a)),
+    actions: supervisorActions(assessment.actions, assessment.drivers),
     workMinPerHour: Math.min(60, Math.max(0, Math.floor(assessment.workMinPerHour))),
-    waterMlPerHour: Math.round(assessment.waterMlPerHour / 10) * 10,
+    waterMlPerHour: SYNC_WATER_NOT_SENT_ML,
     ack,
     t: assessment.t,
     confidence: assessment.confidence,
@@ -2102,7 +2492,7 @@ export interface SyncInspection {
   keptOnDevice: string[]
 }
 
-const SENT_FROM_ASSESSMENT = new Set(['workerId', 'level', 'actions', 'workMinPerHour', 'waterMlPerHour', 't', 'confidence'])
+const SENT_FROM_ASSESSMENT = new Set(['workerId', 'level', 'actions', 'workMinPerHour', 't', 'confidence'])
 const SENT_FROM_PROFILE = new Set(['id', 'crewId'])
 
 /**

@@ -53,6 +53,17 @@ import {
   isProhibitedPurpose,
   payloadForSync,
   project,
+  POOLED_DRIVERS,
+  POOLED_DRIVER_IDS,
+  DEVICE_ONLY_ACTIONS,
+  SITE_SENSOR_DRIVER_IDS,
+  SUPERVISOR_DRIVER_RULES,
+  SYNC_WATER_NOT_SENT_ML,
+  notClearedForHeatWork,
+  supervisorActions,
+  supervisorDriver,
+  supervisorDriverRule,
+  supervisorDrivers,
   projectAndLog,
   purgeCheckins,
   purgeLevelHistory,
@@ -68,6 +79,12 @@ import {
   type UrineColor,
   type WorkerSnapshot,
 } from './privacy'
+import { ACTION_PRIORITY, DRIVER_IDS, createWorkerEngine, stepWorkerEngine } from './risk'
+import { computeSiteHeat } from './indices'
+import { HOUR_MS as HOUR, MINUTE_MS as MINUTE, epochFromLocal } from './time'
+import { getSite } from '../data/sites'
+import { CLINICAL_TEXT_PATTERN, PRIVATE_FACTOR_TEXT_PATTERN, supervisorSafeText } from './alerts'
+import { CATALOGS, CONSOLE_PHRASES } from '../i18n/messages'
 
 // ─────────────────────────────── Shared test data ───────────────────────────────
 
@@ -116,6 +133,7 @@ const ALL: DataField[] = [
   'ageYears',
   'location',
 ]
+// Wave 2d: no individual water figure for supervisors (GOVERNANCE §13 item 18; it reveals fasting and body size).
 const SUPERVISOR_VIEW: DataField[] = [
   'displayName',
   'crewId',
@@ -124,9 +142,9 @@ const SUPERVISOR_VIEW: DataField[] = [
   'workMinPerHour',
   'ackStatus',
   'drivers_nonclinical',
-  'waterMlPerHour',
 ]
 const NEVER_TO_SUPERVISOR: DataField[] = [
+  'waterMlPerHour',
   'hrBpm',
   'ctEstC',
   'psi',
@@ -163,9 +181,9 @@ const NO_CONSENT = consentOf({
 })
 
 const DRIVERS: RiskDriver[] = [
-  { id: 'wbgt_over_rel', channel: 'environment', text: 'WBGT above the REL', value: 33.1, unit: '°C', direction: 'raises', basis: 'NIOSH 2016 REL' },
-  { id: 'twl_high_zone', channel: 'regulation', text: 'TWL High zone', value: 108, unit: 'W/m²', direction: 'raises', basis: 'ADOSH-SF CoP 11.0 v4.0' },
-  { id: 'phs_limit_near', channel: 'projection', text: 'Strain limit within the hour', value: 12, unit: 'min', direction: 'raises', basis: 'ISO 7933:2023' },
+  { id: 'wbgt_over_limit', channel: 'environment', text: 'Effective WBGT 33.1 °C is 2.0 °C over the personal exposure limit for Rebar (412 W)', value: 33.1, unit: '°C', direction: 'raises', basis: 'NIOSH 2016 REL' },
+  { id: 'twl_zone_high', channel: 'regulation', text: 'TWL 108 W/m²: High Risk — High Zone', value: 108, unit: 'W/m²', direction: 'raises', basis: 'ADOSH-SF CoP 11.0 v4.0' },
+  { id: 'phs_minutes_to_limit', channel: 'projection', text: 'Heat-strain model: about 12 min to the body-heat limit at the current activity', value: 12, unit: 'min', direction: 'raises', basis: 'ISO 7933:2023' },
   { id: 'ct_est_high', channel: 'physiology', text: 'Estimated strain indicator high', value: 38.6, unit: '°C', direction: 'raises', basis: 'Buller 2013' },
   { id: 'symptom_t2', channel: 'symptoms', text: 'Dizziness reported', direction: 'raises', basis: 'ACSM 2023' },
   { id: 'urine_dark', channel: 'hydration', text: 'Urine shade 6', value: 6, direction: 'raises', basis: 'Armstrong 8-shade chart' },
@@ -513,8 +531,10 @@ describe('project — rules', () => {
     expect(r.reason).toMatch(/Never released for this purpose: hrBpm, symptoms/)
     expect(r.audit.fields).toEqual(['level'])
     const supervisorDrivers = project(snapshotOf(), { role: 'supervisor', actorId: 'S-01', purpose: 'safety_alerting' }, { now: T0, escalated: false }).data.drivers_nonclinical
+    // Wave 2d: only the site driver (the ADOSH zone) keeps its number; the personal-limit margin, the metabolic rate
+    // and the minutes to the limit become generic phrases.
     expect(supervisorDrivers?.map((d) => [d.channel, d.value])).toEqual([
-      ['environment', 33.1],
+      ['environment', undefined],
       ['regulation', 108],
       ['projection', undefined],
     ])
@@ -1279,7 +1299,8 @@ describe('payloadForSync — what leaves the device', () => {
       level: 'stop',
       actions: ['rest_shade_now', 'cool_down', 'restrict_fluids'],
       workMinPerHour: 14,
-      waterMlPerHour: 1010,
+      // Wave 2d: the individual water figure (1006 mL/h) stays on the device (GOVERNANCE §13 item 18).
+      waterMlPerHour: 0,
       ack: 'acknowledged',
       t: T0,
       confidence: 'medium',
@@ -1308,12 +1329,378 @@ describe('payloadForSync — what leaves the device', () => {
     expect(inspection.bytes).toBe(Buffer.byteLength(inspection.json, 'utf8'))
     expect(inspection.bytes).toBeLessThan(300)
     expect(inspection.keptOnDevice).toEqual(
-      expect.arrayContaining(['assessment.drivers', 'assessment.minutesToLimit', 'profile.riskFlags', 'profile.displayName', 'profile.consent']),
+      expect.arrayContaining(['assessment.drivers', 'assessment.minutesToLimit', 'assessment.waterMlPerHour', 'profile.riskFlags', 'profile.displayName', 'profile.consent']),
     )
     expect(inspection.keptOnDevice).not.toContain('assessment.level')
   })
 
   it('refuses to attach one worker’s assessment to another worker’s pseudonym', () => {
     expect(() => payloadForSync(assessmentOf({ workerId: 'W-OTHER' }), profileOf())).toThrow()
+  })
+})
+
+// ─────────────────────────────── Supervisor-facing drivers and actions (wave 2d) ───────────────────────────────
+
+/** Independent oracle: the site allow-list (drivers whose numbers describe the site, not the person). */
+const SITE_ALLOW_LIST = [
+  // rule pack
+  'twl_zone_high', 'twl_zone_medium', 'twl_zone_low', 'twl_zone_unrestricted', 'twl_unavailable', 'ordinary_work_prohibited', 'permit_to_work',
+  'unacclimatized_excluded', 'unacclimatized_not_alone', 'acclimatization_programme', 'midday_break', 'midday_break_window', 'wbgt_unavailable',
+  'wbgt_stop_limit', 'lone_work_not_allowed',
+  // site heat data and weather
+  'env_wind_default', 'env_solar_clear_sky', 'env_pressure_default', 'env_radiant_boost_ignored', 'env_radiant_boost_site_default', 'wbgt_measured',
+  'wbgt_meter_model_mismatch', 'wbgt_solver_not_converged', 'twl_out_of_valid_range', 'bb2002_backstop', 'env_conservative_default', 'env_data_stale',
+  'env_sensor_unavailable', 'env_series_wrong_site', 'env_source_no_coverage', 'env_stale_margin', 'env_source_site_sensor', 'env_source_forecast',
+  'env_source_archive', 'env_source_cached_forecast', 'env_source_conservative_default',
+  // site rest area and meter
+  'rest_area_cooled', 'meter_check_advised',
+].sort()
+const NON_CLINICAL: ChannelId[] = ['environment', 'regulation', 'projection']
+const DIGIT = /\d/
+/** A worst-case driver: every number a producer could put in a text (projection minutes, mass-scaled W, a margin). */
+const loaded = (id: string, channel: ChannelId, direction: RiskDriver['direction'] = 'raises'): RiskDriver => ({
+  id,
+  channel,
+  text: 'about 14 min to the limit; rest 35 % done; 1.2 L to drink; (412 W); 2.1 °C over the personal limit; 45 min work per hour',
+  value: 14.2,
+  unit: 'min',
+  direction,
+  basis: 'ISO 7933:2023 (412 W, 75 kg)',
+})
+
+describe('supervisor drivers — no individual numbers (wave 2d)', () => {
+  it('every engine driver id has a rule; clinical ids are withheld; every phrase id has a catalog phrase', () => {
+    const missing = DRIVER_IDS.filter((id) => !Object.prototype.hasOwnProperty.call(SUPERVISOR_DRIVER_RULES, id) && supervisorDriverRule(id) !== 'withhold')
+    expect(missing).toEqual([])
+    for (const id of DRIVER_IDS) {
+      const rule = supervisorDriverRule(id)
+      if (rule === 'phrase') expect(Object.prototype.hasOwnProperty.call(CATALOGS.en.driver, id), id).toBe(true)
+      if (/^(symptom_|symptoms_|physio_|hr_|ectemp_|psi_|urine_|fluid_)/.test(id)) expect(rule, id).toBe('withhold')
+    }
+    // Ids that reveal logged drinking, fasting or extra-care mode are withheld on every channel.
+    for (const id of ['phs_water_credit', 'phs_no_drinking', 'phs_no_drink_no_restart', 'water_paused_fasting', 'water_restricted', 'fasting_no_drink_reminders', 'conservative_checkin_due']) {
+      for (const ch of NON_CLINICAL) expect(supervisorDriver(loaded(id, ch)), `${id}/${ch}`).toBeNull()
+    }
+    // Default-deny: an unknown id is withheld; so is an id named like a prototype key.
+    for (const id of ['brand_new_driver', 'constructor', '__proto__', 'toString']) expect(supervisorDriver(loaded(id, 'environment'))).toBeNull()
+  })
+
+  it('the site allow-list is explicit (changing it is a deliberate, reviewed change)', () => {
+    const site = Object.keys(SUPERVISOR_DRIVER_RULES).filter((id) => SUPERVISOR_DRIVER_RULES[id] === 'site').sort()
+    expect(site).toEqual(SITE_ALLOW_LIST)
+  })
+
+  it('matrix: no digit in any supervisor driver text, no value or unit, a generic basis (site allow-list excepted)', () => {
+    const ids = [...new Set([...DRIVER_IDS, ...Object.keys(SUPERVISOR_DRIVER_RULES)])]
+    let checked = 0
+    for (const id of ids) {
+      for (const channel of NON_CLINICAL) {
+        for (const direction of ['raises', 'info'] as const) {
+          const view = supervisorDriver(loaded(id, channel, direction))
+          if (view === null) continue
+          checked += 1
+          if (SITE_ALLOW_LIST.includes(id)) {
+            // Site drivers keep their own text and numbers (they describe the site).
+            expect(view).toMatchObject({ id, text: loaded(id, channel).text, value: 14.2, unit: 'min' })
+            continue
+          }
+          expect(view.text, `${id}/${channel}`).not.toMatch(DIGIT)
+          expect(view.basis, `${id}/${channel}`).not.toMatch(/412|75 kg/)
+          expect(view.value, `${id}/${channel}`).toBeUndefined()
+          expect(view.unit, `${id}/${channel}`).toBeUndefined()
+          expect(supervisorSafeText(view.text), `${id}/${channel}: ${view.text}`).toBe(true)
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(150)
+  })
+
+  it('known answers: the projection countdown, the environment margin with the metabolic rate, a rest estimate', () => {
+    const minutes: RiskDriver = { id: 'phs_minutes_to_limit', channel: 'projection', text: 'Heat-strain model: about 14 min to the water-loss limit at the current activity', value: 14, unit: 'min', direction: 'raises', basis: 'ISO 7933:2023' }
+    const margin: RiskDriver = { id: 'wbgt_over_limit', channel: 'environment', text: 'Effective WBGT 33.1 °C is 2.0 °C over the personal exposure limit for Rebar (412 W)', value: 33.1, unit: '°C', direction: 'raises', basis: 'NIOSH 2016 REL; NIOSH 2016 RAL' }
+    const hold: RiskDriver = { id: 'phs_resume_hold', channel: 'projection', text: 'Rest before going back to this task: about 25 min of rest needed (rest 40 % done)', direction: 'raises', basis: 'ISO 7933:2023' }
+    expect(supervisorDriver(minutes)).toEqual({ id: 'phs_minutes_to_limit', channel: 'projection', text: CATALOGS.en.driver.phs_minutes_to_limit, direction: 'raises', basis: expect.stringContaining('ISO 7933') })
+    expect(supervisorDriver(margin)).toEqual({ id: 'wbgt_over_limit', channel: 'environment', text: CATALOGS.en.driver.wbgt_over_limit, direction: 'raises', basis: expect.stringContaining('NIOSH 2016') })
+    expect(supervisorDriver(hold)).toEqual({ id: 'not_cleared_for_heat_work', ...POOLED_DRIVERS.not_cleared_for_heat_work })
+    expect(POOLED_DRIVERS.not_cleared_for_heat_work.text).toBe('Not cleared for heat work now: assign cooler work; the device will say when to return.')
+  })
+
+  it('the work/rest cycle reads the same whether the tables enforce it or monitored mode makes it a guide', () => {
+    const enforced: RiskDriver = { id: 'work_rest_cycle', channel: 'environment', text: 'Work at most 30 min per hour, rest in shade the remainder', value: 30, unit: 'min/h', direction: 'raises', basis: 'b' }
+    const guide: RiskDriver = { ...enforced, text: 'Work/rest guide: about 30 min work per hour, rest in shade the remainder', direction: 'info', basis: 'b; monitoring' }
+    expect(supervisorDriver(guide)).toEqual(supervisorDriver(enforced))
+    expect(supervisorDriver(guide)?.direction).toBe('raises')
+  })
+})
+
+describe('supervisor drivers — pooled phrases (wave 2d)', () => {
+  const NOT_CLEARED_IDS = Object.keys(SUPERVISOR_DRIVER_RULES).filter((id) => SUPERVISOR_DRIVER_RULES[id] === 'not_cleared_for_heat_work')
+  const DEVICE_REST_IDS = Object.keys(SUPERVISOR_DRIVER_RULES).filter((id) => SUPERVISOR_DRIVER_RULES[id] === 'device_directed_rest')
+
+  it('covers every not-cleared and device-directed reason named in the brief', () => {
+    expect(NOT_CLEARED_IDS).toEqual(
+      expect.arrayContaining([
+        'phs_limit_reached',
+        'phs_recovery_review_required',
+        'phs_resume_hold',
+        'task_not_feasible_now',
+        'phs_drink_to_restart',
+        'acclimatization_budget_exhausted',
+        'resume_hold_environment',
+        'resume_hold_regulation',
+        'no_hot_work_today',
+        'clinical_latch',
+      ]),
+    )
+    expect([...DEVICE_REST_IDS].sort()).toEqual(['limit_stricter_personal', 'monitoring_fallback_tables', 'stricter_work_rest', 'wbgt_screen_monitored'])
+  })
+
+  it.each(['environment', 'regulation', 'projection'] as ChannelId[])('every not-cleared or device-directed reason on the %s channel gives one pooled driver (id, text, channel, direction, basis)', (channel) => {
+    for (const id of NOT_CLEARED_IDS) {
+      for (const direction of ['raises', 'info'] as const) expect(supervisorDriver(loaded(id, channel, direction)), id).toEqual({ id: 'not_cleared_for_heat_work', ...POOLED_DRIVERS.not_cleared_for_heat_work })
+    }
+    for (const id of DEVICE_REST_IDS) {
+      for (const direction of ['raises', 'info'] as const) expect(supervisorDriver(loaded(id, channel, direction)), id).toEqual({ id: 'device_directed_rest', ...POOLED_DRIVERS.device_directed_rest })
+    }
+  })
+
+  it('pooled drivers are listed once and first, whatever their sources and count', () => {
+    const a = supervisorDrivers([DRIVERS[1], loaded('phs_limit_reached', 'projection'), loaded('limit_stricter_personal', 'environment'), loaded('phs_resume_hold', 'projection')])
+    const b = supervisorDrivers([loaded('wbgt_screen_monitored', 'environment'), loaded('acclimatization_budget_exhausted', 'environment'), DRIVERS[1]])
+    expect(a.map((d) => d.id)).toEqual(['not_cleared_for_heat_work', 'device_directed_rest', 'twl_zone_high'])
+    expect(b).toEqual(a)
+    expect(notClearedForHeatWork([loaded('resume_hold_regulation', 'regulation')])).toBe(true)
+    expect(notClearedForHeatWork([loaded('phs_limit_reached', 'physiology')])).toBe(false) // clinical channels never count
+    expect(notClearedForHeatWork([DRIVERS[0], DRIVERS[1]])).toBe(false)
+  })
+
+  it('pooled texts equal the console phrases, carry no number and pass both supervisor text filters', () => {
+    expect(POOLED_DRIVER_IDS).toEqual(['not_cleared_for_heat_work', 'device_directed_rest'])
+    expect(POOLED_DRIVERS.not_cleared_for_heat_work.text).toBe(CONSOLE_PHRASES.en.not_cleared)
+    expect(POOLED_DRIVERS.device_directed_rest.text).toBe(CONSOLE_PHRASES.en.device_rest)
+    for (const id of POOLED_DRIVER_IDS) {
+      const d = POOLED_DRIVERS[id]
+      expect(d.text).not.toMatch(DIGIT)
+      expect(d.text).not.toMatch(CLINICAL_TEXT_PATTERN)
+      expect(d.text).not.toMatch(PRIVATE_FACTOR_TEXT_PATTERN)
+      expect(d.basis).not.toMatch(/fasting|consent|wearable|conservative|extra.?care/i)
+    }
+    // Every English console phrase passes both filters too (they are shown on consoles).
+    for (const [id, text] of Object.entries(CONSOLE_PHRASES.en)) {
+      expect(text, id).not.toMatch(CLINICAL_TEXT_PATTERN)
+      expect(text, id).not.toMatch(PRIVATE_FACTOR_TEXT_PATTERN)
+    }
+  })
+})
+
+describe('supervisor actions (wave 2d)', () => {
+  it('drop device-only prompts and confidential actions, keep a sensor check only for a site sensor, add re-assignment when not cleared', () => {
+    expect(DEVICE_ONLY_ACTIONS).toEqual(['drink_water', 'electrolytes', 'symptom_checkin', 'buddy_check'])
+    const all: ActionId[] = ['rest_shade_now', 'drink_water', 'electrolytes', 'symptom_checkin', 'buddy_check', 'occ_health_review', 'check_sensor', 'shade_breaks']
+    expect(supervisorActions(all, [])).toEqual(['rest_shade_now', 'shade_breaks'])
+    const meter: RiskDriver = { id: SITE_SENSOR_DRIVER_IDS[0], channel: 'environment', text: 'Check the site WBGT meter', direction: 'info', basis: 'b' }
+    expect(supervisorActions(all, [meter])).toEqual(['rest_shade_now', 'shade_breaks', 'check_sensor'])
+    expect(supervisorActions(['rest_shade_now', 'cool_down'], [loaded('phs_resume_hold', 'projection')])).toEqual(['rest_shade_now', 'cool_down', 'rotate_task'])
+    expect(supervisorActions(all, [], { keep: ['buddy_check'] })).toEqual(['rest_shade_now', 'shade_breaks', 'buddy_check'])
+  })
+
+  it('keep the engine action order (privacy.ts mirrors risk.ts ACTION_PRIORITY)', () => {
+    const shuffled = [...ACTION_PRIORITY].reverse()
+    const expected = ACTION_PRIORITY.filter((a) => !DEVICE_ONLY_ACTIONS.includes(a) && a !== 'occ_health_review' && a !== 'check_sensor')
+    expect(supervisorActions(shuffled, [])).toEqual(expected)
+  })
+})
+
+/** The private parts of a worker at the ISO 7933 water-loss limit: drinking normally vs fasting (drink-restricted). */
+function atWaterLossLimit(fasting: boolean): { snapshot: WorkerSnapshot; assessment: RiskAssessment; profile: WorkerProfile } {
+  const shared: RiskDriver[] = [
+    { id: 'phs_limit_reached', channel: 'projection', text: 'Heat-strain model: the water-loss limit is reached', direction: 'raises', basis: 'ISO 7933:2023' },
+    {
+      id: 'phs_recovery_review_required',
+      channel: 'projection',
+      text: fasting
+        ? 'Not drinking: the water-loss allowance is used up and rest does not restore it, so no more heat work this shift'
+        : 'Heat-strain limit reached: work resumes only after 30 min rest in a cooled area (rest 0 % done; check-in pending; sign-off pending; the water-loss limit is not yet restored)',
+      direction: 'raises',
+      basis: 'ISO 7933:2023 clause 5',
+    },
+    { id: 'twl_zone_low', channel: 'regulation', text: 'TWL 300 W/m²: Low Risk — Unrestricted Zone', value: 300, unit: 'W/m²', direction: 'info', basis: 'ADOSH-SF CoP 11.0 v4.0' },
+    {
+      id: 'wbgt_within_limit',
+      channel: 'environment',
+      text: `Effective WBGT 27.9 °C is ${fasting ? '0.4' : '3.4'} °C under the personal exposure limit for Rebar (${fasting ? 298 : 321} W)`,
+      value: 27.9,
+      unit: '°C',
+      direction: 'info',
+      basis: 'NIOSH 2016 REL; NIOSH 2016 RAL',
+    },
+    { id: 'rest_area_cooled', channel: 'environment', text: 'Rest breaks in the air-conditioned rest area (WBGT 25.0 °C)', value: 25, unit: '°C', direction: 'info', basis: 'COOLED_REST' },
+  ]
+  const own: RiskDriver[] = fasting
+    ? [
+        { id: 'phs_no_drink_no_restart', channel: 'hydration', text: 'Not drinking (fasting): no more heat work this shift', direction: 'info', basis: 'ISO 7933:2023 Annex B' },
+        { id: 'water_paused_fasting', channel: 'hydration', text: 'Fasting: water recommendation paused (0 mL/h)', value: 0, unit: 'mL/h', direction: 'info', basis: 'b' },
+        // A producer that put the restriction on a non-clinical channel is pooled too.
+        { id: 'phs_resume_hold', channel: 'projection', text: 'Drinking restricted: no more heat work this shift', direction: 'raises', basis: 'ISO 7933:2023' },
+      ]
+    : [
+        { id: 'phs_drink_to_restart', channel: 'projection', text: 'Drink and rest: about 1.2 L to drink before heat work can restart', value: 1.2, unit: 'L', direction: 'raises', basis: 'ISO 7933:2023' },
+        { id: 'phs_water_credit', channel: 'hydration', text: 'Logged drinks counted: 1.5 L', value: 1.5, unit: 'L', direction: 'info', basis: 'b' },
+      ]
+  const drivers = [...shared, ...own]
+  const actions: ActionId[] = fasting ? ['rest_shade_now', 'cool_down', 'symptom_checkin'] : ['rest_shade_now', 'cool_down', 'symptom_checkin', 'drink_water', 'electrolytes']
+  const profile = profileOf({ riskFlags: fasting ? ['fasting'] : [], consent: consentOf({ wearable: false }), hasWearable: false })
+  const assessment = assessmentOf({
+    level: 'stop',
+    drivers,
+    channels: [],
+    actions,
+    workMinPerHour: 0,
+    minutesToLimit: 0,
+    waterMlPerHour: fasting ? 0 : 709.76,
+    confidence: 'high',
+    dataQuality: { env: 'archive', physiology: 'absent', network: 'online', stale: false },
+  })
+  const snapshot = snapshotOf({
+    level: 'stop',
+    drivers,
+    actions,
+    workMinPerHour: 0,
+    minutesToLimit: 0,
+    waterMlPerHour: assessment.waterMlPerHour,
+    riskFlags: profile.riskFlags,
+    consent: profile.consent,
+    hrBpm: null,
+    ctEstC: null,
+    psi: null,
+    symptoms: [],
+    urineColor: null,
+  })
+  return { snapshot, assessment, profile }
+}
+
+/** Everything a supervisor receives from a projection, minus the audit entry (the worker's own log). */
+function supervisorOutput(snapshot: WorkerSnapshot, purpose: Purpose = 'safety_alerting') {
+  const r = project(snapshot, { role: 'supervisor', actorId: 'S-01', purpose }, { now: T0, escalated: false })
+  return { decision: r.decision, fields: r.fields, withheld: r.withheld, reason: r.reason, data: r.data }
+}
+
+describe('supervisor output — fasting and consent are not inferable (wave 2d)', () => {
+  it.each(['safety_alerting', 'operational_planning'] as Purpose[])('fasting vs drinking at the same limit: identical supervisor projection (%s) and sync payload', (purpose) => {
+    const drinking = atWaterLossLimit(false)
+    const fasting = atWaterLossLimit(true)
+    const a = supervisorOutput(drinking.snapshot, purpose)
+    const b = supervisorOutput(fasting.snapshot, purpose)
+    expect(b).toEqual(a)
+    expect(a.decision).toBe('allowed')
+    expect(a.data.actions).toEqual(['rest_shade_now', 'cool_down', 'rotate_task'])
+    expect(a.data.drivers_nonclinical?.[0]).toEqual({ id: 'not_cleared_for_heat_work', ...POOLED_DRIVERS.not_cleared_for_heat_work })
+    expect(a.data).not.toHaveProperty('waterMlPerHour')
+    expect(JSON.stringify(a.data)).not.toMatch(/fasting|drink|water-loss|1\.2 L|321|298|709/i)
+    expect(payloadForSync(fasting.assessment, fasting.profile, 'active')).toEqual(payloadForSync(drinking.assessment, drinking.profile, 'active'))
+    expect(payloadForSync(fasting.assessment, fasting.profile, 'active').waterMlPerHour).toBe(SYNC_WATER_NOT_SENT_ML)
+  })
+
+  it('the buddy sees the same partner card for both (level, actions, acknowledgement)', () => {
+    const view = (s: WorkerSnapshot) => project(s, { role: 'buddy', actorId: 'B-01', purpose: 'safety_alerting' }, { now: T0, escalated: false }).data
+    expect(view(atWaterLossLimit(true).snapshot)).toEqual(view(atWaterLossLimit(false).snapshot))
+  })
+
+  it('wearable consent declined vs consented (monitored mode): identical supervisor output except the released operational fields', () => {
+    const base = (consented: boolean): WorkerSnapshot => {
+      const drivers: RiskDriver[] = [
+        { id: 'wbgt_over_limit', channel: 'environment', text: 'Effective WBGT 31.2 °C is 1.1 °C over the personal exposure limit for Rebar (412 W)', value: 31.2, unit: '°C', direction: 'raises', basis: 'NIOSH 2016 REL; NIOSH 2016 RAL' },
+        consented
+          ? { id: 'wbgt_screen_monitored', channel: 'environment', text: 'WBGT is above the table limit: your own heat-strain projection (ISO 7933) and wearable monitoring are in use', direction: 'raises', basis: 'ISO 7243:2017; ACGIH TLV; NIOSH 2016' }
+          : { id: 'monitoring_fallback_tables', channel: 'environment', text: 'Wearable monitoring is off (consent, wearable or setting): the table work/rest limits apply again', direction: 'raises', basis: 'ISO 7243:2017; ACGIH TLV; NIOSH 2016' },
+        consented
+          ? { id: 'work_rest_cycle', channel: 'environment', text: 'Work/rest guide: about 30 min work per hour, rest in shade the remainder', value: 30, unit: 'min/h', direction: 'info', basis: 'b; monitoring' }
+          : { id: 'work_rest_cycle', channel: 'environment', text: 'Work at most 30 min per hour, rest in shade the remainder', value: 30, unit: 'min/h', direction: 'raises', basis: 'b' },
+        { id: 'twl_zone_medium', channel: 'regulation', text: 'TWL 160 W/m²: Medium Risk — Warning Zone', value: 160, unit: 'W/m²', direction: 'raises', basis: 'ADOSH-SF CoP 11.0 v4.0' },
+        consented
+          ? { id: 'physio_no_warning', channel: 'physiology', text: 'HR 128 bpm; strain indicator in band', value: 128, unit: 'bpm', direction: 'info', basis: 'Buller 2013' }
+          : { id: 'physio_unavailable_not_consented', channel: 'physiology', text: 'Wearable not consented', direction: 'info', basis: 'ARCHITECTURE §7' },
+      ]
+      return snapshotOf({
+        level: 'high',
+        drivers,
+        actions: consented ? ['shade_breaks', 'drink_water', 'buddy_check'] : ['shade_breaks', 'drink_water', 'check_sensor'],
+        workMinPerHour: 30,
+        minutesToLimit: consented ? 48 : null,
+        hrBpm: consented ? 128 : null,
+        ctEstC: consented ? 37.9 : null,
+        consent: consentOf({ wearable: consented }),
+        riskFlags: [],
+      })
+    }
+    const consented = supervisorOutput(base(true))
+    const declined = supervisorOutput(base(false))
+    expect(declined).toEqual(consented)
+    expect(consented.data.drivers_nonclinical?.map((d) => d.id)).toEqual(['device_directed_rest', 'wbgt_over_limit', 'work_rest_cycle', 'twl_zone_medium'])
+    expect(JSON.stringify(consented.data)).not.toMatch(/consent|wearable|monitor|bpm|412/i)
+    // The released operational fields (level, work minutes) are the only ones that may differ, and only because the
+    // enforcing limits differ (wave 2d principle 2): change them and nothing else changes.
+    const looser = supervisorOutput({ ...base(true), level: 'caution', workMinPerHour: 45 })
+    expect({ ...looser.data, level: declined.data.level, workMinPerHour: declined.data.workMinPerHour }).toEqual(declined.data)
+  })
+
+  it('the sync payload never carries the individual water figure and agrees with the supervisor actions', () => {
+    const { assessment, profile, snapshot } = atWaterLossLimit(false)
+    const p = payloadForSync(assessment, profile, 'active')
+    expect(p.waterMlPerHour).toBe(SYNC_WATER_NOT_SENT_ML)
+    expect(p.actions).toEqual(supervisorOutput(snapshot).data.actions)
+  })
+})
+
+describe('supervisor view of real engine output (wave 2d, safety review HIGH reproduction)', () => {
+  // The safety review's probe (privacy-fasting2.mts): a moderate task in shade, 36 °C / 30 %, cooled rest area, one
+  // worker drinking normally and one fasting, until the ISO 7933 water-loss limit is reached.
+  const site = { ...getSite('musaffah'), radiantBoostC: 0, restArea: 'cooled_cabin' as const }
+  const t0 = epochFromLocal('2025-07-20T06:00')
+  const heat = computeSiteHeat({ t: t0, taC: 36, rhPct: 30, pHpa: 1005, wind10Ms: 2, ghiWm2: 700, radiationWindowMin: 0, radiantBoostC: 0, source: 'archive' }, site)
+  const task = { id: 'T', name: 'Rebar', workClass: 'moderate' as const, inSun: false, durationMin: 600, flexible: true }
+  const SITE_IDS = new Set(SITE_ALLOW_LIST)
+
+  function run(fasting: boolean) {
+    const profile = profileOf({ id: 'W1', riskFlags: fasting ? ['fasting'] : [], consent: consentOf({ wearable: false }), hasWearable: false, clothing: 'work_clothes', daysOnSite: 400 })
+    let st = createWorkerEngine(profile, t0)
+    const views: Array<{ t: number; data: ReturnType<typeof supervisorOutput>['data'] }> = []
+    let atLimit: { t: number; snapshot: WorkerSnapshot; assessment: RiskAssessment } | null = null
+    for (let t = t0; t < t0 + 11 * HOUR && atLimit === null; t += MINUTE) {
+      const r = stepWorkerEngine(st, { now: t, profile, task, location: 'shade', heat, network: 'online', restArea: 'cooled_cabin', fastingNow: fasting, resumeTask: task })
+      st = r.state
+      const snapshot = createWorkerSnapshot(profile, r.assessment)
+      if ((t - t0) % (5 * MINUTE) === 0 || r.detail.phsRecovery) views.push({ t, data: supervisorOutput(snapshot).data })
+      if (r.detail.phsRecovery) atLimit = { t, snapshot, assessment: r.assessment }
+    }
+    return { profile, views, atLimit }
+  }
+
+  it('fasting or not, at the water-loss limit the supervisor sees the pooled "not cleared" driver and re-assignment, never a number, drink wording or water figure', () => {
+    for (const fasting of [false, true]) {
+      const { profile, views, atLimit } = run(fasting)
+      expect(atLimit, `fasting=${fasting}`).not.toBeNull()
+      // The probe's known timing: about 157 min (fasting) and 426 min (drinking) into the shift.
+      expect((atLimit!.t - t0) / MINUTE).toBeGreaterThan(fasting ? 100 : 300)
+      expect(views.length).toBeGreaterThan(20)
+      const sup = supervisorOutput(atLimit!.snapshot).data
+      expect(sup.level).toBe('stop')
+      expect(sup.drivers_nonclinical?.[0]).toEqual({ id: 'not_cleared_for_heat_work', ...POOLED_DRIVERS.not_cleared_for_heat_work })
+      expect(sup.actions).toContain('rotate_task')
+      for (const a of DEVICE_ONLY_ACTIONS) expect(sup.actions).not.toContain(a)
+      expect(sup).not.toHaveProperty('waterMlPerHour')
+      expect(payloadForSync(atLimit!.assessment, profile, 'active').waterMlPerHour).toBe(SYNC_WATER_NOT_SENT_ML)
+      // Every supervisor view along the shift: numbers only in site drivers; no clinical, fasting or consent words.
+      for (const v of views) {
+        for (const d of v.data.drivers_nonclinical ?? []) {
+          if (!SITE_IDS.has(d.id)) {
+            expect(d.text, `${d.id} at +${(v.t - t0) / MINUTE} min`).not.toMatch(DIGIT)
+            expect(d.value).toBeUndefined()
+          }
+          expect(supervisorSafeText(d.text), d.text).toBe(true)
+          expect(d.text).not.toMatch(/drink|water-loss/i)
+        }
+      }
+    }
   })
 })

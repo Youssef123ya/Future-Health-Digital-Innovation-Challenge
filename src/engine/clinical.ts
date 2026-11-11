@@ -581,6 +581,10 @@ export const US_FL_OZ_L = 0.0295735295625
  * Table 3-6 note); cup 8 US fl oz, "1 cup every 15-20 min" (NIOSH 2016 executive summary); reminder 250 mL every
  * 20 min = 0.75 L/h [ENG]; electrolyte drink after 120 min of sweating (NIOSH 2016 "prolonged sweating lasting several
  * hours"; value [ENG]). Caps computed from the exact US-quart definition (equal to the oracle's values).
+ * Reminders follow heat exposure ({@link drinkReminderExposure}): hot work and the 30 min after it [ENG: rehydration
+ * after a hot bout, the simulator's former rule], or rest/idle outside a cooled area at WBGT ≥ 78 °F ≈ 25.6 °C — the
+ * lower bound of TB MED 507 (2022) heat category 1, whose fluid guidance covers easy work and rest (Table 3-1) —
+ * converted exactly from °F (25.56 °C, protective by 0.04 °C against the rounded value).
  */
 export const FLUID = {
   HOURLY_CAP_L: 1.5 * US_QUART_L,
@@ -589,7 +593,43 @@ export const FLUID = {
   REMINDER_L: 0.25,
   REMINDER_EVERY_MIN: 20,
   ELECTROLYTE_AFTER_MIN: 120,
+  /** Rest/idle outside a cooled area counts as heat exposure from this WBGT (°C): TB MED 507 (2022) heat category 1, 78 °F. */
+  EXPOSED_REST_WBGT_C: ((78 - 32) * 5) / 9,
+  /** Reminders continue this long after the last hot-work minute [ENG]. */
+  REMINDER_AFTER_HOT_WORK_MIN: 30,
 } as const
+
+/** Why a worker counts as heat-exposed for drink reminders (null = not exposed). */
+export type HeatExposure = 'hot_work' | 'heat_rest' | null
+
+/** Inputs of {@link drinkReminderExposure}. */
+export interface DrinkExposureInput {
+  /** Doing hot work now (a task outside a cooled space). */
+  hotWorkNow: boolean
+  /** Minutes since the last hot-work minute this shift (null = none). */
+  minutesSinceHotWork: number | null
+  /** Resting or idle (no task) outside a cooled rest area. */
+  restingOutsideCooled: boolean
+  /** WBGT at the worker's location (°C), as the engine assesses it (resting clothing and data margin included). */
+  wbgtC: number
+}
+
+/**
+ * Heat exposure for drink reminders (FLUID): 'hot_work' while doing hot work or within 30 min after the last hot-work
+ * minute [ENG]; 'heat_rest' while resting or idle outside a cooled rest area at WBGT ≥ 25.56 °C (TB MED 507 (2022) heat
+ * category 1 lower bound, 78 °F; its fluid guidance covers easy work and rest); null otherwise (cooled rest, cool shade).
+ * A non-finite WBGT counts as exposed while resting outside a cooled area (fail-safe [ENG]). Pure.
+ */
+export function drinkReminderExposure(input: DrinkExposureInput): HeatExposure {
+  if (input.hotWorkNow) return 'hot_work'
+  const since = input.minutesSinceHotWork
+  if (since !== null && Number.isFinite(since) && since >= 0 && since < FLUID.REMINDER_AFTER_HOT_WORK_MIN) return 'hot_work'
+  if (input.restingOutsideCooled && !(input.wbgtC < FLUID.EXPOSED_REST_WBGT_C)) return 'heat_rest'
+  return null
+}
+
+/** The reminder shown this minute: 'drink' (250 mL due), 'shade' (fasting while exposed: rest in shade instead), or null. */
+export type DrinkReminder = 'drink' | 'shade' | null
 
 /** Fluid-cap flags (names as in the reference fixtures). */
 export type FluidFlag = 'OVER_HOURLY_CAP' | 'OVER_DAILY_CAP'
@@ -616,6 +656,11 @@ export interface FluidContext {
   symptoms?: readonly SymptomId[]
   /** Count only this worker's intakes. */
   workerId?: string
+  /**
+   * Heat exposure now ({@link drinkReminderExposure} ≠ null): reminders are sent only while exposed. Absent = exposed
+   * (the behaviour before wave 2d, for callers that do not know the exposure).
+   */
+  exposed?: boolean
 }
 
 /** Result of {@link fluidStatus}. */
@@ -623,10 +668,20 @@ export interface FluidStatus {
   rolling60L: number
   todayL: number
   flags: FluidFlag[]
+  /** Reminders may be sent now: exposed, not fasting and not over the hourly cap. */
   sendDrinkReminders: boolean
   /** When the next 250 mL reminder is due (≤ now means due now); null when reminders are suppressed. */
   nextReminderAtMs: number | null
   reminderMl: number
+  /** Heat exposure as given (absent context value → true). */
+  exposed: boolean
+  /**
+   * The reminder state now: 'drink' — a 250 mL reminder is due (it stays due until a drink is logged; the next one is
+   * due 20 min after the last logged drink); 'shade' — fasting while exposed: no drink reminder, rest in shade and cool
+   * down instead (physio_and_clinical.md §7 fasting row); null — none (not exposed, over the hourly cap, not due, or
+   * suspected over-drinking).
+   */
+  reminder: DrinkReminder
   /** An electrolyte drink is suggested (≥ 120 min of continuous sweating). */
   electrolyteDue: boolean
   /** 0; 1 over the daily cap; 2 suspected hyponatraemia; 3 with confusion or seizure. */
@@ -645,8 +700,8 @@ const SLOW_DOWN_MESSAGE = 'Slow down - too much water can be dangerous. Eat salt
  * rolling 60-min and local-day totals vs the caps; over the hourly cap → reminders stop and "slow down" is shown;
  * over the daily cap → warning, T1; over either cap with headache, nausea, swelling or vomiting → suspected
  * hyponatraemia, T2 with `restrict_fluids` (confusion or seizure → T3); reminders of 250 mL every 20 min otherwise
- * [ENG], none while fasting; an electrolyte drink after 120 min of sweating, never salt tablets (TB MED 507 §3-7;
- * NIOSH 2016).
+ * [ENG] while heat-exposed (`ctx.exposed`, absent = exposed), none while fasting (rest-in-shade guidance instead); an
+ * electrolyte drink after 120 min of sweating, never salt tablets (TB MED 507 §3-7; NIOSH 2016).
  */
 export function fluidStatus(intakes: readonly FluidIntake[], now: number, ctx: FluidContext = {}): FluidStatus {
   const dayStart = localDayStartMs(now)
@@ -670,7 +725,9 @@ export function fluidStatus(intakes: readonly FluidIntake[], now: number, ctx: F
   const severe = hyponatraemiaSuspected && (symptoms.includes('confusion') || symptoms.includes('seizure'))
   const tier: ClinicalTier = severe ? 3 : hyponatraemiaSuspected ? 2 : overDaily ? 1 : 0
   const basis = [`${SRC.TBMED} Tables 3-2, 3-3, 3-6`, SRC.NIOSH16]
-  const nextReminderAtMs = cap.sendDrinkReminders ? (lastT === null ? now : Math.max(now, lastT + FLUID.REMINDER_EVERY_MIN * MINUTE_MS)) : null
+  const exposed = ctx.exposed !== false
+  const sendDrinkReminders = cap.sendDrinkReminders && exposed
+  const nextReminderAtMs = sendDrinkReminders ? (lastT === null ? now : Math.max(now, lastT + FLUID.REMINDER_EVERY_MIN * MINUTE_MS)) : null
   const electrolyteDue =
     typeof ctx.sweatingSinceMs === 'number' && now - ctx.sweatingSinceMs >= FLUID.ELECTROLYTE_AFTER_MIN * MINUTE_MS
 
@@ -689,13 +746,22 @@ export function fluidStatus(intakes: readonly FluidIntake[], now: number, ctx: F
     if (nextReminderAtMs !== null && nextReminderAtMs <= now) actions.add('drink_water')
     if (electrolyteDue) actions.add('electrolytes')
   }
+  const reminder: DrinkReminder = hyponatraemiaSuspected
+    ? null
+    : exposed && ctx.fastingNow === true
+      ? 'shade'
+      : nextReminderAtMs !== null && nextReminderAtMs <= now
+        ? 'drink'
+        : null
   return {
     rolling60L,
     todayL,
     flags: cap.flags,
-    sendDrinkReminders: cap.sendDrinkReminders,
+    sendDrinkReminders,
     nextReminderAtMs,
     reminderMl: FLUID.REMINDER_L * 1000,
+    exposed,
+    reminder,
     electrolyteDue,
     tier,
     hyponatraemiaSuspected,
@@ -952,6 +1018,8 @@ export interface HydrationChannelInput {
   fastingNow?: boolean
   sweatingSinceMs?: number | null
   workerId?: string
+  /** Heat exposure now (drink reminders only while exposed; {@link drinkReminderExposure}); absent = exposed. */
+  exposed?: boolean
 }
 
 /** Hydration channel result: a {@link ChannelResult} plus tier, actions and the urine/fluid detail. */
@@ -969,7 +1037,8 @@ export interface HydrationChannelResult extends ChannelResult {
  * chart; McKenzie 2015); logged intake over the hourly cap (1.42 L/h) stops reminders and shows "slow down"; over the
  * daily cap (11.36 L) → high; over a cap with symptoms → stop with `restrict_fluids` (suspected hyponatraemia;
  * confusion or seizure → emergency) (TB MED 507 2022; NIOSH 2016). No drink advice while fasting or over the hourly
- * cap. Unavailable without consent or without any reading today.
+ * cap; drink reminders only while heat-exposed (`input.exposed`, absent = exposed; {@link drinkReminderExposure}).
+ * Unavailable without consent or without any reading today.
  */
 export function hydrationChannel(input: HydrationChannelInput): HydrationChannelResult {
   const list = todaysCheckins(input.checkins, input.now, input.consented, input.workerId)
@@ -983,6 +1052,7 @@ export function hydrationChannel(input: HydrationChannelInput): HydrationChannel
     sweatingSinceMs: input.sweatingSinceMs,
     symptoms: latest?.symptoms ?? [],
     workerId: input.workerId,
+    ...(input.exposed !== undefined ? { exposed: input.exposed } : {}),
   })
   const drivers: RiskDriver[] = []
   const actions = new Set<ActionId>()

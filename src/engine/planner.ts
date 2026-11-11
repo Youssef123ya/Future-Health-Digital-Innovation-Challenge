@@ -5,31 +5,47 @@
  *
  * For one site-day it takes the hourly heat forecast (WBGT in sun and shade, TWL), the crews with their tasks and
  * members, and the shift, and returns per crew an ordered list of blocks with the work/rest cycle of every hour, the
- * water to provide and notes, plus a comparison with a naive plan (listed order from the shift start, midday ban only).
+ * water to provide and notes, per-member caps for members on an acclimatisation schedule, plus a comparison with a naive
+ * plan (listed order within the task windows, midday ban only).
  *
  * Rules (stricter always wins; nothing here can lower protection below the risk engine's):
- * - binding worker per crew [ENG]: NIOSH RAL if any member is unacclimatised, acclimatising or in conservative mode,
- *   else REL; the worst member clothing adjustment (task PPE overrides the member's clothing, +1 °C for a hood); the
- *   highest member metabolic rate (body-mass scaling). Reasons are never disclosed per worker;
+ * - per person where the standards differ per person (wave 2d): the crew rate is planned for the crew's acclimatised
+ *   members — NIOSH REL (limits.selectExposureLimit('acclimatized', false)), the pack's base work/rest tier, their
+ *   worst clothing adjustment (task PPE overrides the member's clothing, +1 °C for a hood) and their highest metabolic
+ *   rate (body-mass scaling). Members on an acclimatisation schedule (status 'unacclimatized' or 'acclimatizing'; crew
+ *   members missing from `workers`, fail-safe) get personal caps per block-hour ({@link MemberCapHour}): NIOSH RAL with
+ *   their own size and clothing and the pack's next-stricter work/rest tier (both applied by their devices), the ADOSH
+ *   TG v4.0 Table 1 note b exclusion, the acclimatisation exposure ramp and an ISO 7933 screen with an unacclimatised
+ *   reference worker; a cap never exceeds the crew rate. The supervisor sees the schedule and the cap (an employer
+ *   duty: ADOSH-SF CoP 11.0 v4.0 §3.2(b)(i)), never the history or the reason. With no acclimatised member (or no
+ *   known member) the crew rate is that acclimatisation-schedule rate (RAL, next-stricter tier, unacclimatised screen).
+ *   Conservative mode and fasting are private and are not planner inputs: the device applies them (risk.ts), and the
+ *   plan carries one neutral note that devices may direct extra rest ({@link DEVICE_REST_NOTE});
  * - rest term: the site's rest area (Site.restArea) — an air-conditioned cabin at risk.ts COOLED_REST (ADOSH-SF CoP
  *   11.0 v4.0 §3.2(c)) or, where only shade exists, the hourly shade WBGT; an explicit `restAreaWbgtC` overrides it;
  *   a rest area is never taken as hotter than the shade [ENG];
  * - allowed work per hour = min(NIOSH/ACGIH 1-h TWA allowed fraction (limits.allowedWorkFraction), the rule pack's
- *   TWL-zone cycle (regulation.regulatoryFloor; the next-stricter tier in conservative mode via
- *   regulation.stricterWorkRest, shared with risk.ts, ARCHITECTURE §5)), floored to whole 5-min steps; an hour whose
- *   allowance is below the ARCHITECTURE §5 stop band (f < 0.25) gets no work at all, so the plan never schedules work
- *   the risk engine would stop;
+ *   TWL-zone cycle (regulation.regulatoryFloor)), floored to whole 5-min steps; an hour whose allowance is below the
+ *   ARCHITECTURE §5 stop band (f < 0.25) gets no work at all, so the plan never schedules work the risk engine would
+ *   stop. Plan basis 'monitored' ({@link PlanBasis}, occupational-health sign-off): for a crew rate planned for
+ *   acclimatised members the WBGT tables are a screen (ISO 7243:2017, ACGIH TLV decision flow, NIOSH 2016) and the
+ *   rate is set by the rule pack (always enforced) and the ISO 7933 screen, in the task-hours where every device can
+ *   confirm monitoring (not the hour of the device warm-up at the shift start, verified ISO 7933 clothing values,
+ *   inputs within the model's validity range; BlockHour.monitored); personal caps keep the tables;
  * - fixed tasks first at their earliest start; flexible tasks (heaviest in-sun first) at the start inside their window
  *   (earliestStart/latestEnd ∩ shift) that completes the most work in the fewest crew-minutes, i.e. maximises the
  *   allowed work fraction (ties → earlier);
- * - ISO 7933 screen ({@link PHS_SCREEN}): the planned day is simulated for the crew's reference worker with the risk
- *   engine's own PHS inputs, and each task-hour is cut to the work the engine's projection allows (end-of-bout
- *   projection ≥ 15 min, no limit during the following rest), so following the plan never triggers a projection stop
- *   for that worker at the planned conditions; the schedule is re-placed with the lowered allowances;
+ * - ISO 7933 screen ({@link PHS_SCREEN}): the planned day is simulated minute by minute for the reference worker as
+ *   the device steps it (risk.ts buildPhsInput, ENGINE_PHS_OPTIONS, no PHS minute at the shift-start step, projections
+ *   at every activity change and every 5 min, counted down in between); work bouts, the rest after them and idle
+ *   stretches must keep the projection ≥ highFromMin + 1 min. Task-hours are cut and the day re-placed until nothing
+ *   is cut, then a verification pass checks the final layout. When rest alone reaches a limit within the shift no
+ *   plan can be followed without a device stop: no work is planned and 'phs_rest_limit' says why;
  * - outdoor-in-sun work never overlaps the midday break (MoHRE MR 44/2022 via the rule pack);
- * - water per crew-hour from limits.recommendWaterMlPerHour with the pack's zone minimum; ADOSH-unacclimatised members
- *   (TG v4.0 Table 1 note b: new, or > 14 days off, first 7 days back — as in risk.ts) are flagged in hours whose TWL
- *   zone excludes them ("no unacclimatised person to work") with a reassignment hint.
+ * - water per crew-hour from limits.recommendWaterMlPerHour with the pack's zone minimum (the crew's highest metabolic
+ *   rate); ADOSH-unacclimatised members (TG v4.0 Table 1 note b: new, or > 14 days off, first 7 days back — as in
+ *   risk.ts) get a personal cap of 0 in hours whose TWL zone excludes them ("no unacclimatised person to work") and a
+ *   reassignment hint.
  *
  * Hour conditions: the hourly forecast is interpolated linearly in time; each local hour uses the time-average WBGT
  * (the 1-h TWA basis of NIOSH/ACGIH) and the minimum TWL within the hour (zone thresholds are instantaneous; protective
@@ -56,9 +72,9 @@ import {
 import type { ExposureLimitId } from './limits'
 import { DEFAULT_RULE_PACK, middayBreakWindow, regulatoryFloor, stricterWorkRest, twlWorkCategory, twlZone } from './regulation'
 import type { RulePack, RulePackId, TwlZone, TwlZoneId } from './regulation'
-import { conservativeMode } from './clinical'
 import { COOLED_REST, ENGINE_PHS_OPTIONS, RISK_THRESHOLDS, buildPhsInput, type PhsClimate, type PhsInputs, type WorkerLocation } from './risk'
-import { minutesToLimit, phsInitialState, phsStep, type PhsState } from './phs'
+import { minutesToLimit, phsInitialState, phsStep, phsValidity, type PhsState } from './phs'
+import { ECTEMP_RULES } from './physio'
 import { HOUR_MS, MINUTE_MS, epochFromLocal, hhmmToMinutes, minutesToHhmm } from './time'
 
 // ─────────────────────────────── Constants ───────────────────────────────
@@ -106,32 +122,79 @@ export const SHIFT_START_CANDIDATES: readonly string[] = ['05:00', '06:00', '07:
 export const SHIFT_WORK_TIE_TOLERANCE = 0.05
 
 /**
- * ISO 7933 (PHS) screen of the planned day for the crew's reference worker [ENG]: 75 kg / 1.75 m, the task's clothing
- * (else the crew's worst-CAV clothing), acclimatised unless a known member is not, drinking allowed with the ISO 5 %
- * water-loss criterion (no logged intake at plan time). The planned day is simulated block-hour by block-hour from the
- * shift start with the engine's own PHS inputs (risk.ts buildPhsInput, ENGINE_PHS_OPTIONS): in each block-hour the
- * work bout (its planned work, whole minutes, at the task's location) comes first, then rest at the site's rest area
- * (COOLED_REST for a cooled cabin, else shade). Each task-hour keeps the largest W' ≤ W (5-min steps) for which the
- * projection at the task at the end of the bout is ≥ highFromMin (15 min), the resting projection right after it is too,
- * and no limit is reached during the rest that follows until the next planned bout (or the shift end) plus 15 min — so
- * the device never projects < 15 min at rest either; W' below minBoutMin means no work that hour ('phs_not_feasible'). The schedule is then re-placed with
- * the lowered task-hour allowances (at most maxPasses times; allowances only go down) and the last pass's cuts are
- * kept, so following the plan exactly never triggers a projection stop for the reference worker at the planned
- * conditions (plan and monitor agree). Basis: ISO 7933:2023; engine/risk.ts RISK_THRESHOLDS.projection and .resume.
+ * ISO 7933 (PHS) screen of the planned day [ENG]. Reference worker 75 kg / 1.75 m: acclimatised for a crew rate planned
+ * for acclimatised members, unacclimatised for the personal caps of members on an acclimatisation schedule (and for a
+ * crew with no acclimatised member); the task's clothing, else the worst-CAV clothing of the members planned for;
+ * drinking allowed with the ISO 5 % water-loss criterion (no logged intake at plan time: logged drinking only raises the
+ * device's limit). Fasting is private and not screened (the neutral {@link DEVICE_REST_NOTE} covers device-directed
+ * rest). The planned day is stepped minute by minute as the device steps it (risk.ts stepWorkerEngine with the
+ * engine's own PHS inputs, buildPhsInput and ENGINE_PHS_OPTIONS): the state starts from the minute-0 activity with no PHS
+ * minute stepped at the shift-start step, and minute T steps the activity and climate of minute T. In each block-hour
+ * the work bout (whole minutes, floored, at the task's location) comes first, then rest at the site's rest area
+ * (COOLED_REST for a cooled cabin, else shade); idle stretches are rest too. The device's projection is emulated as it
+ * is made: fresh at every change of the activity key and every RISK_THRESHOLDS.projection.everyMin minutes (5), counted
+ * down in between; at every minute of work, of the rest after it and of idle stretches the countdown must stay
+ * ≥ highFromMin + endMarginMin (16 min), so the device (stop below 15) never stops or holds the reference worker.
+ * Each task-hour keeps the largest W' ≤ W (5-min steps) whose bout and following rest (through the next planned bout
+ * or the shift end) pass; W' below minBoutMin means no work that hour ('phs_not_feasible'). The day is re-placed with
+ * the lowered task-hour allowances until a pass cuts nothing (allowances only go down on a finite lattice, so this
+ * terminates; maxPasses is a safety net), then a verification pass steps the final layout and zeroes any block-hour
+ * still failing (with a warning). When rest alone from the shift start fails within the shift no work can avoid a
+ * device stop (work only adds heat and sweat): no work is planned and 'phs_rest_limit' gives the time and mitigations.
+ * Tested (planner.test.ts, planner.wave2d.test.ts), at constant conditions: following the plan minute by minute through
+ * createWorkerEngine / stepWorkerEngine gives no projection stop and no hold for a worker of the reference size — the
+ * acclimatised reference on the crew layout (cooled cabin and shade rest, the safety review's counter-examples, a
+ * monitored plan with valid monitoring) and a member on an acclimatisation schedule on its personal caps; when rest
+ * alone reaches a limit, the warning time is one minute before the device's first stop. Not shown: forecast error
+ * (varying conditions), other body sizes, and a member following the crew layout instead of its caps (that does stop).
+ * Basis: ISO 7933:2023; engine/risk.ts RISK_THRESHOLDS.projection and .resume.
  */
 export const PHS_SCREEN = {
   referenceMassKg: DEFAULT_BODY_MASS_KG,
   referenceHeightCm: DEFAULT_HEIGHT_CM,
   highFromMin: RISK_THRESHOLDS.projection.highFromMin,
+  /** Protective margin on every screened projection [ENG]: one minute absorbs sub-minute timing differences from the device. */
+  endMarginMin: 1,
+  /** The device projects at every activity change and every this many minutes (risk.ts RISK_THRESHOLDS.projection.everyMin). */
+  projectionEveryMin: RISK_THRESHOLDS.projection.everyMin,
   minBoutMin: RISK_THRESHOLDS.resume.minBoutMin,
-  /** Placement passes with the lowered allowances [ENG]: enough for the cuts to settle in practice; always ends cut-consistent. */
-  maxPasses: 4,
+  /** Safety net on the re-placement passes [ENG]: they stop when a pass cuts nothing; a verification pass always follows. */
+  maxPasses: 32,
   basis:
-    'ISO 7933:2023 projection (engine/risk.ts buildPhsInput, ENGINE_PHS_OPTIONS); RISK_THRESHOLDS.projection.highFromMin (stop < 15 min) and RISK_THRESHOLDS.resume.minBoutMin (10 min); [ENG] reference worker 75 kg / 1.75 m, task clothing, least-acclimatised known member, drinking allowed (ISO 5 %), one work bout per block-hour followed by rest in the site rest area',
+    'ISO 7933:2023 projection (engine/risk.ts buildPhsInput, ENGINE_PHS_OPTIONS, stepWorkerEngine minute convention); RISK_THRESHOLDS.projection.highFromMin (stop < 15 min), .everyMin (5) and RISK_THRESHOLDS.resume.minBoutMin (10 min); [ENG] reference worker 75 kg / 1.75 m, task clothing, acclimatised for the crew rate and unacclimatised for acclimatisation-schedule caps, drinking allowed (ISO 5 %), one work bout per block-hour followed by rest in the site rest area, projection ≥ 15 + 1 min at every minute of work, rest and idle time',
 } as const
 
+/** Plan basis (wave 2d): the WBGT tables enforce the crew rate ('tables', default) or screen it ('monitored'). */
+export type PlanBasis = 'tables' | 'monitored'
+
+/**
+ * Basis 'monitored' [ENG design, decided with occupational-health sign-off per site]: WBGT tables are a screening method;
+ * above the screen the standards call for a detailed analysis or physiological monitoring. The crew rate planned for
+ * acclimatised members then omits the NIOSH/ACGIH TWA cap in the task-hours where every device can confirm monitoring
+ * (monitoredHour: not the hour of the device warm-up, verified ISO 7933 clothing values, inputs within the model's
+ * validity range); the rule pack and the ISO 7933 screen still bind, and personal caps keep the tables. The planner
+ * never learns who wears a device or has consented: a worker whose device cannot confirm monitoring follows the table
+ * limits on the device.
+ */
+export const MONITORED_PLAN = {
+  note: 'Monitored plan: WBGT tables are used as a screen. A worker whose device cannot confirm monitoring follows the table limits on the device.',
+  basis: [
+    'ISO 7243:2017 (WBGT is a screening method; when the reference value is exceeded, reduce the stress or carry out a detailed analysis with ISO 7933)',
+    'ACGIH TLV Heat Stress decision flow (above the screening criteria: detailed analysis and/or physiological monitoring)',
+    'NIOSH 2016-106 (physiological monitoring above the REL)',
+  ],
+} as const
+
+/**
+ * Neutral crew note (privacy, ARCHITECTURE §1.5 and §7): conservative mode, fasting and consent state are enforced on
+ * the worker's device and never planned, so the plan only says that devices may direct extra rest.
+ */
+export const DEVICE_REST_NOTE = 'Workers’ devices may direct extra rest for some members; the reasons stay on the device.'
+
 const STOP_BAND_BASIS = 'ARCHITECTURE.md §5 environment channel: allowed work fraction < 0.25 → stop (heavy outdoor work deferred)'
-const PLANNER_BASIS = 'ARCHITECTURE.md §1.1 (never removes required rest), §5; [ENG] binding-worker and placement rules (engine/planner.ts)'
+const PLANNER_BASIS = 'ARCHITECTURE.md §1.1 (never removes required rest), §5; [ENG] per-member caps and placement rules (engine/planner.ts)'
+/** Fallback citation of the employer's acclimatisation-schedule duty when a rule pack carries none. */
+const ACCLIMATIZATION_DUTY_BASIS = 'ADOSH-SF TG v4.0 Table 1 note b; CoP 11.0 v4.0 §3.2(b)(i) (5–7 days before starting hard work in a hot environment)'
 const EPS = 1e-9
 
 // ─────────────────────────────── Types ───────────────────────────────
@@ -179,16 +242,24 @@ export interface PlanDayInput {
    * hourly shade WBGT (shade is always available) [ENG].
    */
   restAreaWbgtC?: number
+  /**
+   * Plan basis (default 'tables'). 'monitored' needs the site's occupational-health sign-off: the crew rate planned for
+   * acclimatised members omits the NIOSH/ACGIH TWA cap ({@link MONITORED_PLAN}); personal caps keep the tables.
+   */
+  planBasis?: PlanBasis
 }
 
-/** The crew's binding worker (most protective combination of its members) [ENG]. */
+/**
+ * Who the crew rate is planned for (wave 2d: per person where the standards differ per person). Non-identifying: it
+ * names members on an acclimatisation schedule (an operational duty) and never a history or a private reason.
+ */
 export interface CrewBinding {
+  /** The crew rate's exposure limit: REL when the crew has a known acclimatised member, else RAL (fail-safe). */
   limit: ExposureLimitId
-  /** Some member is in conservative mode (reasons are not disclosed: ARCHITECTURE §2, supervisors never see risk flags). */
-  conservative: boolean
-  /** The pack's next-stricter work/rest tier applies (conservative mode, ARCHITECTURE §5). */
-  stricterTier: boolean
-  /** Members not yet acclimatised (status 'unacclimatized' or 'acclimatizing'): they put the crew on RAL. */
+  /**
+   * Members on an acclimatisation schedule (status 'unacclimatized' or 'acclimatizing', and crew members missing from
+   * `workers`, fail-safe): they get personal caps ({@link CrewPlan.memberCaps}) instead of setting the crew rate.
+   */
   nonAcclimatizedMemberIds: string[]
   /**
    * Members ADOSH treats as unacclimatised (TG v4.0 Table 1 note b: new, or > 14 days off, during the first 7 days back;
@@ -222,11 +293,20 @@ export interface HourOutlook {
   shadeZone: TwlZoneId | null
   /** Some part of the hour falls in the midday break. */
   middayBreak: boolean
-  /** Allowed work min/h by work class, in the sun, for the strictest crew binding (0 = stop band). */
+  /**
+   * Allowed work min/h by work class, in the sun, for the strictest crew rate (0 = stop band): RAL and the pack's
+   * next-stricter tier when some crew has no acclimatised member, else REL and the base tier; the heaviest member and
+   * the worst clothing of the site. Personal caps of members on an acclimatisation schedule can be lower.
+   */
   allowedWorkMinPerHour: Record<WorkClass, number>
   /** As above, for shaded work. */
   allowedWorkMinPerHourShade: Record<WorkClass, number>
-  binding: { limit: ExposureLimitId; clothingAdjustmentC: number; stricterTier: boolean }
+  /**
+   * The strictest crew rate's limit (RAL when some crew has no acclimatised member) and the worst clothing adjustment.
+   * The outlook always uses the WBGT tables: in a monitored plan it is the fallback a device applies when it cannot
+   * confirm monitoring.
+   */
+  binding: { limit: ExposureLimitId; clothingAdjustmentC: number }
   /** The forecast did not cover this hour: the day's worst values were used (fail-safe). */
   forecastFallback: boolean
 }
@@ -265,6 +345,10 @@ export interface BlockHour {
   hour: string
   wallMin: number
   workMin: number
+  /**
+   * The pre-screen allowance the plan enforces, min/h: min(NIOSH/ACGIH, rule pack), or the rule pack alone in a
+   * monitored block-hour ({@link BlockHour.monitored}; nioshWorkMinPerHour is still reported: the device's table fallback).
+   */
   allowedWorkMinPerHour: number
   nioshWorkMinPerHour: number
   packWorkMinPerHour: number
@@ -276,14 +360,21 @@ export interface BlockHour {
   /** Start of this block-hour (the block's part of one clock hour), epoch ms. */
   startT: number
   /**
-   * Execution layout: whole minutes of work at the start of this block-hour (ceil of workMin), then rest for the rest
-   * of wallMin — the layout the PHS screen simulated; following it keeps plan and monitor in agreement.
+   * Execution layout: whole minutes of work at the start of this block-hour (floor of workMin: never above the
+   * allowance, protective), then rest for the rest of wallMin — the layout the PHS screen stepped; following it keeps
+   * plan and monitor in agreement.
    */
   boutMin: number
   /** The ISO 7933 screen's allowance for this task-hour, min/h (null when not screened). */
   phsWorkMinPerHour: number | null
   /** What set this hour's work minutes. */
   limitedBy: PlanLimitedBy
+  /**
+   * The crew rate in this block-hour is a monitored rate (plan basis 'monitored'): the NIOSH/ACGIH TWA cap is omitted and
+   * the rule pack and the ISO 7933 screen set it. False under 'tables' and in monitored plans where devices cannot
+   * confirm monitoring (warm-up hour, clothing or work outside the model; see monitoredHour).
+   */
+  monitored: boolean
 }
 
 /** One block of a crew's day. */
@@ -330,10 +421,48 @@ export interface UnscheduledTask {
   bestWorkMinPerHour: number
 }
 
+/**
+ * What set a member's personal cap in a block-hour: the crew's own layout ('crew'), the acclimatisation schedule (NIOSH
+ * RAL, the ADOSH note b exclusion or the exposure ramp — not told apart: the supervisor needs the cap, not the reason),
+ * or the ISO 7933 screen with an unacclimatised reference worker ('phs').
+ */
+export type MemberCapLimitedBy = 'crew' | 'acclimatization' | 'phs'
+
+/** A personal cap of one member on an acclimatisation schedule in one crew block-hour ({@link BlockHour}). */
+export interface MemberCapHour {
+  /** BlockHour.startT of the crew block-hour it applies to, epoch ms. */
+  startT: number
+  /** Local 'HH:00'. */
+  hour: string
+  taskId: string
+  /** Wall minutes of the block-hour (as the crew's). */
+  wallMin: number
+  /** The member's work rate, min/h: ≤ the crew's rate in this block-hour; 0 or ≥ PHS_SCREEN.minBoutMin. */
+  workMinPerHour: number
+  /**
+   * Whole minutes of work at the start of the block-hour (floor; ≤ the crew's boutMin and ≤ workMinPerHour × wallMin /
+   * 60); rest for the rest of wallMin. Also within the day's exposure allowance in time order (Σ boutMin < the ramp's
+   * maxExposureFraction × 480 min, the count at which the device stops hot work), so it can be lower than the rate gives.
+   */
+  boutMin: number
+  limitedBy: MemberCapLimitedBy
+}
+
 /** The plan of one crew. */
 export interface CrewPlan {
   crewId: string
   binding: CrewBinding
+  /** The basis of this crew's rate: 'monitored' only when the day's basis is and the rate is for acclimatised members. */
+  planBasis: PlanBasis
+  /** Crew-level notes for the supervisor (non-clinical; always {@link DEVICE_REST_NOTE}). */
+  notes: string[]
+  /**
+   * Personal caps of members on an acclimatisation schedule, per worker id, one entry per crew task block-hour in
+   * block order (BlockHour.startT). Members without an entry follow the crew layout.
+   */
+  memberCaps: Record<string, MemberCapHour[]>
+  /** Scheduled work per member, minutes: Σ boutMin of the crew layout, or of the member's caps where lower. */
+  memberWorkMin: Record<string, number>
   blocks: PlanBlock[]
   workMin: number
   restMin: number
@@ -352,8 +481,14 @@ export interface CrewPlan {
   allowance: Array<{ hour: string; byTask: Record<string, number> }>
   /** The ISO 7933 screen per task-hour ({@link PHS_SCREEN}); null when it was not run (no climate in the forecast). */
   phsScreen: {
+    /** The crew rate's reference worker (acclimatised when the crew has an acclimatised member). */
     reference: { massKg: number; heightCm: number; acclimatized: boolean }
+    /** Screen passes with re-placement (≤ PHS_SCREEN.maxPasses); 0 when rest alone already fails. */
     passes: number
+    /** Block-hours the final verification pass had to zero (0 when the passes converged). */
+    verificationCuts: number
+    /** First minute (epoch ms) at which rest alone from the shift start fails the screen, or null ('phs_rest_limit'). */
+    restLimitT: number | null
     hours: Array<{ hour: string; byTask: Record<string, PhsTaskHour> }>
   } | null
 }
@@ -388,6 +523,7 @@ export type PlanWarningCode =
   | 'rest_exceeds_limit'
   | 'phs_not_feasible'
   | 'phs_screen_unavailable'
+  | 'phs_rest_limit'
 
 /** A planner warning for the supervisor (non-clinical). */
 export interface PlanWarning {
@@ -404,6 +540,10 @@ export interface DayPlan {
   date: string
   siteId: Site['id']
   packId: RulePackId
+  /** The plan basis requested ({@link PlanBasis}; default 'tables'). */
+  planBasis: PlanBasis
+  /** Plan-level notes (the {@link MONITORED_PLAN} note in a monitored plan). */
+  notes: string[]
   shift: { start: string; end: string }
   hours: HourOutlook[]
   crews: CrewPlan[]
@@ -456,11 +596,10 @@ interface Member {
   known: boolean
   status: AcclimatizationStatus
   adoshUnacclimatized: boolean
-  conservative: boolean
   massKg?: number
+  heightCm?: number
   clothing?: ClothingId
   maxExposureFraction: number
-  dayOfRamp: number | null
 }
 
 interface TaskCtx {
@@ -468,7 +607,10 @@ interface TaskCtx {
   index: number
   valid: boolean
   need: number
+  /** Highest metabolic rate of the members the crew rate is planned for (body-mass scaling), W. */
   workW: number
+  /** Highest metabolic rate of all members, W (water provision for the whole crew). */
+  waterW: number
   cavC: number
   limitC: number
   location: 'sun' | 'shade'
@@ -570,16 +712,23 @@ function restWbgtFor(setting: number | null, hour: HourCond): number {
   return setting === null ? hour.wbgtShadeC : Math.min(setting, hour.wbgtShadeC)
 }
 
+/**
+ * One task-hour's pre-screen allowance. `useTables` false (a monitored crew rate, {@link MONITORED_PLAN}): the
+ * NIOSH/ACGIH value is computed and reported but does not cap the rate; the rule pack always does. The crew rate uses
+ * the pack's base work/rest tier (the next-stricter tier of a private conservative mode is the device's: risk.ts,
+ * regulation.stricterWorkRest); `stricterTier` (acclimatisation-schedule caps only) adds the next-stricter tier.
+ */
 function computeAllowance(
   workClass: WorkClass,
   inSun: boolean,
   workW: number,
   cavC: number,
   limit: ExposureLimitId,
-  stricterTier: boolean,
+  useTables: boolean,
   hour: HourCond,
   pack: RulePack,
   restSetting: number | null,
+  stricterTier = false,
 ): Allowance {
   const wbgtWork = inSun ? hour.wbgtC : hour.wbgtShadeC
   const wbgtRest = restWbgtFor(restSetting, hour)
@@ -590,11 +739,11 @@ function computeAllowance(
   let packMin = floor.workMinPerHour
   if (stricterTier && floor.zone && packMin > 0) packMin = Math.min(packMin, stricterWorkRest(floor.zone, twlWorkCategory(workClass), pack).workMinPerHour)
   const nioshMin = aw.workMinPerHour
-  const rawMin = Math.min(nioshMin, packMin)
+  const rawMin = useTables ? Math.min(nioshMin, packMin) : packMin
   const stopBand = rawMin < 60 * STOP_BAND_WORK_FRACTION
   const allowedMin = stopBand ? 0 : Math.floor(rawMin / WORK_MIN_GRANULARITY + EPS) * WORK_MIN_GRANULARITY
-  const source: RestCycle['source'] = Math.abs(nioshMin - packMin) < EPS ? 'both' : nioshMin < packMin ? 'niosh' : 'rule_pack'
-  const basis = [aw.basis]
+  const source: RestCycle['source'] = !useTables ? 'rule_pack' : Math.abs(nioshMin - packMin) < EPS ? 'both' : nioshMin < packMin ? 'niosh' : 'rule_pack'
+  const basis: string[] = useTables ? [aw.basis] : [...MONITORED_PLAN.basis]
   if (floor.zone) basis.push(floor.zone.basis)
   if (stopBand) basis.push(STOP_BAND_BASIS)
   return {
@@ -603,7 +752,7 @@ function computeAllowance(
     nioshMin,
     packMin,
     source,
-    restExceedsLimit: aw.binding === 'rest_exceeds_limit',
+    restExceedsLimit: useTables && aw.binding === 'rest_exceeds_limit',
     zone: floor.zone,
     twlWm2: twl,
     wbgtWorkEffC: wbgtWork + cavC,
@@ -613,49 +762,85 @@ function computeAllowance(
   }
 }
 
+/**
+ * A crew member missing from `workers`: limits.assessAcclimatization's own fail-safe path for an unknown history (new
+ * worker, day 1 of the ADOSH TG new-employee ramp: unacclimatised, ADOSH note b, 20 % exposure) [fail-safe,
+ * ARCHITECTURE §1.3]; default size and clothing.
+ */
+const UNKNOWN_MEMBER_ACCLIMATIZATION = assessAcclimatization({ daysOnSite: Number.NaN, daysAwayRecent: Number.NaN, experiencedInHeat: false })
+
 function membersOf(crew: Crew, byId: ReadonlyMap<string, WorkerProfile>): Member[] {
   return crew.workerIds.map((id) => {
     const p = byId.get(id)
     if (!p) {
-      return { id, known: false, status: 'unacclimatized' as const, adoshUnacclimatized: true, conservative: false, maxExposureFraction: 1, dayOfRamp: null }
+      const u = UNKNOWN_MEMBER_ACCLIMATIZATION
+      return { id, known: false, status: u.status, adoshUnacclimatized: u.adoshUnacclimatized, maxExposureFraction: u.maxExposureFraction }
     }
     const acc = assessAcclimatization(p)
-    const cons = conservativeMode(p)
     return {
       id,
       known: true,
       status: acc.status,
       adoshUnacclimatized: acc.adoshUnacclimatized,
-      conservative: cons.conservative,
       ...(p.massKg !== undefined ? { massKg: p.massKg } : {}),
+      ...(p.heightCm !== undefined ? { heightCm: p.heightCm } : {}),
       clothing: p.clothing,
       maxExposureFraction: acc.maxExposureFraction,
-      dayOfRamp: acc.dayOfRamp,
     }
   })
 }
 
-function bindingOf(members: readonly Member[]): CrewBinding {
-  const ral = members.length === 0 || members.some((m) => selectExposureLimit(m.status, m.conservative) === 'RAL')
-  const conservative = members.some((m) => m.conservative)
-  const nonAcc = members.filter((m) => m.status !== 'acclimatized').map((m) => m.id)
+/** A known member whose acclimatisation status is 'acclimatized' (limits.assessAcclimatization). */
+const isAcclimatizedMember = (m: Member): boolean => m.known && m.status === 'acclimatized'
+
+/** The worst-CAV clothing among members (unknown or invalid → the default clothing). */
+function worstClothing(members: readonly Member[]): ClothingId {
+  let best: ClothingId = DEFAULT_CLOTHING
+  let bestCav = -Infinity
+  for (const m of members) {
+    const id = m.clothing !== undefined && m.clothing in CLOTHING ? m.clothing : DEFAULT_CLOTHING
+    const cav = clothingAdjustmentC(id, false)
+    if (cav > bestCav) {
+      best = id
+      bestCav = cav
+    }
+  }
+  return best
+}
+
+/** Local 'HH:mm' of an epoch-ms instant on the plan day. */
+const localHhmm = (t: number, dayStartT: number): string => minutesToHhmm(Math.round((t - dayStartT) / MINUTE_MS))
+
+/**
+ * Who the crew rate is planned for: its known acclimatised members (NIOSH REL), else every member (NIOSH RAL,
+ * fail-safe; also for an empty crew or one with no known member). Members on an acclimatisation schedule and unknown
+ * members get personal caps instead of setting the crew rate. Texts name the schedule (an employer duty), never a
+ * history or a private reason.
+ */
+function bindingOf(members: readonly Member[], dutyBasis: string): CrewBinding {
+  const acclimatized = members.filter(isAcclimatizedMember)
+  const limit: ExposureLimitId = acclimatized.length > 0 ? selectExposureLimit('acclimatized', false) : selectExposureLimit('unacclimatized', false)
+  const nonAcc = members.filter((m) => !isAcclimatizedMember(m)).map((m) => m.id)
   const adoshUnacc = members.filter((m) => m.adoshUnacclimatized).map((m) => m.id)
   const unknown = members.filter((m) => !m.known).map((m) => m.id)
-  const limit: ExposureLimitId = ral ? 'RAL' : 'REL'
-  // Non-identifying: no reason is given (a stricter personal limit can come from a declared health flag).
-  const text = ral
-    ? `Crew plan uses the stricter exposure limit (NIOSH RAL): ${members.length === 0 ? 'the crew has no known members' : 'at least one member needs a stricter personal limit'}${conservative ? '; the next-stricter work/rest tier applies' : ''}.`
-    : 'All members are acclimatised: NIOSH REL applies.'
+  const text =
+    members.length === 0
+      ? 'The crew has no members: the stricter exposure limit (NIOSH RAL) applies.'
+      : members.every((m) => !m.known)
+        ? 'The crew has no known members: the stricter exposure limit (NIOSH RAL) applies (fail-safe).'
+        : acclimatized.length === 0
+          ? 'No member is acclimatised yet: the crew plan uses the stricter exposure limit (NIOSH RAL) and the acclimatisation schedule.'
+          : nonAcc.length === 0
+            ? 'All members are acclimatised: NIOSH REL applies.'
+            : `Crew rate for the acclimatised members (NIOSH REL); members on an acclimatisation schedule (${nonAcc.join(', ')}) have personal caps.`
   return {
     limit,
-    conservative,
-    stricterTier: conservative,
     nonAcclimatizedMemberIds: nonAcc,
     adoshUnacclimatizedMemberIds: adoshUnacc,
     unknownMemberIds: unknown,
     crewSize: Math.max(1, members.length),
     text,
-    basis: `${limit === 'REL' ? LIMITS_BASIS.rel : LIMITS_BASIS.ral}; ${LIMITS_BASIS.acclimatization}; ARCHITECTURE.md §5 conservative mode; ${PLANNER_BASIS}`,
+    basis: `${limit === 'REL' ? LIMITS_BASIS.rel : LIMITS_BASIS.ral}${limit === 'REL' && nonAcc.length > 0 ? `; personal caps: ${LIMITS_BASIS.ral}` : ''}; ${LIMITS_BASIS.acclimatization}; ${dutyBasis}; ${PLANNER_BASIS}`,
   }
 }
 
@@ -684,173 +869,306 @@ function climateAccessor(hourly: readonly PlannerHour[]): ((t: number) => PhsCli
   }
 }
 
-/** One planned activity of the screen: a task (with its location and clothing) or rest (null). */
+/**
+ * Whether every device of an acclimatised member can confirm monitored mode for a task-hour, as far as a plan can know
+ * it (risk.ts RISK_THRESHOLDS.monitoring and phsModelOk, checked by the device per step, with the tables back in the
+ * same step otherwise): the hour does not overlap the monitoring warm-up at the shift start (the ECTemp filter
+ * re-initialises at a new shift and is not used for physio.ts ECTEMP_RULES.WARMUP_MIN = 30 min, so no device can
+ * confirm monitoring then; the whole overlapping hour keeps the tables [ENG, protective: the allowance matrix is
+ * hourly]); ISO 7933 applies to the clothing and its values are verified (limits.CLOTHING phs.applicable
+ * and phs.verified: not for FR, SMS or polyolefin coveralls or a vapour barrier); and the work inputs stay within the
+ * ISO 7933 validity range (phs.phsValidity with the engine's model, e.g. metabolic rate ≤ 250 W/m², vapour pressure
+ * ≤ 4.5 kPa) for the reference worker and every acclimatised member at every 5-min point of the hour, ends included.
+ * Consent, wearable and signal validity are private and per worker: a device that cannot confirm them applies the
+ * tables ({@link MONITORED_PLAN} note). Basis: ISO 7933:2023 Annex A Table A.1; engine/risk.ts monitoring conditions.
+ */
+function monitoredHour(
+  task: Task,
+  location: 'sun' | 'shade',
+  clothing: ClothingId,
+  hour: { hourOfDay: number; t: number },
+  shiftStartMin: number,
+  sizes: ReadonlyArray<{ massKg?: number; heightCm?: number }>,
+  climateAt: (t: number) => PhsClimate,
+): boolean {
+  if (hour.hourOfDay * 60 < shiftStartMin + ECTEMP_RULES.WARMUP_MIN) return false
+  const cs = CLOTHING[clothing].phs
+  if (!cs.applicable || !cs.verified) return false
+  for (let j = 0; j <= 60 / PLAN_SLOT_MIN; j++) {
+    const climate = climateAt(hour.t + j * PLAN_SLOT_MIN * MINUTE_MS)
+    for (const s of sizes) {
+      const p = buildPhsInput({ climate, location, task, clothing, massKg: s.massKg, heightCm: s.heightCm, acclimatized: true })
+      if (!phsValidity(p.input, ENGINE_PHS_OPTIONS.model).withinLimits) return false
+    }
+  }
+  return true
+}
+
+/** One screened task: its location and clothing as the device sees them. */
 interface ScreenSpec {
   task: Task
   location: 'sun' | 'shade'
   clothing: ClothingId
 }
 
-interface ScreenArgs {
-  N: number
-  /** Epoch ms of slot 0. */
-  startT: number
-  hourOfSlot: (k: number) => number
-  /** Mutated: a task-hour cut to 0 min/h is unassigned (rest). */
-  slotTask: number[]
-  /** Mutated: work minutes per slot after the cut. */
-  slotWork: number[]
-  /** Mutated: the slot's work rate, min/h, after the cut. */
-  slotRate: number[]
-  specs: readonly ScreenSpec[]
-  climateAt: (t: number) => PhsClimate
-  restLocation: WorkerLocation
-  restClothing: ClothingId
-  acclimatized: boolean
+/** One screened segment: a block-hour (a block's part of one clock hour) or an idle stretch within one clock hour. */
+interface ScreenSeg {
+  /** First minute from the shift start. */
+  m0: number
+  wall: number
+  /** Task index, or −1 for rest. */
+  ti: number
+  /** Hour index. */
+  hi: number
+  /** Work minutes the placement planned in the segment (Σ slot work). */
+  planned: number
 }
 
-interface ScreenOutcome {
-  /** Screened allowance, min/h, per task-hour key `${taskIndex}|${hourIndex}` (task-hours with planned work only). */
-  phsMin: Map<string, number>
-  /** Task-hours whose planned rate was lowered, with the new rate. */
-  reduced: Array<{ ti: number; hi: number; capMin: number }>
-  /** Task-hours where even minBoutMin min/h failed: no work. */
-  notFeasible: Array<{ ti: number; hi: number }>
+/** A crew screen segment with its plan slots k0..k1 (inclusive). */
+interface CrewSeg extends ScreenSeg {
+  k0: number
+  k1: number
+}
+
+/** Per-minute PHS inputs of one screened worker (cached) and the activity keys the device's projection follows. */
+interface ScreenModel {
+  M: number
+  input: (m: number, si: number) => PhsInputs
+  key: (si: number) => string
 }
 
 /**
- * Simulates the planned day for the reference worker ({@link PHS_SCREEN}) and cuts each task-hour to the largest
- * W' ≤ W that keeps the end-of-bout projections (at the task and at rest) ≥ 15 min and reaches no limit during the rest
- * that follows until the next planned bout + 15 min.
- * Minute convention as in the engine: the activity at minute T uses the climate at T. The arrays in `a` are mutated.
+ * The device's PHS state and projection bookkeeping (risk.ts stepWorkerEngine), emulated minute by minute: the
+ * projection made at minute pT (null: no limit within {@link SCREEN_HORIZON_MIN}) counts down until the next one.
  */
-function screenPlannedDay(a: ScreenArgs): ScreenOutcome {
-  const S = PHS_SCREEN
-  const out: ScreenOutcome = { phsMin: new Map(), reduced: [], notFeasible: [] }
-  const minutes = a.N * PLAN_SLOT_MIN
-  const climate: (PhsClimate | undefined)[] = new Array<PhsClimate | undefined>(minutes)
-  const cache: (PhsInputs | undefined)[][] = Array.from({ length: a.specs.length + 1 }, () => new Array<PhsInputs | undefined>(minutes))
-  const inputAt = (minute: number, si: number): PhsInputs => {
-    const m = Math.min(Math.max(0, minute), minutes - 1)
+interface Track {
+  s: PhsState | null
+  key: string
+  pT: number
+  mP: number | null
+}
+
+/** What every screened projection must keep, countdown included: highFromMin + endMarginMin minutes. */
+const SCREEN_NEED_MIN = PHS_SCREEN.highFromMin + PHS_SCREEN.endMarginMin
+/** Screen projection horizon: enough to know the countdown stays ≥ SCREEN_NEED_MIN until the device's next projection. */
+const SCREEN_HORIZON_MIN = SCREEN_NEED_MIN + PHS_SCREEN.projectionEveryMin - 1
+
+/** The screened worker's per-minute PHS inputs (reference size; task clothing and location; rest at the rest area). */
+function screenModel(o: {
+  M: number
+  startT: number
+  climateAt: (t: number) => PhsClimate
+  specs: readonly ScreenSpec[]
+  restLocation: WorkerLocation
+  restClothing: ClothingId
+  acclimatized: boolean
+}): ScreenModel {
+  const climate: (PhsClimate | undefined)[] = new Array<PhsClimate | undefined>(o.M)
+  const cache: (PhsInputs | undefined)[][] = Array.from({ length: o.specs.length + 1 }, () => new Array<PhsInputs | undefined>(o.M))
+  const input = (minute: number, si: number): PhsInputs => {
+    const m = Math.min(Math.max(0, minute), o.M - 1)
     const row = cache[si + 1]
     const hit = row[m]
     if (hit) return hit
-    const c = climate[m] ?? (climate[m] = a.climateAt(a.startT + m * MINUTE_MS))
-    const spec = si >= 0 ? a.specs[si] : null
+    const c = climate[m] ?? (climate[m] = o.climateAt(o.startT + m * MINUTE_MS))
+    const spec = si >= 0 ? o.specs[si] : null
     const v = buildPhsInput({
       climate: c,
-      location: spec ? spec.location : a.restLocation,
+      location: spec ? spec.location : o.restLocation,
       task: spec ? spec.task : null,
-      clothing: spec ? spec.clothing : a.restClothing,
-      massKg: S.referenceMassKg,
-      heightCm: S.referenceHeightCm,
-      acclimatized: a.acclimatized,
+      clothing: spec ? spec.clothing : o.restClothing,
+      massKg: PHS_SCREEN.referenceMassKg,
+      heightCm: PHS_SCREEN.referenceHeightCm,
+      acclimatized: o.acclimatized,
     })
     row[m] = v
     return v
   }
-  /** `n` minutes of one activity from minute `m0`, starting from `s` (null = exposure start). */
-  const run = (s: PhsState | null, m0: number, n: number, si: number): PhsState => {
-    let st = s ?? phsInitialState(inputAt(m0, si).input, ENGINE_PHS_OPTIONS)
-    for (let i = 0; i < n; i++) st = phsStep(st, inputAt(m0 + i, si).input, 1, ENGINE_PHS_OPTIONS)
-    return st
+  const keys = new Map<number, string>()
+  const key = (si: number): string => {
+    let k = keys.get(si)
+    if (k === undefined) {
+      k = input(0, si).key
+      keys.set(si, k)
+    }
+    return k
   }
-  const boutOf = (work: number, wall: number): number => Math.min(wall, Math.max(0, Math.ceil(work - 1e-6)))
+  return { M: o.M, input, key }
+}
 
-  /** True when the resting projection from `s` at minute `m` stays ≥ `need` min (no limit within `need` min of rest). */
-  const restClear = (s: PhsState, m: number, need: number): boolean => {
-    const p = minutesToLimit(s, inputAt(m, -1).input, need, ENGINE_PHS_OPTIONS)
-    return p.minutes === null || p.minutes >= need
-  }
-  /** Minutes from the end of slot k1 to the next slot with planned work (or the shift end). */
-  const restAfter = (k1: number): number => {
-    let j = k1 + 1
-    while (j < a.N && !(a.slotTask[j] >= 0 && a.slotWork[j] > EPS)) j += 1
-    return (j - k1 - 1) * PLAN_SLOT_MIN
-  }
+const newTrack = (): Track => ({ s: null, key: '', pT: 0, mP: null })
 
-  let state: PhsState | null = null
-  let k = 0
-  while (k < a.N) {
-    const hi = a.hourOfSlot(k)
-    const ti = a.slotTask[k]
-    let k1 = k
-    while (k1 + 1 < a.N && a.hourOfSlot(k1 + 1) === hi && a.slotTask[k1 + 1] === ti) k1 += 1
-    const m0 = k * PLAN_SLOT_MIN
-    const wall = (k1 - k + 1) * PLAN_SLOT_MIN
-    const W = ti >= 0 ? a.slotRate[k] : 0
-    if (ti < 0 || !(W > 0)) {
-      state = run(state, m0, wall, -1)
-      k = k1 + 1
+/**
+ * Steps the emulated device one minute: minute 0 only initialises the state from its activity (risk.ts steps no PHS
+ * minute at the shift-start step); minute m > 0 steps the activity and climate of minute m. A projection is made as the
+ * device makes it — at a change of the activity key, every projectionEveryMin minutes and when a limit is latched — and
+ * counted down in between. True while the countdown stays ≥ SCREEN_NEED_MIN. Outside the model's scope (vapour
+ * barrier) the device neither projects nor holds: stepped with the surrogate for continuity, not checked.
+ */
+function stepTrack(md: ScreenModel, tr: Track, m: number, si: number): boolean {
+  const inp = md.input(m, si)
+  tr.s = tr.s === null ? phsInitialState(inp.input, ENGINE_PHS_OPTIONS) : phsStep(tr.s, inp.input, 1, ENGINE_PHS_OPTIONS)
+  const key = md.key(si)
+  if (!inp.applicable) {
+    tr.key = key
+    tr.pT = m
+    tr.mP = null
+    return true
+  }
+  const latched = tr.s.tReLimitMin !== null || tr.s.waterLoss5PctMin !== null
+  if (key !== tr.key || m - tr.pT >= PHS_SCREEN.projectionEveryMin || latched) {
+    tr.key = key
+    tr.pT = m
+    tr.mP = minutesToLimit(tr.s, inp.input, SCREEN_HORIZON_MIN, ENGINE_PHS_OPTIONS).minutes
+  }
+  return tr.mP === null || tr.mP - (m - tr.pT) >= SCREEN_NEED_MIN
+}
+
+/** Whole minutes of work at the start of a segment at `rate` min/h: floor (protective), within the budget left. */
+function boutOf(seg: ScreenSeg, rate: number, left: number): number {
+  return Math.max(0, Math.min(seg.wall, Math.floor(Math.min(seg.planned, (rate * seg.wall) / 60) + 1e-6), Math.floor(left + 1e-6)))
+}
+
+/**
+ * True when `bout` minutes of work, the rest of the segment and the rest that follows until `restEnd` (the next planned
+ * bout or the shift end) all pass. `t` is left at the segment end.
+ */
+function segmentPasses(md: ScreenModel, t: Track, seg: ScreenSeg, bout: number, restEnd: number): boolean {
+  const end = seg.m0 + seg.wall
+  for (let m = seg.m0; m < seg.m0 + bout; m++) if (!stepTrack(md, t, m, seg.ti)) return false
+  for (let m = seg.m0 + bout; m < end; m++) if (!stepTrack(md, t, m, -1)) return false
+  if (restEnd > end) {
+    const c: Track = { ...t }
+    for (let m = end; m < restEnd; m++) if (!stepTrack(md, c, m, -1)) return false
+  }
+  return true
+}
+
+/** Result of one {@link screenPass}. */
+interface PassOut {
+  /** Chosen rate per segment, min/h: its cap when not cut, 0 for rest segments. */
+  rate: number[]
+  /** Chosen bout per segment, minutes. */
+  bout: number[]
+  /** The segment's rate was cut below its cap. */
+  cut: boolean[]
+  /** First minute a rest stretch failed whatever the segment's own work (earlier work, or rest alone), or null. */
+  restFailT: number | null
+}
+
+/**
+ * One screen pass over a layout in time order: each task segment keeps the largest rate W' ≤ its cap (5-min steps;
+ * below minBoutMin → 0) whose bout, the rest after it and the rest that follows until the next planned bout (or the
+ * shift end) keep every emulated projection ≥ SCREEN_NEED_MIN. `budget` (whole minutes; Infinity for none) caps the sum
+ * of bouts in time order (the acclimatisation exposure ramp). Later segments are taken as planned before the pass: a
+ * later cut to zero lengthens an earlier rest, so the caller repeats passes until nothing is cut.
+ */
+function screenPass(md: ScreenModel, segs: readonly ScreenSeg[], capOf: (seg: ScreenSeg, i: number) => number, budget: number): PassOut {
+  const M = md.M
+  const out: PassOut = { rate: [], bout: [], cut: [], restFailT: null }
+  // The layout before the pass: where the planned work bouts are.
+  const work = new Uint8Array(M)
+  let left = budget
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i]
+    if (seg.ti < 0) continue
+    const b = boutOf(seg, capOf(seg, i), left)
+    left -= b
+    work.fill(1, seg.m0, Math.min(M, seg.m0 + b))
+  }
+  const nextWork = new Int32Array(M + 1)
+  nextWork[M] = M
+  for (let m = M - 1; m >= 0; m--) nextWork[m] = work[m] === 1 ? m : nextWork[m + 1]
+  const tr = newTrack()
+  const restThrough = (seg: ScreenSeg): void => {
+    for (let m = seg.m0; m < seg.m0 + seg.wall; m++) if (!stepTrack(md, tr, m, -1) && out.restFailT === null) out.restFailT = m
+  }
+  left = budget
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i]
+    const W = seg.ti >= 0 ? capOf(seg, i) : 0
+    if (seg.ti < 0 || !(W > 0) || boutOf(seg, W, left) === 0) {
+      restThrough(seg)
+      out.rate.push(seg.ti >= 0 && W > 0 ? W : 0)
+      out.bout.push(0)
+      out.cut.push(false)
       continue
     }
-    let planned = 0
-    for (let j = k; j <= k1; j++) planned += a.slotWork[j]
-    if (!inputAt(m0, ti).applicable) {
-      // Outside the model's scope (vapour barrier): stepped with the surrogate for continuity, not screened.
-      const bout = boutOf(planned, wall)
-      state = run(run(state, m0, bout, ti), m0 + bout, wall - bout, -1)
-      k = k1 + 1
-      continue
-    }
-    const candidates: number[] = []
-    for (let w = W; w >= S.minBoutMin - EPS; w -= WORK_MIN_GRANULARITY) candidates.push(w)
-    candidates.push(0)
-    // The rest after this segment lasts until the next planned bout (or the shift end): the device projects at rest
-    // then, so no limit may come within that rest + 15 min (at the segment-end climate) [ENG, monotone rest].
-    const restAhead = Math.min(restAfter(k1), 12 * 60) + S.highFromMin
-    let chosen: { wp: number; s: PhsState } | null = null
-    for (const wp of candidates) {
-      const work = wp >= W ? planned : Math.min(planned, (wp * wall) / 60)
-      const bout = boutOf(work, wall)
-      let s: PhsState | null = state
-      if (bout > 0) {
-        s = run(s, m0, bout, ti)
-        // End of the bout: the projection at the task (the device's last work minute) and at rest (the first rest minute).
-        const p = minutesToLimit(s, inputAt(m0 + bout - 1, ti).input, S.highFromMin, ENGINE_PHS_OPTIONS)
-        if (!(p.minutes === null || p.minutes >= S.highFromMin)) continue
-        if (bout < wall && !restClear(s, m0 + bout, S.highFromMin)) continue
-      }
-      const seg = run(s, m0 + bout, wall - bout, -1)
-      if (seg.tReLimitMin !== null || seg.waterLoss5PctMin !== null) continue
-      if (!restClear(seg, Math.min(m0 + wall, minutes - 1), restAhead)) continue
-      chosen = { wp, s: seg }
-      break
-    }
-    if (chosen === null) chosen = { wp: 0, s: run(state, m0, wall, -1) } // even rest reaches a limit this hour
-    const key = `${ti}|${hi}`
-    out.phsMin.set(key, Math.min(out.phsMin.get(key) ?? Infinity, chosen.wp))
-    if (chosen.wp < W) {
-      out.reduced.push({ ti, hi, capMin: chosen.wp })
-      if (chosen.wp < S.minBoutMin) out.notFeasible.push({ ti, hi })
-      const perSlot = (chosen.wp / 60) * PLAN_SLOT_MIN
-      for (let j = k; j <= k1; j++) {
-        a.slotWork[j] = Math.min(a.slotWork[j], perSlot)
-        a.slotRate[j] = chosen.wp
-        if (chosen.wp <= 0) {
-          a.slotTask[j] = -1
-          a.slotWork[j] = 0
+    const restEnd = nextWork[Math.min(M, seg.m0 + seg.wall)]
+    let chosen: { w: number; b: number; t: Track } | null = null
+    const tried = new Set<number>()
+    for (let w = W; ; w -= WORK_MIN_GRANULARITY) {
+      const wc = w >= PHS_SCREEN.minBoutMin - EPS ? w : 0
+      const b = boutOf(seg, wc, left)
+      if (!tried.has(b)) {
+        // The same bout at a lower rate steps the same minutes: tried once.
+        tried.add(b)
+        const t: Track = { ...tr }
+        if (segmentPasses(md, t, seg, b, restEnd)) {
+          chosen = { w: wc, b, t }
+          break
         }
       }
+      if (wc === 0) break
     }
-    state = chosen.s
-    k = k1 + 1
+    if (chosen === null) {
+      restThrough(seg) // even rest fails from this state: no work here; earlier work is cut by the next pass
+      out.rate.push(0)
+      out.bout.push(0)
+    } else {
+      Object.assign(tr, chosen.t)
+      out.rate.push(chosen.w)
+      out.bout.push(chosen.b)
+    }
+    left -= out.bout[i]
+    out.cut.push(out.rate[i] < W)
   }
   return out
+}
+
+/**
+ * Steps a final layout (one bout per segment) through the emulated device. Returns the first failing minute and the
+ * segment to zero for it — the one being worked, else the last one worked before the failing rest (null: rest alone
+ * fails) — or null when the whole layout passes.
+ */
+function verifyLayout(md: ScreenModel, segs: readonly ScreenSeg[], bouts: readonly number[]): { m: number; zero: number | null } | null {
+  const tr = newTrack()
+  let lastWorked: number | null = null
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i]
+    const b = seg.ti >= 0 ? bouts[i] : 0
+    if (b > 0) lastWorked = i
+    for (let m = seg.m0; m < seg.m0 + seg.wall; m++) {
+      const working = m < seg.m0 + b
+      if (!stepTrack(md, tr, m, working ? seg.ti : -1)) return { m, zero: working ? i : lastWorked }
+    }
+  }
+  return null
+}
+
+/** First minute at which resting from the shift start through the shift fails the screen, or null. */
+function restOnlyFailure(md: ScreenModel): number | null {
+  const tr = newTrack()
+  for (let m = 0; m < md.M; m++) if (!stepTrack(md, tr, m, -1)) return m
+  return null
 }
 
 // ─────────────────────────────── planDay ───────────────────────────────
 
 /**
  * Plan one site-day: per crew an ordered list of blocks (task, start, end, location, work/rest cycle per hour, water,
- * notes, basis) that never schedules more work in an hour than the stricter of the NIOSH/ACGIH TWA allowance (rest in
- * the site rest area: air-conditioned cabin or shade) and the rule pack's TWL-zone cycle, never in the stop band, and never outdoors in the sun during the midday
- * break; plus the naive comparison plan (listed order from the shift start, midday ban only), totals (work, rest, lost
- * work vs naive, exposure reduction Σ max(0, WBGT_eff − Limit)·min, water, coolers) and warnings.
+ * notes, basis) that never schedules more work in an hour than the rule pack's TWL-zone cycle and, under the 'tables'
+ * basis (and always for personal caps), the NIOSH/ACGIH TWA allowance (rest in the site rest area: air-conditioned
+ * cabin or shade); never in the stop band, never outdoors in the sun during the midday break, and never more than the
+ * ISO 7933 screen allows when the forecast carries the climate ({@link PHS_SCREEN}); per-member caps and scheduled work
+ * for members on an acclimatisation schedule; plus the naive comparison plan (listed order within the task windows,
+ * midday ban only), totals (work, rest, lost work vs naive, exposure reduction Σ max(0, WBGT_eff − Limit)·min, water,
+ * coolers) and warnings.
  *
  * Basis: NIOSH 2016-106 §8.1 / ACGIH TLV 1-h TWA (limits.allowedWorkFraction); ADOSH-SF TG v4.0 Table 1 and MoHRE MR
  * 44/2022 (regulation.ts rule pack); TB MED 507 / NIOSH / ILO 2024 water with the ADOSH zone minimum
- * (limits.recommendWaterMlPerHour); ARCHITECTURE.md §1.1, §5; [ENG] binding-worker, placement and rounding rules.
+ * (limits.recommendWaterMlPerHour); ISO 7933:2023 (screen); ARCHITECTURE.md §1.1, §5; [ENG] per-member caps, placement
+ * and rounding rules.
  */
 export function planDay(input: PlanDayInput): DayPlan {
   const pack = input.pack ?? DEFAULT_RULE_PACK
@@ -860,6 +1178,8 @@ export function planDay(input: PlanDayInput): DayPlan {
   const restSetting = restAreaSetting(input)
   const explicitRest = input.restAreaWbgtC !== undefined && Number.isFinite(input.restAreaWbgtC)
   const restLabel = restSetting === null ? 'shade' : explicitRest ? 'the cooled rest area' : 'the air-conditioned rest area'
+  const planBasis: PlanBasis = input.planBasis === 'monitored' ? 'monitored' : 'tables'
+  const dutyBasis = pack.acclimatization?.basis ?? ACCLIMATIZATION_DUTY_BASIS
   const basis = [
     LIMITS_BASIS.allowedWork,
     LIMITS_BASIS.rel,
@@ -869,8 +1189,11 @@ export function planDay(input: PlanDayInput): DayPlan {
     STOP_BAND_BASIS,
     LIMITS_BASIS.hydration,
     ...(restSetting !== null && !explicitRest ? [`Rest area: ${COOLED_REST.basis}`] : []),
+    `Acclimatisation schedule (personal caps): ${dutyBasis}`,
+    ...(planBasis === 'monitored' ? MONITORED_PLAN.basis : []),
     PLANNER_BASIS,
   ]
+  const planNotes: string[] = planBasis === 'monitored' ? [MONITORED_PLAN.note] : []
   const emptyTotals = (): DayPlanTotals => ({
     workMin: 0,
     restMin: 0,
@@ -883,7 +1206,7 @@ export function planDay(input: PlanDayInput): DayPlan {
     waterL: 0,
     coolersNeeded: 0,
   })
-  const base = { date: input.date, siteId: input.site.id, packId: pack.id, shift: { ...input.shift }, basis }
+  const base = { date: input.date, siteId: input.site.id, packId: pack.id, planBasis, notes: planNotes, shift: { ...input.shift }, basis }
 
   const startOk = validHhmm(input.shift.start) && validHhmm(input.shift.end) && DATE_RE.test(input.date)
   const rawStart = startOk ? hhmmToMinutes(input.shift.start) : 0
@@ -928,34 +1251,54 @@ export function planDay(input: PlanDayInput): DayPlan {
   const crewPlans: CrewPlan[] = []
   for (const crew of input.crews) {
     const members = membersOf(crew, byId)
-    const binding = bindingOf(members)
+    const binding = bindingOf(members, dutyBasis)
     if (members.length === 0) warnings.push({ code: 'empty_crew', crewId: crew.id, text: `Crew ${crew.id} has no members: the most protective limit (RAL) is used.` })
     if (binding.unknownMemberIds.length > 0) {
       warnings.push({
         code: 'unknown_worker',
         crewId: crew.id,
         workerIds: binding.unknownMemberIds,
-        text: `Crew ${crew.id}: ${binding.unknownMemberIds.join(', ')} not found — treated as unacclimatised with default size and clothing (fail-safe).`,
+        text: `Crew ${crew.id}: ${binding.unknownMemberIds.join(', ')} not found — treated as new and unacclimatised (first day of the acclimatisation schedule) with default size and clothing (fail-safe).`,
       })
     }
     const crewDefaultCav = members.length === 0 ? clothingAdjustmentC(undefined) : Math.max(...members.map((m) => clothingAdjustmentC(m.clothing, false)))
+    // The crew rate is planned for the acclimatised members; with none (or no known member), for everyone (fail-safe).
+    const accMembers = members.filter(isAcclimatizedMember)
+    const rateMembers = accMembers.length > 0 ? accMembers : members
+    const crewClothing = worstClothing(rateMembers)
+    const screenClothingOf = (task: Task): ClothingId => (task.clothing !== undefined && task.clothing in CLOTHING ? task.clothing : crewClothing)
+    // Monitored basis: only for a crew rate planned for acclimatised members and only where the ISO 7933 screen can
+    // run (without climate data the tables apply: never less protective than ISO 7933 or the rule pack when data is
+    // absent); then per task-hour only where every device can confirm monitoring ({@link monitoredHour}).
+    const crewMonitored = planBasis === 'monitored' && accMembers.length > 0 && climateAt !== null
+    const monitorSizes = [{ massKg: PHS_SCREEN.referenceMassKg, heightCm: PHS_SCREEN.referenceHeightCm }, ...accMembers.map((m) => ({ massKg: m.massKg, heightCm: m.heightCm }))]
+    const tablesFor = (task: Task, hi: number): boolean =>
+      !crewMonitored || climateAt === null || !monitoredHour(task, task.inSun ? 'sun' : 'shade', screenClothingOf(task), hours[hi], startMin, monitorSizes, climateAt)
+    const tablesUsed = new Set<string>()
 
     // ── Task contexts and the allowance matrix ──
     const tasks: TaskCtx[] = crew.tasks.map((task, index) => {
       const need = Number.isFinite(task.durationMin) && task.durationMin > 0 ? task.durationMin : 0
-      const workW = members.length === 0 ? taskMetabolicW(task) : Math.max(...members.map((m) => taskMetabolicW(task, m.massKg)))
-      const cavC = members.length === 0 ? clothingAdjustmentC(task.clothing, task.hood === true) : Math.max(...members.map((m) => clothingAdjustmentC(task.clothing ?? m.clothing, task.hood === true)))
+      const workW = rateMembers.length === 0 ? taskMetabolicW(task) : Math.max(...rateMembers.map((m) => taskMetabolicW(task, m.massKg)))
+      const waterW = members.length === 0 ? taskMetabolicW(task) : Math.max(...members.map((m) => taskMetabolicW(task, m.massKg)))
+      const cavC = rateMembers.length === 0 ? clothingAdjustmentC(task.clothing, task.hood === true) : Math.max(...rateMembers.map((m) => clothingAdjustmentC(task.clothing ?? m.clothing, task.hood === true)))
       const es = validHhmm(task.earliestStart) ? hhmmToMinutes(task.earliestStart) : startMin
       const le = validHhmm(task.latestEnd) ? hhmmToMinutes(task.latestEnd) : endMin
       const windowStart = Math.max(0, Math.ceil((Math.max(es, startMin) - startMin) / PLAN_SLOT_MIN))
       const windowEnd = Math.min(N, Math.floor((Math.min(le, endMin) - startMin) / PLAN_SLOT_MIN))
-      const allow = hours.map((h) => computeAllowance(task.workClass, task.inSun, workW, cavC, binding.limit, binding.stricterTier, h, pack, restSetting))
+      // With no acclimatised member the crew rate is the acclimatisation-schedule rate: RAL and the next-stricter tier.
+      const allow = hours.map((h, hi) => {
+        const useTables = tablesFor(task, hi)
+        if (useTables && crewMonitored) tablesUsed.add(`${index}|${hi}`)
+        return computeAllowance(task.workClass, task.inSun, workW, cavC, binding.limit, useTables, h, pack, restSetting, accMembers.length === 0)
+      })
       return {
         task,
         index,
         valid: need > 0,
         need,
         workW,
+        waterW,
         cavC,
         limitC: exposureLimitC(workW, binding.limit),
         location: task.inSun ? 'sun' : 'shade',
@@ -1065,65 +1408,113 @@ export function planDay(input: PlanDayInput): DayPlan {
       return placed
     }
 
-    // ── Placement, then the ISO 7933 screen of the planned day (PHS_SCREEN) with re-placement passes ──
-    const refAcclimatized = members.filter((m) => m.known).every((m) => m.status === 'acclimatized')
-    let crewClothing: ClothingId = DEFAULT_CLOTHING
-    let crewClothingCav = -Infinity
-    for (const m of members) {
-      const id = m.clothing !== undefined && m.clothing in CLOTHING ? m.clothing : DEFAULT_CLOTHING
-      const cav = clothingAdjustmentC(id, false)
-      if (cav > crewClothingCav) {
-        crewClothing = id
-        crewClothingCav = cav
+    // ── Placement, then the ISO 7933 screen of the planned day (PHS_SCREEN): passes with re-placement, verification ──
+    const refAcclimatized = accMembers.length > 0
+    const specsFor = (clothing: ClothingId): ScreenSpec[] =>
+      tasks.map((tc) => ({ task: tc.task, location: tc.location, clothing: tc.task.clothing !== undefined && tc.task.clothing in CLOTHING ? tc.task.clothing : clothing }))
+    /** The crew layout as screen segments: each block's part of one clock hour (= BlockHour), idle stretches per hour. */
+    const segmentsOfSlots = (): CrewSeg[] => {
+      const segs: CrewSeg[] = []
+      let k = 0
+      while (k < N) {
+        const hi = hourIdx(k)
+        const ti = slotTask[k]
+        let k1 = k
+        while (k1 + 1 < N && hourIdx(k1 + 1) === hi && slotTask[k1 + 1] === ti) k1 += 1
+        let planned = 0
+        if (ti >= 0) for (let j = k; j <= k1; j++) planned += slotWork[j]
+        segs.push({ m0: k * PLAN_SLOT_MIN, wall: (k1 - k + 1) * PLAN_SLOT_MIN, ti, hi, planned, k0: k, k1 })
+        k = k1 + 1
+      }
+      return segs
+    }
+    /** Applies a screened rate to a segment's slots (0 → the slots become idle). */
+    const applyRate = (seg: CrewSeg, r: number): void => {
+      const perSlot = (r / 60) * PLAN_SLOT_MIN
+      for (let j = seg.k0; j <= seg.k1; j++) {
+        slotRate[j] = r
+        slotWork[j] = Math.min(slotWork[j], perSlot)
+        if (r <= 0) {
+          slotTask[j] = -1
+          slotWork[j] = 0
+          slotRate[j] = 0
+        }
       }
     }
-    const specs: ScreenSpec[] = tasks.map((tc) => ({
-      task: tc.task,
-      location: tc.location,
-      clothing: tc.task.clothing !== undefined && tc.task.clothing in CLOTHING ? tc.task.clothing : crewClothing,
-    }))
-    let placementWarnings = placeAll()
-    let screen: ScreenOutcome | null = null
-    let passes = 0
     const notFeasible = new Map<number, Set<number>>()
+    const addNotFeasible = (ti: number, hi: number): void => {
+      const set = notFeasible.get(ti) ?? new Set<number>()
+      set.add(hi)
+      notFeasible.set(ti, set)
+    }
+    let placementWarnings = placeAll()
+    let passes = 0
+    let verificationCuts = 0
+    let restLimitT: number | null = null
+    /** The last pass's screened rate per task-hour `${ti}|${hi}` (min over its segments). */
+    const lastRate = new Map<string, number>()
     if (climateAt !== null) {
-      for (;;) {
-        screen = screenPlannedDay({
-          N,
-          startT: slotT(0),
-          hourOfSlot: hourIdx,
-          slotTask,
-          slotWork,
-          slotRate,
-          specs,
-          climateAt,
-          restLocation: phsRestLocation,
-          restClothing: crewClothing,
-          acclimatized: refAcclimatized,
-        })
-        passes += 1
-        for (const nf of screen.notFeasible) {
-          const set = notFeasible.get(nf.ti) ?? new Set<number>()
-          set.add(nf.hi)
-          notFeasible.set(nf.ti, set)
+      const crewSpecs = specsFor(crewClothing)
+      // A task outside the model's scope (vapour barrier) is not screened itself (the device neither projects nor holds
+      // during it); the rest after it is, from the surrogate-stepped state, as on the device.
+      const inScope = (ti: number): boolean => CLOTHING[crewSpecs[ti].clothing].phs.applicable
+      const md = screenModel({ M: N * PLAN_SLOT_MIN, startT: slotT(0), climateAt, specs: crewSpecs, restLocation: phsRestLocation, restClothing: crewClothing, acclimatized: refAcclimatized })
+      const restFail = restOnlyFailure(md)
+      if (restFail !== null) {
+        // Rest alone fails within the shift: work only adds heat and sweat, so no plan avoids a device stop — no work.
+        restLimitT = slotT(0) + restFail * MINUTE_MS
+        for (const row of phsCap) row.fill(0)
+        placementWarnings = placeAll()
+      } else {
+        for (;;) {
+          const segs = segmentsOfSlots()
+          const res = screenPass(md, segs, (seg) => slotRate[(seg as CrewSeg).k0], Infinity)
+          passes += 1
+          lastRate.clear()
+          let lowered = false
+          segs.forEach((seg, i) => {
+            if (seg.ti < 0) return
+            const key = `${seg.ti}|${seg.hi}`
+            if (inScope(seg.ti)) lastRate.set(key, Math.min(lastRate.get(key) ?? Infinity, res.rate[i]))
+            if (!res.cut[i]) return
+            const r = res.rate[i]
+            if (r < phsCap[seg.ti][seg.hi]) {
+              phsCap[seg.ti][seg.hi] = r
+              lowered = true
+            }
+            if (r < PHS_SCREEN.minBoutMin) addNotFeasible(seg.ti, seg.hi)
+            applyRate(seg, r)
+          })
+          if (!lowered || passes >= PHS_SCREEN.maxPasses) break
+          placementWarnings = placeAll() // re-place with the lowered allowances; the next pass screens it again
         }
-        let lowered = false
-        for (const r of screen.reduced) {
-          if (r.capMin < phsCap[r.ti][r.hi]) {
-            phsCap[r.ti][r.hi] = r.capMin
-            lowered = true
+        // Verification of the final layout: nothing to do when the passes converged (a safety net otherwise).
+        for (;;) {
+          const segs = segmentsOfSlots()
+          const v = verifyLayout(md, segs, segs.map((s) => (s.ti >= 0 ? Math.min(s.wall, Math.floor(s.planned + 1e-6)) : 0)))
+          if (v === null) break
+          if (v.zero === null) {
+            // Rest alone fails (not expected after restOnlyFailure): no work at all (fail-safe).
+            restLimitT = slotT(0) + v.m * MINUTE_MS
+            for (const row of phsCap) row.fill(0)
+            placementWarnings = placeAll()
+            break
           }
+          const seg = segs[v.zero]
+          phsCap[seg.ti][seg.hi] = 0
+          addNotFeasible(seg.ti, seg.hi)
+          applyRate(seg, 0)
+          verificationCuts += 1
         }
-        if (!lowered || passes >= PHS_SCREEN.maxPasses) break
-        placementWarnings = placeAll() // re-place with the lowered allowances; the next pass screens and cuts it again
       }
-      // What the cut schedule actually completes.
+      // What the screened schedule actually completes.
       scheduled.fill(0)
       for (let k = 0; k < N; k++) if (slotTask[k] >= 0) scheduled[slotTask[k]] += slotWork[k]
     }
     warnings.push(...placementWarnings)
     const phsMinOf = (ti: number, hi: number): number | null => {
-      const v = Math.min(screen?.phsMin.get(`${ti}|${hi}`) ?? Infinity, phsCap[ti][hi])
+      if (climateAt === null) return null
+      const v = Math.min(lastRate.get(`${ti}|${hi}`) ?? Infinity, phsCap[ti][hi])
       return Number.isFinite(v) ? v : null
     }
     const limitedByOf = (tc: TaskCtx, hi: number): PlanLimitedBy => {
@@ -1142,6 +1533,14 @@ export function planDay(input: PlanDayInput): DayPlan {
         taskId: tc.task.id,
         hours: list,
         text: `${tc.task.name}: the heat-strain screen (ISO 7933, reference worker) allows less than ${PHS_SCREEN.minBoutMin} min of work per hour at ${list.join(', ')} after the planned work before it; use a lighter task or rotation, a cooling garment, or move the work to a cooler hour.`,
+      })
+    }
+    if (restLimitT !== null) {
+      warnings.push({
+        code: 'phs_rest_limit',
+        crewId: crew.id,
+        hours: [hourLabel(Math.floor((restLimitT - dayStartT) / HOUR_MS))],
+        text: `Crew ${crew.id}: even resting in ${restLabel}, the heat-strain screen (ISO 7933, reference worker, no logged drinking) reaches its limit margin at ${localHhmm(restLimitT, dayStartT)}: devices would stop resting workers then, and any work would bring that earlier, so no heat work is planned for this shift. Provide a cooled rest area (ADOSH-SF CoP 11.0 §3.2(c)), have workers log their drinks on the device (logged intake raises the water-loss limit), or shorten the shift to end before ${localHhmm(restLimitT, dayStartT)}.`,
       })
     }
 
@@ -1174,7 +1573,9 @@ export function planDay(input: PlanDayInput): DayPlan {
         taskId: tc.task.id,
         text: outside
           ? `${tc.task.name}: its time window (${tc.task.earliestStart ?? 'shift start'}–${tc.task.latestEnd ?? 'shift end'}) lies outside the shift; not scheduled.`
-          : reason === 'deferred'
+          : restLimitT !== null
+            ? `${tc.task.name} not scheduled: even resting, the heat-strain screen reaches its limit margin at ${localHhmm(restLimitT, dayStartT)}, so no heat work is planned for this shift (see the rest-limit warning).`
+            : reason === 'deferred'
             ? `${tc.task.name} deferred: no hour in its window allows at least ${60 * STOP_BAND_WORK_FRACTION} min/h of work under the required work/rest cycle (${best}). Reschedule to a cooler day or add engineering controls (cooler rest area, shade).`
             : `${tc.task.name}: only ${Math.round(done)} of ${tc.need} min fit in its window under the required work/rest cycle (${best}).`,
       })
@@ -1197,6 +1598,125 @@ export function planDay(input: PlanDayInput): DayPlan {
     }
     const reassignHours = new Set<string>()
 
+    // ── Personal caps of members on an acclimatisation schedule (MemberCapHour) ──
+    // Each follows the crew layout with at most: the crew rate; NIOSH RAL with their own size and clothing (task PPE
+    // overrides) and the pack's next-stricter work/rest tier (the device applies both to workers new to the site or
+    // back from an absence — clinical.conservativeMode reasons new_worker_14d / returning_after_absence, which members
+    // on a schedule meet except on day 14 of the new-employee schedule, where the cap is stricter than the device;
+    // status-based here, no private input [ENG, protective]); no work where the
+    // ADOSH TWL zone excludes unacclimatised persons (TG v4.0 Table 1 note b members); the exposure ramp; and the ISO
+    // 7933 screen with an unacclimatised reference worker (passes until nothing is cut, then verification). The plan
+    // shows the cap, never the history or the reason.
+    const crewSegs = segmentsOfSlots()
+    const segOfSlot = new Int32Array(N)
+    crewSegs.forEach((s, i) => segOfSlot.fill(i, s.k0, s.k1 + 1))
+    const crewBouts = crewSegs.map((s) => (s.ti >= 0 ? Math.min(s.wall, Math.floor(s.planned + 1e-6)) : 0))
+    const crewBoutTotal = crewBouts.reduce((s, b) => s + b, 0)
+    const memberCaps: Record<string, MemberCapHour[]> = {}
+    const memberWorkMin: Record<string, number> = {}
+    const memberSegBouts = new Map<string, number[]>()
+    const capWarnings: PlanWarning[] = []
+    for (const m of members) {
+      if (isAcclimatizedMember(m)) {
+        memberWorkMin[m.id] = crewBoutTotal
+        continue
+      }
+      const ralCache = new Map<string, Allowance>()
+      const ralOf = (ti: number, hi: number): Allowance => {
+        const key = `${ti}|${hi}`
+        const hit = ralCache.get(key)
+        if (hit !== undefined) return hit
+        const task = tasks[ti].task
+        const v = computeAllowance(task.workClass, task.inSun, taskMetabolicW(task, m.massKg), clothingAdjustmentC(task.clothing ?? m.clothing, task.hood === true), 'RAL', true, hours[hi], pack, restSetting, true)
+        ralCache.set(key, v)
+        return v
+      }
+      const ralCap = (ti: number, hi: number): number => ralOf(ti, hi).allowedMin
+      // Rest itself above this member's limit (NIOSH RAL at rest in the rest area, own size and clothing): the device
+      // stops the member even at rest (risk.ts environment channel), so the supervisor is told where the crew-level
+      // warning does not already say so — the schedule and the hours, never the reason.
+      const restOver = hours.map((_, hi) => hi).filter((hi) => !tasks.some((t) => t.allow[hi].restExceedsLimit) && tasks.some((t) => t.valid && ralOf(t.index, hi).restExceedsLimit))
+      if (restOver.length > 0) {
+        const labels = restOver.map((hi) => hourLabel(hours[hi].hourOfDay))
+        capWarnings.push({
+          code: 'rest_exceeds_limit',
+          crewId: crew.id,
+          workerIds: [m.id],
+          hours: labels,
+          text: `${m.id} (acclimatisation schedule): even rest in ${restLabel} exceeds this member's exposure limit at ${labels.join(', ')} — no heat work for this member then, and the device asks for a cooler place to rest; provide a cooler rest area (ADOSH-SF CoP 11.0 §3.2(i)).`,
+        })
+      }
+      const preCap = crewSegs.map((s) => (s.ti < 0 ? 0 : Math.min(slotRate[s.k0], ralCap(s.ti, s.hi), m.adoshUnacclimatized && exclusion(tasks[s.ti], s.hi).excluded ? 0 : Infinity)))
+      // Exposure ramp: risk.ts stops hot work once today's hot-work minutes reach maxExposureFraction × 480, so the
+      // planned bouts stay strictly below that (whole minutes).
+      const budget = m.maxExposureFraction < 1 ? Math.max(0, Math.ceil(m.maxExposureFraction * RISK_THRESHOLDS.environment.budgetShiftMin - 1e-9) - 1) : Infinity
+      const phsSegCap = new Map<number, number>()
+      const capOf = (_s: ScreenSeg, i: number): number => Math.min(preCap[i], phsSegCap.get(i) ?? Infinity)
+      const boutsNow = (): number[] => {
+        let left = budget
+        return crewSegs.map((s, i) => {
+          if (s.ti < 0) return 0
+          const b = boutOf(s, capOf(s, i), left)
+          left -= b
+          return b
+        })
+      }
+      if (climateAt !== null && crewBoutTotal > 0) {
+        const mClothing = worstClothing([m])
+        const mmd = screenModel({ M: N * PLAN_SLOT_MIN, startT: slotT(0), climateAt, specs: specsFor(mClothing), restLocation: phsRestLocation, restClothing: mClothing, acclimatized: false })
+        const restFail = restOnlyFailure(mmd)
+        if (restFail !== null) {
+          crewSegs.forEach((_, i) => phsSegCap.set(i, 0))
+          const at = localHhmm(slotT(0) + restFail * MINUTE_MS, dayStartT)
+          capWarnings.push({
+            code: 'phs_rest_limit',
+            crewId: crew.id,
+            workerIds: [m.id],
+            hours: [hourLabel(Math.floor((slotT(0) + restFail * MINUTE_MS - dayStartT) / HOUR_MS))],
+            text: `${m.id} (acclimatisation schedule): even resting in ${restLabel}, the heat-strain screen (ISO 7933, unacclimatised reference worker, no logged drinking) reaches its limit margin at ${at}, so no heat work is planned for this member this shift. Provide a cooled rest area or end this member's shift before ${at}.`,
+          })
+        } else {
+          for (let p = 0; p < PHS_SCREEN.maxPasses; p++) {
+            const res = screenPass(mmd, crewSegs, capOf, budget)
+            let cut = false
+            res.cut.forEach((c, i) => {
+              if (!c) return
+              phsSegCap.set(i, Math.min(phsSegCap.get(i) ?? Infinity, res.rate[i]))
+              cut = true
+            })
+            if (!cut) break
+          }
+          for (;;) {
+            const v = verifyLayout(mmd, crewSegs, boutsNow())
+            if (v === null) break
+            if (v.zero === null) {
+              crewSegs.forEach((_, i) => phsSegCap.set(i, 0))
+              break
+            }
+            phsSegCap.set(v.zero, 0)
+          }
+        }
+      }
+      const bouts = boutsNow()
+      memberSegBouts.set(m.id, bouts)
+      memberWorkMin[m.id] = bouts.reduce((s, b) => s + b, 0)
+      memberCaps[m.id] = crewSegs.flatMap((s, i): MemberCapHour[] =>
+        s.ti < 0
+          ? []
+          : [
+              {
+                startT: slotT(s.k0),
+                hour: hourLabel(hours[s.hi].hourOfDay),
+                taskId: tasks[s.ti].task.id,
+                wallMin: s.wall,
+                workMinPerHour: capOf(s, i),
+                boutMin: bouts[i],
+                limitedBy: bouts[i] >= crewBouts[i] ? 'crew' : (phsSegCap.get(i) ?? Infinity) < preCap[i] ? 'phs' : 'acclimatization',
+              },
+            ],
+      )
+    }
+
     // ── Water ──
     const waterCache = new Map<string, number>()
     const taskWaterMlH = (tc: TaskCtx, hi: number): number => {
@@ -1205,7 +1725,7 @@ export function planDay(input: PlanDayInput): DayPlan {
       if (hit !== undefined) return hit
       const a = tc.allow[hi]
       const ml = recommendWaterMlPerHour({
-        workW: tc.workW,
+        workW: tc.waterW,
         workClass: tc.task.workClass,
         wbgtC: a.wbgtWorkEffC,
         ...(a.waterMinLph !== null ? { regulatoryMinMlPerHour: a.waterMinLph * 1000 } : {}),
@@ -1265,6 +1785,7 @@ export function planDay(input: PlanDayInput): DayPlan {
             boutMin: 0,
             phsWorkMinPerHour: phsMinOf(tc.index, hi),
             limitedBy: limitedByOf(tc, hi),
+            monitored: crewMonitored && !tablesUsed.has(`${tc.index}|${hi}`),
           }
           bh.wallMin += PLAN_SLOT_MIN
           bh.workMin += slotWork[k]
@@ -1276,7 +1797,7 @@ export function planDay(input: PlanDayInput): DayPlan {
           }
         }
       }
-      const hoursDetail = [...perHour.values()].map((bh) => ({ ...bh, workMin: round2(bh.workMin), boutMin: Math.min(bh.wallMin, Math.max(0, Math.ceil(bh.workMin - 1e-6))) }))
+      const hoursDetail = [...perHour.values()].map((bh) => ({ ...bh, workMin: round2(bh.workMin), boutMin: Math.min(bh.wallMin, Math.max(0, Math.floor(bh.workMin + 1e-6))) }))
       if (tc) {
         const a = tc.allow[hourIdx(k0)]
         const allowed = slotRate[k0]
@@ -1286,10 +1807,22 @@ export function planDay(input: PlanDayInput): DayPlan {
           if (exHours.length > 0) {
             const ex = exclusion(tc, exHours[0])
             notes.push(
-              `Not yet acclimatised (${nonAcc.join(', ')}): may not work in the ${ex.label} — ${ex.shadeOk ? 'reassign to shaded light work' : 'no heat-exposed work; follow the acclimatisation plan'}.`,
+              `Not yet acclimatised (${nonAcc.join(', ')}): no work in the ${ex.label} (personal cap) — ${ex.shadeOk ? 'reassign to shaded light work' : 'no heat-exposed work; follow the acclimatisation plan'}.`,
             )
           }
         }
+        // Personal caps in this block (acclimatisation schedule): the cap, never the history or the reason.
+        const capParts: string[] = []
+        for (const [id, mb] of memberSegBouts) {
+          let mine = 0
+          let crewSum = 0
+          for (let si = segOfSlot[k0]; si <= segOfSlot[k1]; si++) {
+            mine += mb[si]
+            crewSum += crewBouts[si]
+          }
+          if (mine < crewSum) capParts.push(mine === 0 ? `${id} no work` : `${id} ${mine} of ${crewSum} min`)
+        }
+        if (capParts.length > 0) notes.push(`Acclimatisation schedule (personal caps): ${capParts.join('; ')}.`)
         if (allowed < 60) notes.push(`Rest in ${restLabel} ${60 - allowed} min every hour.`)
         if (phsLimited) {
           notes.push(`Heat-strain screen (ISO 7933, reference worker): at most ${allowed} min of work per hour here, worked as one bout at the start of each hour.`)
@@ -1302,7 +1835,7 @@ export function planDay(input: PlanDayInput): DayPlan {
         if ((slotStartMin(k1) - startMin) / 60 > 2) notes.push('Electrolyte drinks after 2 h of sweating (no salt tablets).')
         const zoneNoLone = [...perHour.keys()].some((hi) => tc.allow[hi].zone?.loneWorkAllowed === false)
         if (zoneNoLone) notes.push('No lone work (TWL zone control).')
-        else if (binding.nonAcclimatizedMemberIds.length > 0 || binding.conservative) notes.push('Buddy system: no lone work for members on a stricter personal limit.')
+        else if (binding.nonAcclimatizedMemberIds.length > 0) notes.push('Buddy system: no lone work for members on an acclimatisation schedule.')
         bset.add(LIMITS_BASIS.hydration)
         const source: RestCycle['source'] = phsLimited ? 'phs' : a.source
         blocks.push({
@@ -1371,12 +1904,13 @@ export function planDay(input: PlanDayInput): DayPlan {
         text: `Crew ${crew.id}: ${nonAcc.join(', ')} not yet acclimatised — may not work in the ADOSH Medium/High zone at ${[...reassignHours].sort().join(', ')}; reassign to shaded light work (${pack.twlZones[0]?.basis ?? pack.basis}).`,
       })
     }
+    // The schedule and the cap, never the day of the ramp or the exposure fraction (they reveal the history).
     for (const m of members.filter((x) => x.known && x.maxExposureFraction < 1)) {
       warnings.push({
         code: 'acclimatization_ramp',
         crewId: crew.id,
         workerIds: [m.id],
-        text: `${m.id}: acclimatisation day ${m.dayOfRamp ?? 1} — limit heat exposure to ${Math.round(m.maxExposureFraction * 100)} % of a full shift (${LIMITS_BASIS.acclimatization}).`,
+        text: `${m.id}: on an acclimatisation schedule — today's heat work is limited; the plan's personal caps for this member stay within the limit (${dutyBasis}).`,
       })
     }
     const restExceed = hours.filter((_, hi) => tasks.some((t) => t.allow[hi].restExceedsLimit)).map((h) => hourLabel(h.hourOfDay))
@@ -1410,9 +1944,30 @@ export function planDay(input: PlanDayInput): DayPlan {
     const waterTotal = blocks.reduce((s, b) => s + b.waterL, 0)
     const peakLph = Math.max(0, ...hourWaterL.values())
     const coolers = N > 0 ? Math.max(1, Math.ceil((peakLph * COOLER_REFILL_INTERVAL_H) / COOLER_CAPACITY_L - EPS)) : 0
+    warnings.push(...capWarnings)
+    const crewNotes = [DEVICE_REST_NOTE]
+    if (crewMonitored) crewNotes.push(MONITORED_PLAN.note)
+    if (planBasis === 'monitored' && accMembers.length > 0 && climateAt === null) {
+      crewNotes.push('Monitored plan requested, but the heat-strain screen (ISO 7933) cannot run without air temperature, humidity, radiant and wind values: the WBGT tables apply.')
+    }
+    if (planBasis === 'monitored' && accMembers.length === 0 && members.length > 0) {
+      crewNotes.push('Monitored plan requested, but no member is acclimatised yet: the crew rate follows the WBGT tables and the acclimatisation schedule.')
+    }
+    if (crewMonitored && tablesUsed.size > 0) {
+      crewNotes.push(
+        `Hours in which devices cannot confirm monitoring keep the WBGT table limits in this monitored plan: the first ${ECTEMP_RULES.WARMUP_MIN} min of the shift (device warm-up), clothing outside the heat-strain model or without verified values, and work rates or conditions outside its validity range.`,
+      )
+    }
+    if (binding.nonAcclimatizedMemberIds.length > 0) {
+      crewNotes.push(`Members on an acclimatisation schedule (${binding.nonAcclimatizedMemberIds.join(', ')}) follow personal caps in this plan (${dutyBasis}).`)
+    }
     crewPlans.push({
       crewId: crew.id,
       binding,
+      planBasis: crewMonitored ? 'monitored' : 'tables',
+      notes: crewNotes,
+      memberCaps,
+      memberWorkMin,
       blocks,
       workMin: round1(workTotal),
       restMin: round1(taskSlots * PLAN_SLOT_MIN - workTotal),
@@ -1431,6 +1986,8 @@ export function planDay(input: PlanDayInput): DayPlan {
           : {
               reference: { massKg: PHS_SCREEN.referenceMassKg, heightCm: PHS_SCREEN.referenceHeightCm, acclimatized: refAcclimatized },
               passes,
+              verificationCuts,
+              restLimitT,
               hours: hours.map((h, hi) => ({
                 hour: hourLabel(h.hourOfDay),
                 byTask: Object.fromEntries(
@@ -1445,17 +2002,18 @@ export function planDay(input: PlanDayInput): DayPlan {
     })
   }
 
-  // ── Site hour outlook for the strictest crew binding ──
+  // ── Site hour outlook for the strictest crew rate, by the WBGT tables (a monitored plan's device fallback) ──
   const allMembers = input.crews.flatMap((c) => membersOf(c, byId))
   const strictLimit: ExposureLimitId = crewPlans.length === 0 || crewPlans.some((c) => c.binding.limit === 'RAL') ? 'RAL' : 'REL'
-  const strictTier = crewPlans.some((c) => c.binding.stricterTier)
+  // A crew with no acclimatised member is planned at the acclimatisation-schedule rate (RAL and the next-stricter tier).
+  const strictTier = crewPlans.some((c) => c.binding.limit === 'RAL')
   const strictCav = allMembers.length === 0 ? clothingAdjustmentC(undefined) : Math.max(...allMembers.map((m) => clothingAdjustmentC(m.clothing, false)))
   const masses = allMembers.map((m) => m.massKg).filter((v): v is number => v !== undefined && Number.isFinite(v))
   const maxMass = masses.length > 0 ? Math.max(...masses) : undefined
   const outlook: HourOutlook[] = hours.map((h) => {
     const byClass = (inSun: boolean): Record<WorkClass, number> =>
       Object.fromEntries(
-        WORK_CLASSES.map((wc) => [wc, computeAllowance(wc, inSun, taskMetabolicW({ workClass: wc }, maxMass), strictCav, strictLimit, strictTier, h, pack, restSetting).allowedMin]),
+        WORK_CLASSES.map((wc) => [wc, computeAllowance(wc, inSun, taskMetabolicW({ workClass: wc }, maxMass), strictCav, strictLimit, true, h, pack, restSetting, strictTier).allowedMin]),
       ) as Record<WorkClass, number>
     const zone = twlZone(h.twlWm2, pack)
     const hourStart = h.t
@@ -1473,7 +2031,7 @@ export function planDay(input: PlanDayInput): DayPlan {
       middayBreak: mb !== null && hourStart < mb.endT && hourEnd > mb.startT,
       allowedWorkMinPerHour: byClass(true),
       allowedWorkMinPerHourShade: byClass(false),
-      binding: { limit: strictLimit, clothingAdjustmentC: strictCav, stricterTier: strictTier },
+      binding: { limit: strictLimit, clothingAdjustmentC: strictCav },
       forecastFallback: h.fallback,
     }
   })
@@ -1500,7 +2058,13 @@ export function planDay(input: PlanDayInput): DayPlan {
   return { ...base, hours: outlook, crews: crewPlans, totals, warnings }
 }
 
-/** Naive plan: listed order from the shift start, continuous work, in-sun tasks pause for the midday break only. */
+/**
+ * Naive plan: listed order, continuous work, midday ban only — within the same task windows as every policy (wave 2d:
+ * same constraints for every policy; the work-conserving listed order of sim/worldsim.ts listedOrderSchedule). Each
+ * 5-min slot the crew works on the first listed task that has work left and whose window (earliestStart/latestEnd ∩
+ * shift, as for the planner) is open; a sun task in the midday break pauses (the crew waits, it does not switch task);
+ * no open task = idle; work left when a task's window closes is not done.
+ */
 function naivePlan(
   tasks: readonly TaskCtx[],
   N: number,
@@ -1509,33 +2073,28 @@ function naivePlan(
   slotStartMin: (k: number) => number,
 ): { blocks: NaiveBlock[]; workMin: number; exposure: number } {
   const blocks: NaiveBlock[] = []
-  let k = 0
+  const remaining = tasks.map((tc) => (tc.valid ? tc.need : 0))
   let workMin = 0
   let exposure = 0
-  for (const tc of tasks) {
-    if (!tc.valid) continue
-    let remaining = tc.need
-    let open: NaiveBlock | null = null
-    let lastK = -2
-    while (remaining > EPS && k < N) {
-      if (tc.task.inSun && midday[k]) {
-        k += 1
-        continue
-      }
-      const w = Math.min(PLAN_SLOT_MIN, remaining)
-      remaining -= w
-      workMin += w
-      exposure += Math.max(0, tc.allow[hourIdx(k)].wbgtWorkEffC - tc.limitC) * w
-      if (open && lastK === k - 1) {
-        open.end = minutesToHhmm(slotStartMin(k) + PLAN_SLOT_MIN)
-        open.workMin += w
-      } else {
-        open = { taskId: tc.task.id, start: minutesToHhmm(slotStartMin(k)), end: minutesToHhmm(slotStartMin(k) + PLAN_SLOT_MIN), location: tc.location, workMin: w }
-        blocks.push(open)
-      }
-      lastK = k
-      k += 1
+  let open: NaiveBlock | null = null
+  let openTask = -1
+  let lastK = -2
+  for (let k = 0; k < N; k++) {
+    const tc = tasks.find((x) => remaining[x.index] > EPS && k >= x.windowStart && k < x.windowEnd)
+    if (tc === undefined || (tc.task.inSun && midday[k])) continue
+    const w = Math.min(PLAN_SLOT_MIN, remaining[tc.index])
+    remaining[tc.index] -= w
+    workMin += w
+    exposure += Math.max(0, tc.allow[hourIdx(k)].wbgtWorkEffC - tc.limitC) * w
+    if (open && openTask === tc.index && lastK === k - 1) {
+      open.end = minutesToHhmm(slotStartMin(k) + PLAN_SLOT_MIN)
+      open.workMin += w
+    } else {
+      open = { taskId: tc.task.id, start: minutesToHhmm(slotStartMin(k)), end: minutesToHhmm(slotStartMin(k) + PLAN_SLOT_MIN), location: tc.location, workMin: w }
+      openTask = tc.index
+      blocks.push(open)
     }
+    lastK = k
   }
   return { blocks, workMin, exposure }
 }

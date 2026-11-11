@@ -2,7 +2,6 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { buildDemoCrew } from '../data/workforce'
 import { MINUTE_MS, epochFromLocal } from '../engine/time'
 import { isMiddayBreak } from '../engine/regulation'
-import { assessSnapshot } from '../engine/risk'
 import { RISK_LEVELS, RISK_ORDER, type ConsentState, type Crew, type RiskAssessment, type WorkerProfile } from '../engine/types'
 import { createNodeSimDataLoader, daySamples, minuteWeather, siteRoster, PERFECT_FORECAST_NOTE } from './simdata'
 import {
@@ -10,19 +9,23 @@ import {
   WORLD_PARAMS,
   createWorld,
   deviceCycleWorkMin,
+  drinkReminderShown,
   finishWorld,
   idleMinutes,
+  loggedDrinkMl,
   makeSimConfig,
   planWindowWorkMin,
   runSiteDay,
   shiftMinutes,
   stepWorld,
+  taskWindowMs,
   worldMinutesRemaining,
   worldSim,
   worldView,
   type World,
 } from './worldsim'
-import { POLICY_IDS, type SimConfig, type SimData, type SimEvent, type SiteDayResult, type WorldSimApi } from './types'
+import { createRng, type Rng } from './rng'
+import { POLICY_IDS, isZillPolicy, policyPlanBasis, policyUsesWearable, type SimConfig, type SimData, type SimEvent, type SiteDayResult, type WorldSimApi } from './types'
 import { TRUTH_PARAMS } from './truth'
 import { cohortSpec, truthOverridesApplied } from './backtest'
 
@@ -344,7 +347,8 @@ describe('injections take effect', () => {
 
   it('a task change moves the worker until the next change; an intake reaches the truth and the engine', () => {
     const w = createWorld(cfg({ policy: 'ban_only', trace: 'full' }), peak)
-    stepTo(w, '06:00')
+    // 07:00: the crew is at work (since worldsim 1.3.0 the listed order starts each task when its window opens, 06:00).
+    stepTo(w, '07:00')
     const id = 'W-D2B2'
     const water0 = w.workerById.get(id)!.truth.intakeMl
     stepWorld(w, 0, [
@@ -355,7 +359,7 @@ describe('injections take effect', () => {
     let v = view(w, id)
     expect(v.task).toBeNull()
     expect(v.location).toBe('indoor_cool')
-    expect(byKind(w.events, 'task').some((e) => e.workerId === id && e.location === 'indoor_cool' && e.t === local(PEAK, '06:00'))).toBe(true)
+    expect(byKind(w.events, 'task').some((e) => e.workerId === id && e.location === 'indoor_cool' && e.t === local(PEAK, '07:00'))).toBe(true)
     expect(w.workerById.get(id)!.truth.intakeMl - water0).toBeGreaterThanOrEqual(500)
     expect(byKind(w.events, 'intake').some((e) => e.intake.workerId === id && e.intake.ml === 500)).toBe(true)
     stepWorld(w, 30)
@@ -651,9 +655,9 @@ describe('schedules: ADOSH dose in site_index, plan fidelity', () => {
   })
 
   it('plan schedule: each plan block-hour works its first boutMin minutes, then rests (the planner layout its ISO 7933 screen simulated)', () => {
-    // Expectation changed in worldsim 1.2.0: the schedule follows the plan's own execution layout (BlockHour.boutMin =
-    // ceil(workMin)), so a block may exceed workMin by < 1 min per block-hour; before, 60-min windows from the block
-    // start were rounded down (planWindowWorkMin, now only the fallback for a block without block-hours).
+    // The schedule follows the plan's own execution layout (worldsim 1.2.0). Since wave 2d the planner floors
+    // BlockHour.boutMin (it was ceil), so the executed work of a block never exceeds its planned work (tightened below);
+    // planWindowWorkMin is only the fallback for a block without block-hours.
     const R_MIDDAY = 2
     const R_STATUTORY = 3
     for (const [date, data] of [['2025-11-26', mild], [PEAK, peak]] as const) {
@@ -676,7 +680,8 @@ describe('schedules: ADOSH dose in site_index, plan fidelity', () => {
             }
           }
           expect(blockWork).toBeLessThanOrEqual(b.hours.reduce((s, h) => s + h.boutMin, 0))
-          expect(blockWork).toBeLessThan(b.workMin + b.hours.length)
+          expect(blockWork).toBeLessThanOrEqual(b.hours.reduce((s, h) => s + h.workMin, 0) + 1e-9)
+          for (const h of b.hours) expect(h.boutMin).toBeLessThanOrEqual(h.workMin + 1e-9)
         }
       }
       expect(bouts).toBeGreaterThan(0)
@@ -707,10 +712,17 @@ describe('engine-owned resume and the day plan on the device (worldsim 1.2.0)', 
     }
   })
 
-  it('the device gets the assignment: resumeTask = the scheduled task, else the next one; plannedWorkMinPerHour = the plan block rate, never exceeded', () => {
+  it('the device gets the assignment: resumeTask = the scheduled task, else the next one; plannedWorkMinPerHour = the plan block rate (a member on an acclimatisation schedule: their own cap), never exceeded', () => {
     for (const [date, data] of [['2025-11-26', mild], [PEAK, peak]] as const) {
       const w = createWorld(cfg({ date, trace: 'none' }), data)
       const blocks = w.plan?.crews[0].blocks ?? []
+      const caps = w.plan?.crews[0].memberCaps ?? {}
+      expect(Object.keys(caps).length).toBeGreaterThan(0) // the demo crew has a member on a schedule
+      // The member's cap of the block-hour that contains t (0 where the plan gave no cap: no work, protective).
+      const capAt = (id: string, t: number): number => {
+        const h = blocks.flatMap((b) => b.hours).find((x) => t >= x.startT && t < x.startT + x.wallMin * MINUTE_MS)
+        return h ? (caps[id].find((c) => c.startT === h.startT)?.workMinPerHour ?? 0) : 0
+      }
       let checked = 0
       let capped = 0
       while (worldMinutesRemaining(w) > 0) {
@@ -722,7 +734,7 @@ describe('engine-owned resume and the day plan on the device (worldsim 1.2.0)', 
         for (const ws of w.workers) {
           if (ws.manual || ws.evacuated) continue
           expect(ws.resumeTask?.id ?? null, `${date} ${ws.id}`).toBe(next?.taskId ?? null)
-          expect(ws.plannedRate).toBe(cur?.taskId ? cur.workMinPerHour : null)
+          expect(ws.plannedRate, `${date} ${ws.id}`).toBe(cur?.taskId ? (caps[ws.id] ? capAt(ws.id, t) : cur.workMinPerHour) : null)
           checked += 1
           if (ws.plannedRate !== null && ws.assessment) {
             expect(ws.assessment.workMinPerHour).toBeLessThanOrEqual(ws.plannedRate + 1e-9)
@@ -735,37 +747,35 @@ describe('engine-owned resume and the day plan on the device (worldsim 1.2.0)', 
     }
   })
 
-  it('a rest episode ends when the device no longer asks for rest and no regulation/environment rule stops the resume task; a held projection stop keeps the worker resting until the engine releases it', () => {
-    const n = { resting: 0, resumed: 0, heldByRule: 0, heldResting: 0, checks: 0, infeasible: 0 }
+  it('the engine owns every resume decision: a rest episode ends exactly when the device neither asks for rest nor holds; projection and task holds keep the worker resting until the engine releases them', () => {
+    // Expectation changed in worldsim 1.4.0 (wave 2d): the simulator's own check of the resume task
+    // (resumeTaskAllowed, counted here as heldByRule > 0) is gone — the engine's task hold now owns the regulation and
+    // environment stops (risk.ts TaskHold) — so a worker whose device neither asks for rest nor holds always resumes.
+    const n = { resting: 0, resumed: 0, taskHeldResting: 0, heldResting: 0, checks: 0, infeasible: 0 }
     for (const [date, data] of [['2025-11-26', mild], [PEAK, peak]] as const) {
       const w = createWorld(cfg({ date, trace: 'none' }), data)
       while (worldMinutesRemaining(w) > 0) {
         const i = w.minuteIndex
-        const heat = w.heat
-        const env = w.env
-        const net = w.networkDown
-        const before = new Map(w.workers.map((ws) => [ws.id, { a: ws.assessment, rest: ws.rest, engine: ws.engine, aid: ws.firstAid !== null && ws.firstAid.startedT !== null && ws.firstAid.kind === 'emergency', out: ws.evacuated }]))
-        const ti = w.t
+        const before = new Map(w.workers.map((ws) => [ws.id, { a: ws.assessment, rest: ws.rest, held: ws.detail?.resume?.held === true, aid: ws.firstAid !== null && ws.firstAid.startedT !== null && ws.firstAid.kind === 'emergency', out: ws.evacuated }]))
         stepWorld(w, 1)
         for (const ws of w.workers) {
           const p = before.get(ws.id)!
           if (p.rest && !p.aid && !p.out && p.a && !ws.manual) {
-            // The decision this minute used the device's assessment `p.a`: keep resting while it asks for rest; otherwise
-            // resume unless the device's own assessment of the resume task is stopped by a regulation/environment rule.
-            if (asksRest(p.a)) {
+            // The decision this minute used the device's assessment `p.a` and hold flag: keep resting while it asks for
+            // rest or holds, resume as soon as it does neither (no simulator rule in between).
+            if (asksRest(p.a) || p.held) {
               expect(ws.rest).not.toBeNull()
               n.resting += 1
-            } else if (ws.rest === null) {
-              n.resumed += 1
             } else {
-              const task = ws.resumeTask!
-              expect(task).not.toBeNull()
-              const scheduled = ws.crew.planTask[i] >= 0 && ws.crew.tasks[ws.crew.planTask[i]].id === task.id
-              const location = scheduled ? (ws.crew.planSun[i] === 1 ? 'sun' : 'shade') : task.inSun ? 'sun' : 'shade'
-              const snap = assessSnapshot({ now: ti, profile: ws.profile, task, location, heat: heat!, env: env ?? undefined, pack: w.pack, network: net ? 'offline' : 'online', buddyAssigned: true, restArea: w.site.restArea, resumeTask: task }, p.engine!)
-              expect(snap.channels.some((c) => (c.channel === 'regulation' || c.channel === 'environment') && RISK_ORDER[c.level] >= RISK_ORDER.stop)).toBe(true)
-              n.heldByRule += 1
+              expect(ws.rest, `${date} ${ws.id} at minute ${i}`).toBeNull()
+              n.resumed += 1
             }
+          }
+          // A task hold (regulation / environment stop of the task to resume) keeps a complying worker off the task.
+          if (ws.rest?.followed && ws.detail?.resume?.heldBy.some((h) => h === 'regulation' || h === 'environment')) {
+            expect(ws.working).toBe(false)
+            expect(RISK_ORDER[ws.assessment!.level]).toBeGreaterThanOrEqual(RISK_ORDER.stop)
+            n.taskHeldResting += 1
           }
           const hold = ws.engine?.projectionHold
           if (hold && ws.rest?.followed) {
@@ -787,6 +797,137 @@ describe('engine-owned resume and the day plan on the device (worldsim 1.2.0)', 
       }
     }
     for (const [k, v] of Object.entries(n)) expect(v, k).toBeGreaterThan(0)
+  })
+})
+
+describe('per-member plans and monitored mode (worldsim 1.4.0, wave 2d)', () => {
+  const R_MIDDAY = 2
+  const R_STATUTORY = 3
+
+  it('policy helpers: zill_monitored is a Zill policy with a wearable that plans on the monitored basis (known answers)', () => {
+    expect(POLICY_IDS).toContain('zill_monitored')
+    expect(POLICY_IDS.filter(isZillPolicy)).toEqual(['zill_env', 'zill_full', 'zill_monitored'])
+    expect(POLICY_IDS.filter(policyUsesWearable)).toEqual(['zill_full', 'zill_monitored'])
+    expect(POLICY_IDS.map(policyPlanBasis)).toEqual(['tables', 'tables', 'tables', 'tables', 'monitored'])
+  })
+
+  it('a member on an acclimatisation schedule follows their own caps (bout per block-hour, cap as the plan rate); acclimatised members follow the crew layout', () => {
+    for (const [date, data] of [['2025-11-26', mild], [PEAK, peak]] as const) {
+      const w = createWorld(cfg({ date, trace: 'none' }), data)
+      const cs = w.crews[0]
+      const cp = w.plan!.crews[0]
+      const ids = Object.keys(cp.memberCaps)
+      expect(ids.length).toBeGreaterThan(0)
+      expect([...cs.memberPlans.keys()].sort()).toEqual([...ids].sort())
+      for (const ws of w.workers) {
+        if (!ids.includes(ws.id)) {
+          // The crew layout itself (same arrays), not a copy.
+          expect(ws.layout.work).toBe(cs.planWork)
+          expect(ws.layout.rate).toBe(cs.planRate)
+          continue
+        }
+        const lay = cs.memberPlans.get(ws.id)!
+        expect(ws.layout).toBe(lay)
+        let work = 0
+        for (const b of cp.blocks) {
+          if (!b.taskId) continue
+          for (const h of b.hours) {
+            const cap = cp.memberCaps[ws.id].find((c) => c.startT === h.startT)!
+            expect(cap.taskId).toBe(b.taskId)
+            for (let m = 0; m < h.wallMin; m++) {
+              const t = h.startT + m * MINUTE_MS
+              if (t < w.t0 || t >= w.tEnd) continue
+              const i = Math.round((t - w.t0) / MINUTE_MS)
+              expect(lay.rate[i], `${date} ${ws.id} ${h.hour} +${m}`).toBe(Math.trunc(cap.workMinPerHour))
+              if (m >= cap.boutMin) expect(lay.work[i]).toBe(0)
+              else if (lay.work[i] === 0) expect([R_MIDDAY, R_STATUTORY]).toContain(lay.reason[i])
+              // Never more work than the crew layout gives in the same block-hour minute (caps ≤ the crew rate).
+              if (lay.work[i] === 1) expect(m).toBeLessThan(h.boutMin)
+              work += lay.work[i]
+            }
+          }
+        }
+        // The member's scheduled work is the planner's own count for them (no midday or statutory cut on these days).
+        expect(work, `${date} ${ws.id}`).toBe(cp.memberWorkMin[ws.id])
+      }
+    }
+  })
+
+  it('known answer (demo crew, mild day): the newcomer is scheduled 191 min against the crew layout’s more, and works only inside their own layout', () => {
+    const w = createWorld(cfg({ date: '2025-11-26', trace: 'none' }), mild)
+    const id = 'W-D2A1'
+    const cp = w.plan!.crews[0]
+    expect(cp.memberWorkMin[id]).toBe(191)
+    const crewSched = w.crews[0].planWork.reduce((s, x) => s + x, 0)
+    expect(crewSched).toBeGreaterThan(191)
+    const ws = w.workers.find((x) => x.id === id)!
+    expect(ws.layout.work.reduce((s, x) => s + x, 0)).toBe(191)
+    let worked = 0
+    while (worldMinutesRemaining(w) > 0) {
+      const i = w.minuteIndex
+      stepWorld(w, 1)
+      if (ws.working && !ws.manual) {
+        expect(ws.layout.work[i], `minute ${i}`).toBe(1)
+        worked += 1
+      }
+    }
+    expect(worked).toBeGreaterThan(0)
+    expect(worked).toBeLessThanOrEqual(191)
+  })
+
+  it('zill_monitored: the planner plans on the monitored basis and every device gets its crew plan’s basis; where the device confirms monitoring the table cycle is not enforced and the simulator applies no table cut of its own', async () => {
+    const data = await loader.load('kezad', '2025-09-20', { workforceSeed: 'zill-workforce-v1', crewsPerSite: 2, includeDemoCrew: false })
+    const n = { steps: 0, monitored: 0, liftedWorking: 0, tablesSteps: 0 }
+    for (const policy of ['zill_monitored', 'zill_full'] as const) {
+      const w = createWorld(makeSimConfig({ siteId: 'kezad', date: '2025-09-20', seed: 'worldsim-test', policy }), data)
+      expect(w.plan!.planBasis).toBe(policy === 'zill_monitored' ? 'monitored' : 'tables')
+      for (const cs of w.crews) expect(cs.planBasis).toBe(w.plan!.crews.find((p) => p.crewId === cs.crew.id)!.planBasis)
+      if (policy === 'zill_monitored') expect(w.plan!.crews.some((p) => p.blocks.some((b) => b.hours.some((h) => h.monitored)))).toBe(true)
+      while (worldMinutesRemaining(w) > 0) {
+        stepWorld(w, 1)
+        for (const ws of w.workers) {
+          const d = ws.detail
+          if (!d) continue
+          expect(d.environment.basis).toBe(ws.crew.planBasis)
+          if (policy === 'zill_full') {
+            expect(d.environment.enforced).toBe(true)
+            n.tablesSteps += 1
+            continue
+          }
+          n.steps += 1
+          if (!d.environment.monitored) continue
+          n.monitored += 1
+          expect(d.environment.enforced).toBe(false)
+          // Monitored: the table limit is a guide. A worker scheduled above it works on (the device's own work minutes
+          // decide; the simulator's cycle follows the device, never a table of its own).
+          const tableW = d.environment.workMinPerHour
+          if (tableW !== null && ws.plannedRate !== null && tableW < ws.plannedRate && ws.working) {
+            n.liftedWorking += 1
+          }
+        }
+      }
+    }
+    expect(n.monitored).toBeGreaterThan(0)
+    expect(n.liftedWorking).toBeGreaterThan(0)
+    expect(n.tablesSteps).toBeGreaterThan(0)
+  })
+
+  it('shadow zill_monitored runs the device on the monitored basis without a plan (detection of monitored mode); physiology reaches the engine as in zill_full', () => {
+    const w = createWorld(cfg({ policy: 'zill_monitored', shadow: true, trace: 'none' }), peak)
+    expect(w.plan).toBeNull()
+    expect(w.crews.every((c) => c.planBasis === 'monitored')).toBe(true)
+    let monitored = 0
+    while (worldMinutesRemaining(w) > 0) {
+      stepWorld(w, 1)
+      expect(w.workers.every((ws) => ws.detail?.environment.basis === 'monitored')).toBe(true)
+      monitored += w.workers.filter((ws) => ws.detail?.environment.monitored).length
+      // Nobody acts on it: the listed-order schedule, no instruction episodes.
+      expect(w.workers.every((ws) => ws.rest === null && ws.cycle === null)).toBe(true)
+    }
+    expect(monitored).toBeGreaterThan(0)
+    const withBand = w.workers.filter((ws) => ws.rosterProfile.hasWearable && ws.profile.consent.wearable)
+    expect(withBand.length).toBeGreaterThan(0)
+    expect(withBand.every((ws) => ws.physioActive)).toBe(true)
   })
 })
 
@@ -816,4 +957,289 @@ describe('performance', () => {
     )
     expect(best).toBeLessThan(PERF_TARGET_MS * PERF_TOLERANCE)
   }, 120_000)
+})
+
+// ─────────────────────────────── Wave 2d (sim-truth): task windows, drink logging, reminders ───────────────────────────────
+
+describe('symmetric task windows: the listed order honours earliestStart / latestEnd (worldsim 1.3.0)', () => {
+  const s0 = local(PEAK, '05:00')
+  const s1 = local(PEAK, '17:00')
+  /** Minutes (local HH:mm) at which the crew works each task, from the world's crew schedule. */
+  const workByTask = (w: World): Map<number, number[]> => {
+    const cs = w.crews[0]
+    const m = new Map<number, number[]>()
+    for (let i = 0; i < w.nMinutes; i++) if (cs.planWork[i] === 1) m.set(cs.planTask[i], [...(m.get(cs.planTask[i]) ?? []), w.t0 + i * MINUTE_MS])
+    return m
+  }
+  const withTasks = (tasks: Crew['tasks']): Crew => ({ ...demo.crew, tasks })
+  const [welding, maintenance] = demo.crew.tasks
+
+  it('taskWindowMs: the task window clipped to the shift; missing or malformed bounds mean the shift bounds (known answers)', () => {
+    expect(taskWindowMs({ earliestStart: '06:00', latestEnd: '10:00' }, PEAK, s0, s1)).toEqual([local(PEAK, '06:00'), local(PEAK, '10:00')])
+    expect(taskWindowMs({}, PEAK, s0, s1)).toEqual([s0, s1])
+    expect(taskWindowMs({ earliestStart: '04:30', latestEnd: '18:00' }, PEAK, s0, s1)).toEqual([s0, s1])
+    expect(taskWindowMs({ earliestStart: '6:00', latestEnd: '25:00' }, PEAK, s0, s1)).toEqual([s0, s1])
+    const [a, b] = taskWindowMs({ earliestStart: '12:00', latestEnd: '11:00' }, PEAK, s0, s1)
+    expect(b).toBeLessThanOrEqual(a)
+  })
+
+  it('ban_only, site_index and shadow never schedule work outside a task window; the demo crew starts at 06:00, not 05:00', () => {
+    for (const over of [{ policy: 'ban_only' as const }, { policy: 'site_index' as const }, { policy: 'zill_full' as const, shadow: true }]) {
+      const w = createWorld(cfg({ ...over, trace: 'none' }), peak)
+      const cs = w.crews[0]
+      let first = Infinity
+      for (let i = 0; i < w.nMinutes; i++) {
+        if (cs.planWork[i] !== 1) continue
+        const t = w.t0 + i * MINUTE_MS
+        const [from, to] = taskWindowMs(cs.tasks[cs.planTask[i]], PEAK, w.t0, w.tEnd)
+        expect(t).toBeGreaterThanOrEqual(from)
+        expect(t).toBeLessThan(to)
+        first = Math.min(first, t)
+      }
+      expect(first).toBe(local(PEAK, '06:00'))
+      // 05:00–06:00: no task (idle), whatever the policy.
+      expect(cs.planTask.slice(0, 60).every((k) => k === -1)).toBe(true)
+    }
+  })
+
+  it('work-conserving listed order: an open later task fills the wait, the earlier task takes over when its window opens (known answers)', () => {
+    // A: 240 min, 07:00–11:00 (time-bound); B: 120 min, 06:00–17:00.
+    const A = { ...welding, durationMin: 240, earliestStart: '07:00', latestEnd: '11:00' }
+    const B = { ...maintenance, durationMin: 120, earliestStart: '06:00', latestEnd: '17:00' }
+    const w = createWorld(cfg({ policy: 'ban_only', trace: 'none', crews: [withTasks([A, B])], workers: demo.workers }), peak)
+    const work = workByTask(w)
+    const a = work.get(0) ?? []
+    const b = work.get(1) ?? []
+    expect(a).toHaveLength(240)
+    expect(a[0]).toBe(local(PEAK, '07:00'))
+    expect(a[a.length - 1]).toBe(local(PEAK, '10:59'))
+    expect(b).toHaveLength(120)
+    expect(b[0]).toBe(local(PEAK, '06:00'))
+    expect(b.filter((t) => t < local(PEAK, '07:00'))).toHaveLength(60)
+    // After 5 h of consecutive work (06:00–11:00) the statutory hour follows; B resumes at 12:00, pauses for the
+    // midday break (sun task) and finishes at 15:30.
+    expect(b.filter((t) => t >= local(PEAK, '11:00') && t < local(PEAK, '12:00'))).toHaveLength(0)
+    expect(b[60]).toBe(local(PEAK, '12:00'))
+    expect(b[b.length - 1]).toBe(local(PEAK, '15:29'))
+    expect(b.some((t) => isMiddayBreak(t))).toBe(false)
+  })
+
+  it('work left when a task window closes is not done (deferred, as the planner defers it)', () => {
+    const A = { ...welding, durationMin: 240, earliestStart: '06:00', latestEnd: '08:00' }
+    const B = { ...maintenance, durationMin: 120, earliestStart: '06:00', latestEnd: '17:00' }
+    const w = createWorld(cfg({ policy: 'ban_only', trace: 'none', crews: [withTasks([A, B])], workers: demo.workers }), peak)
+    const work = workByTask(w)
+    expect(work.get(0)).toHaveLength(120)
+    expect(work.get(0)?.at(-1)).toBe(local(PEAK, '07:59'))
+    expect(work.get(1)?.[0]).toBe(local(PEAK, '08:00'))
+    expect(work.get(1)).toHaveLength(120)
+  })
+
+  it('idle minutes between task windows count toward a pending statutory break, never cancel it (known answers)', () => {
+    // A: 300 min 06:00–11:00 → 5 h of consecutive work, the statutory hour is due at 11:00. B (shade, no midday pause)
+    // opens at 11:10: 10 idle minutes are part of the break, B starts at 12:00, not at 11:10.
+    const A = { ...maintenance, inSun: false, durationMin: 300, earliestStart: '06:00', latestEnd: '11:00' }
+    const B = { ...maintenance, inSun: false, durationMin: 60, earliestStart: '11:10', latestEnd: '17:00' }
+    const w = createWorld(cfg({ policy: 'ban_only', trace: 'none', crews: [withTasks([A, B])], workers: demo.workers }), peak)
+    const work = workByTask(w)
+    expect(work.get(0)).toHaveLength(300)
+    expect(work.get(0)?.at(-1)).toBe(local(PEAK, '10:59'))
+    expect(work.get(1)?.[0]).toBe(local(PEAK, '12:00'))
+    expect(work.get(1)).toHaveLength(60)
+    const cs = w.crews[0]
+    const at = (hhmm: string): number => Math.round((local(PEAK, hhmm) - w.t0) / MINUTE_MS)
+    expect(cs.planTask[at('11:05')]).toBe(-1)
+    expect(cs.planWork[at('11:30')]).toBe(0)
+  })
+
+  it('without task windows the listed order is the pre-1.3.0 definition: tasks in order from the shift start', () => {
+    const tasks = demo.crew.tasks.map(({ earliestStart: _e, latestEnd: _l, ...t }) => t)
+    const w = createWorld(cfg({ policy: 'ban_only', trace: 'none', crews: [withTasks(tasks)], workers: demo.workers }), peak)
+    const work = workByTask(w)
+    // Welding (240 min) runs 05:00–09:00 without a break, then the next listed task starts at once.
+    expect(work.get(0)?.[0]).toBe(local(PEAK, '05:00'))
+    expect(work.get(0)?.at(-1)).toBe(local(PEAK, '08:59'))
+    expect(work.get(1)?.[0]).toBe(local(PEAK, '09:00'))
+  })
+})
+
+describe('drink-logging fidelity (behaviour.drinkLogging, worldsim 1.3.0)', () => {
+  const throwing = { next: () => { throw new Error('no draw expected') } } as unknown as Rng
+  const fixed = (u: number): Rng => ({ next: () => u }) as unknown as Rng
+
+  it('loggedDrinkMl: logged with probability loggedFraction, recorded × overReportFactor; no draw at loggedFraction 1 (known answers)', () => {
+    expect(loggedDrinkMl(250, { loggedFraction: 1, overReportFactor: 1 }, throwing)).toBe(250)
+    expect(loggedDrinkMl(250, { loggedFraction: 1, overReportFactor: 1.5 }, throwing)).toBe(375)
+    expect(loggedDrinkMl(250, { loggedFraction: 1, overReportFactor: 0.333 }, throwing)).toBe(83)
+    expect(loggedDrinkMl(250, { loggedFraction: 0, overReportFactor: 1 }, throwing)).toBeNull()
+    expect(loggedDrinkMl(0, { loggedFraction: 1, overReportFactor: 1 }, throwing)).toBeNull()
+    expect(loggedDrinkMl(250, { loggedFraction: 0.5, overReportFactor: 1 }, fixed(0.49))).toBe(250)
+    expect(loggedDrinkMl(250, { loggedFraction: 0.5, overReportFactor: 1 }, fixed(0.5))).toBeNull()
+    const rng = createRng('drink-log')
+    let n = 0
+    for (let i = 0; i < 20_000; i++) if (loggedDrinkMl(250, { loggedFraction: 0.5, overReportFactor: 1 }, rng) !== null) n++
+    expect(n / 20_000).toBeGreaterThan(0.48)
+    expect(n / 20_000).toBeLessThan(0.52)
+  })
+
+  it('makeSimConfig defaults to 1 / 1 and merges a partial setting; createWorld rejects out-of-range values', () => {
+    expect(makeSimConfig({ siteId: 'musaffah', date: PEAK }).behaviour.drinkLogging).toEqual({ loggedFraction: 1, overReportFactor: 1 })
+    expect(DEFAULT_SIM_BEHAVIOUR.drinkLogging).toEqual({ loggedFraction: 1, overReportFactor: 1 })
+    expect(cfg({ behaviour: { drinkLogging: { loggedFraction: 0.5 } } }).behaviour.drinkLogging).toEqual({ loggedFraction: 0.5, overReportFactor: 1 })
+    for (const drinkLogging of [{ loggedFraction: 1.5 }, { loggedFraction: -0.1 }, { loggedFraction: Number.NaN }, { overReportFactor: 0 }, { overReportFactor: -1 }, { overReportFactor: Infinity }]) {
+      expect(() => createWorld(cfg({ behaviour: { drinkLogging } }), peak)).toThrow(RangeError)
+    }
+  })
+
+  it('only the device log changes: ban_only truth is identical, the logged volume is 50 % of drinks / ×1.5 per drink', () => {
+    const run = (drinkLogging: { loggedFraction?: number; overReportFactor?: number }) => {
+      const w = createWorld(cfg({ policy: 'ban_only', trace: 'none', behaviour: { drinkLogging } }), peak)
+      stepWorld(w, w.nMinutes)
+      return { w, r: finishWorld(w) }
+    }
+    const base = run({})
+    const half = run({ loggedFraction: 0.5 })
+    const over = run({ overReportFactor: 1.5 })
+    const truthOf = (r: SiteDayResult) => r.outcomes.map((o) => [o.workerId, o.waterMl, o.maxDehydrationPct, o.maxCoreC, o.events])
+    expect(truthOf(half.r)).toEqual(truthOf(base.r))
+    expect(truthOf(over.r)).toEqual(truthOf(base.r))
+    const logs = (r: SiteDayResult) => byKind(r.events, 'intake')
+    const baseLogs = logs(base.r)
+    // Every drink logged exactly by default: the log adds up to the true intake (the last minute's drink is still pending).
+    for (const ws of base.w.workers) {
+      const sum = baseLogs.filter((e) => e.intake.workerId === ws.id).reduce((s, e) => s + e.intake.ml, 0)
+      expect(sum).toBeCloseTo(ws.truth.intakeMl + ws.pendingDrinkMl, 6)
+    }
+    const share = logs(half.r).length / baseLogs.length
+    expect(share).toBeGreaterThan(0.35)
+    expect(share).toBeLessThan(0.65)
+    expect(logs(over.r).map((e) => e.intake.ml)).toEqual(baseLogs.map((e) => Math.round(e.intake.ml * 1.5)))
+  })
+
+  it('deterministic with partial logging: same result twice, chunked stepping = one call (zill_full)', () => {
+    const c = cfg({ trace: 'none', behaviour: { drinkLogging: { loggedFraction: 0.5, overReportFactor: 1.5 } } })
+    const a = runSiteDay(c, peak)
+    expect(strip(runSiteDay(c, peak))).toEqual(strip(a))
+    const w = createWorld(c, peak)
+    const chunks = [1, 13, 60, 2, 240, 7]
+    let k = 0
+    while (worldMinutesRemaining(w) > 0) stepWorld(w, chunks[k++ % chunks.length])
+    expect(strip(finishWorld(w))).toEqual(strip(a))
+    expect(a.stamp).not.toBe(runSiteDay(cfg({ trace: 'none' }), peak).stamp)
+    // The device sees only what was logged: the engine's log holds the over-reported volumes.
+    const z = createWorld(c, peak)
+    stepTo(z, '10:00')
+    const logged = z.workers.flatMap((ws) => ws.engine!.intakes)
+    expect(logged.length).toBeGreaterThan(0)
+    for (const x of logged) expect(x.ml).toBe(375) // every drink is 250 mL, logged as 375 mL
+  })
+
+  it('a config written before worldsim 1.3.0 (no drinkLogging) logs every drink exactly', () => {
+    const c = cfg({ policy: 'ban_only', trace: 'none' })
+    const { drinkLogging: _dl, ...older } = c.behaviour
+    const a = runSiteDay({ ...c, behaviour: older as SimConfig['behaviour'] }, peak)
+    const b = runSiteDay(c, peak)
+    expect(byKind(a.events, 'intake')).toEqual(byKind(b.events, 'intake'))
+  })
+})
+
+describe('drink reminders: the worker responds to the reminder the device shows, at work, at rest and idle (worldsim 1.3.0)', () => {
+  type Drink = NonNullable<Parameters<typeof drinkReminderShown>[1]>['drink']
+  const detail = (reminder: Drink['reminder'], exposure: Drink['exposure'] = 'heat_rest'): { drink: Drink } => ({
+    drink: { exposed: exposure !== null, exposure, reminder, nextReminderAtMs: reminder === 'drink' ? local(PEAK, '10:00') : null, locationWbgtEffC: 30 },
+  })
+  /** Spontaneous drinking off (no habitual floor, no sweat replacement): every drink is a followed reminder. */
+  const remindersOnly = { behaviour: { habitualDrinkFraction: 0 }, traits: { replacementMean: 0, replacementSd: 0, replacementMin: 0, replacementMax: 0 } }
+  const alainData = async (): Promise<SimData> => loader.load('alain', '2025-07-24', { crews: [{ ...demo.crew, siteId: 'alain' }], workers: demo.workers })
+
+  it('drinkReminderShown: the device step detail decides; only policies that act on Zill deliver it (known answers)', () => {
+    expect(drinkReminderShown(true, detail('drink'))).toBe(true)
+    expect(drinkReminderShown(true, detail('drink', 'hot_work'))).toBe(true)
+    // Shadow mode and the baselines: nobody acts on the device's output.
+    expect(drinkReminderShown(false, detail('drink'))).toBe(false)
+    // Fasting while exposed: rest-in-shade guidance, no drink reminder; not exposed or not due: none.
+    expect(drinkReminderShown(true, detail('shade'))).toBe(false)
+    expect(drinkReminderShown(true, detail(null, null))).toBe(false)
+    expect(drinkReminderShown(true, detail(null))).toBe(false)
+    // No engine step yet.
+    expect(drinkReminderShown(true, null)).toBe(false)
+  })
+
+  it('every followed reminder falls in a minute whose device showed one; reminders reach idle and resting workers too (spontaneous drinking off)', async () => {
+    const data = await alainData()
+    const w = createWorld(makeSimConfig({ siteId: 'alain', date: '2025-07-24', policy: 'zill_full', seed: 'reminders-shown', trace: 'none', behaviour: { compliance: 1 } }), data, { truthParams: remindersOnly })
+    const n = { shownMinutes: 0, drinks: 0, work: 0, rest: 0, idle: 0 }
+    let seen = 0
+    while (worldMinutesRemaining(w) > 0) {
+      const shown = new Map(w.workers.map((ws) => [ws.id, drinkReminderShown(true, ws.detail)]))
+      for (const v of shown.values()) if (v) n.shownMinutes += 1
+      stepWorld(w, 1)
+      const intakes = byKind(w.events, 'intake')
+      for (const e of intakes.slice(seen)) {
+        expect(e.t).toBe(w.t)
+        expect(shown.get(e.intake.workerId), `${e.intake.workerId} drank without a reminder at ${new Date(e.t).toISOString()}`).toBe(true)
+        expect(e.intake.ml).toBe(WORLD_PARAMS.reminderMl)
+        n.drinks += 1
+        n[w.workerById.get(e.intake.workerId)!.status] += 1
+      }
+      seen = intakes.length
+    }
+    expect(n.drinks).toBeGreaterThan(0)
+    expect(n.drinks).toBeLessThanOrEqual(n.shownMinutes)
+    // Up to worldsim 1.2.0 only workers within 30 min of hot work got reminders: none while idle before the first task,
+    // none after 30 min of rest. (How much of the day this crew works depends on the plan and the device, so the
+    // at-work count is not asserted here; the device's own reminder rule is tested in engine/clinical.test.ts.)
+    expect(n.idle).toBeGreaterThan(0)
+    expect(n.rest).toBeGreaterThan(0)
+  })
+
+  it('a reminder left on screen (nothing logged) is followed at most once per 20 min, not every minute', async () => {
+    const data = await alainData()
+    // loggedFraction 0: the device never sees a drink, so once due its reminder stays on screen while exposed.
+    const w = createWorld(
+      makeSimConfig({ siteId: 'alain', date: '2025-07-24', policy: 'zill_full', seed: 'reminders-left', trace: 'none', behaviour: { compliance: 1, drinkLogging: { loggedFraction: 0 } } }),
+      data,
+      { truthParams: remindersOnly },
+    )
+    const followed = new Map<string, number[]>()
+    let shownWithin = 0
+    while (worldMinutesRemaining(w) > 0) {
+      for (const ws of w.workers) if (drinkReminderShown(true, ws.detail) && w.t - ws.lastFollowedReminderT < 20 * MINUTE_MS) shownWithin += 1
+      stepWorld(w, 1)
+      for (const ws of w.workers) if (ws.lastFollowedReminderT === w.t) followed.set(ws.id, [...(followed.get(ws.id) ?? []), w.t])
+    }
+    expect(byKind(w.events, 'intake')).toHaveLength(0) // nothing logged
+    expect(shownWithin).toBeGreaterThan(0) // the rule was exercised: the reminder stayed on screen after a followed drink
+    let n = 0
+    for (const [id, ts] of followed) {
+      for (let k = 1; k < ts.length; k++) expect(ts[k] - ts[k - 1], id).toBeGreaterThanOrEqual(20 * MINUTE_MS)
+      // Every true drink is a followed reminder (spontaneous drinking off): 250 mL each.
+      const ws = w.workerById.get(id)!
+      expect(ws.truth.intakeMl + ws.pendingDrinkMl).toBe(250 * ts.length)
+      n += ts.length
+    }
+    expect(n).toBeGreaterThan(0)
+  })
+
+  it('with spontaneous drinking off, nobody drinks under ban_only or shadow mode: no device reminder reaches the worker', async () => {
+    const data = await alainData()
+    for (const over of [{ policy: 'ban_only' as const }, { policy: 'zill_full' as const, shadow: true }]) {
+      const w = createWorld(makeSimConfig({ siteId: 'alain', date: '2025-07-24', seed: 'reminders-shown', trace: 'none', behaviour: { compliance: 1 }, ...over }), data, { truthParams: remindersOnly })
+      stepWorld(w, w.nMinutes)
+      expect(byKind(w.events, 'intake')).toHaveLength(0)
+    }
+  })
+
+  it('idle workers in a shade rest area get reminders and drink more than under ban_only (same random numbers)', async () => {
+    // Al Ain has a shade rest area; the demo crew's task windows open at 06:00, so 05:00–06:00 is idle in hot shade.
+    const crew: Crew = { ...demo.crew, siteId: 'alain' }
+    const data = await loader.load('alain', '2025-07-24', { crews: [crew], workers: demo.workers })
+    const drinksBefore6 = (policy: 'ban_only' | 'zill_full'): number => {
+      const w = createWorld(makeSimConfig({ siteId: 'alain', date: '2025-07-24', policy, seed: 'reminders-idle', trace: 'none' }), data)
+      stepTo(w, '06:00')
+      expect(w.workers.every((ws) => ws.status === 'idle' && ws.location === 'shade')).toBe(true)
+      return byKind(w.events, 'intake').length
+    }
+    expect(drinksBefore6('zill_full')).toBeGreaterThan(drinksBefore6('ban_only'))
+  })
 })

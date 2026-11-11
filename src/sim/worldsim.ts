@@ -11,21 +11,25 @@
  *   B. (at t+1) site heat once for the TRUTH (IFS analysis; the truth model computes its own human MRT with hot ground)
  *      and once for the ENGINE (the forecast that was available, or a site meter = truth WBGT + meter noise, through
  *      data/weather.ts resolveEnvironment so every fallback is the engine's own fail-safe chain); per worker the
- *      ground-truth step (sim/truth.ts), wearable samples → physio minute (zill_full, consent + band), drinking
+ *      ground-truth step (sim/truth.ts), wearable samples → physio minute (zill_full / zill_monitored, consent + band), drinking
  *      (truth.drinkDecision: a followed reminder replaces that minute's spontaneous drink; reminders only under Zill
  *      policies, none while fasting), the engine step
  *      (risk.stepWorkerEngine with the site rest area); then the alert engine (alerts.processAssessments with
  *      deescalationDwellMin 0 — the dwell is applied once, in risk.ts — or alerts.tick when nobody is assessed).
  *
- * Policies (docs/SIMULATION.md §4): ban_only = crew task list in listed order + MoHRE midday break + statutory break +
- * self-pacing (inside the truth model); site_index = ban_only + ADOSH TWL-zone work/rest cycles applied crew-wide from
+ * Policies (docs/SIMULATION.md §4): ban_only = crew task list in listed order within the task windows (earliestStart /
+ * latestEnd, the same constraints as the planner's) + MoHRE midday break + statutory break + self-pacing (inside the
+ * truth model); site_index = ban_only + ADOSH TWL-zone work/rest cycles applied crew-wide from
  * the hourly forecast as an hourly dose carried across task changes (and the zone's exclusion of ADOSH-unacclimatised
- * workers); zill_env / zill_full = planner day plan
- * (planner.planDay on the forecast at shift start, with its ISO 7933 screen, executed in the plan's block-hour layout) +
- * acting on the engine's output (the device knows the assignment: WorkerContext.resumeTask and plannedWorkMinPerHour; a
- * rest episode ends when the device no longer asks for rest — the engine's projection hold owns that decision — and no
- * regulation/environment rule stops the resume task; device work/rest cycles are aligned with plan block-hours); shadow =
- * ban_only behaviour while the engine still runs and alerts and nobody acts on it.
+ * workers); zill_env / zill_full / zill_monitored = planner day plan
+ * (planner.planDay on the forecast at shift start, with its ISO 7933 screen, executed in the plan's block-hour layout;
+ * members on an acclimatisation schedule follow their own per-member caps, CrewPlan.memberCaps) + acting on the engine's
+ * output (the device knows the assignment: WorkerContext.resumeTask, plannedWorkMinPerHour — the member's own cap where
+ * the plan has one — and planBasis; the engine owns every resume decision: a rest episode ends when the device neither
+ * asks for rest nor holds — risk.ts projection and task holds; device work/rest cycles are aligned with plan
+ * block-hours and follow the device's own work minutes, which include the WBGT table cycle only while
+ * detail.environment.enforced); zill_monitored = zill_full with the plan basis 'monitored' (a site's opt-in: planner and
+ * devices); shadow = ban_only behaviour while the engine still runs and alerts and nobody acts on it.
  *
  * Mutability: `stepWorld` MUTATES the world in place and returns the same reference; `worldView` returns a fresh
  * snapshot object (safe to hand to React/zustand); `finishWorld` steps to the end of the shift if needed and returns a
@@ -59,7 +63,6 @@ import { wbgtComponents } from '../engine/wbgt'
 import {
   COOLED_REST,
   RISK_THRESHOLDS,
-  assessSnapshot,
   createWorkerEngine,
   stepWorkerEngine,
   type CaseResolution,
@@ -84,10 +87,10 @@ import {
   type Notification,
   type RosterEntry,
 } from '../engine/alerts'
-import { WORK_MIN_GRANULARITY, planDay, type CrewPlan, type DayPlan, type PlannerHour } from '../engine/planner'
+import { WORK_MIN_GRANULARITY, planDay, type CrewPlan, type DayPlan, type MemberCapHour, type PlanBasis, type PlannerHour } from '../engine/planner'
 import { getRulePack, isMiddayBreak, regulatoryFloor, twlZone, type RulePack } from '../engine/regulation'
 import { assessAcclimatization, taskMetabolicW, wbgtEffectiveC } from '../engine/limits'
-import { FLUID, SYMPTOM_RULES, TRIAGE_TIMING, fluidStatus, promptTimeout } from '../engine/clinical'
+import { FLUID, SYMPTOM_RULES, TRIAGE_TIMING, promptTimeout } from '../engine/clinical'
 import { minuteSqi, type MinuteSqi } from '../engine/physio'
 import {
   conservativeDefaultSample,
@@ -103,7 +106,7 @@ import { createRng, hashSeed, type Rng } from './rng'
 import {
   activeSymptomIds,
   createWearableChain,
-  drinkDecision,
+  drinkDecisionDetail,
   initTruth,
   respondToCheckin,
   sampleDailyCondition,
@@ -122,6 +125,7 @@ import {
   type WearableChainState,
 } from './truth'
 import type {
+  DrinkLogging,
   ScriptedEvent,
   ShiftOutcome,
   SimBehaviour,
@@ -140,22 +144,32 @@ import type {
   WorldSimApi,
   WorldView,
 } from './types'
+import { isZillPolicy, policyPlanBasis, policyUsesWearable } from './types'
 
 // ═════════════════════════════════════ Defaults and parameters ═════════════════════════════════════
 
 /**
  * Version of this module's mechanics, part of every result stamp. 1.2.0: engine-owned resume (projection hold), the day
  * plan's ISO 7933 screen (forecast climate passed to the planner), plan block-hour execution layout, device work/rest
- * cycles aligned with plan block-hours, WorkerContext.resumeTask / plannedWorkMinPerHour.
+ * cycles aligned with plan block-hours, WorkerContext.resumeTask / plannedWorkMinPerHour. 1.3.0 (wave 2d, sim-truth):
+ * the listed-order schedule honours task windows (baseline definition change), drink-logging fidelity
+ * (behaviour.drinkLogging), the worker responds to the reminder the device shows (the engine's own rule, which covers
+ * rest and idle in heat), not to a simulator-side copy limited to the 30 min after hot work. 1.4.0 (wave 2d,
+ * integration): per-member plan layouts (members on an acclimatisation schedule follow their own CrewPlan.memberCaps
+ * bouts and pass their cap as plannedWorkMinPerHour; floored bouts throughout); policy zill_monitored (planner
+ * planBasis 'monitored', WorkerContext.planBasis from the crew plan); the engine owns every resume decision (the
+ * simulator's resumeTaskAllowed check is gone: a rest episode ends when the device neither asks for rest nor holds).
  */
-export const WORLDSIM_VERSION = '1.2.0'
+export const WORLDSIM_VERSION = '1.4.0'
 
 /**
  * Default behaviour — every value is an [ASSUMPTION] swept in the sensitivity analysis (docs/SIMULATION.md §5):
  * compliance 0.7 (middle of the 0.5/0.7/0.9 sweep); median acknowledgement delays worker 1 min, buddy 2, supervisor 3,
  * first aider 2, occupational health 10; first aider on scene 4 min after acknowledging; the supervisor's direct
  * reassignment on a STOP is always carried out (supervisorFollowThrough 1 — the v0.1 behaviour; a value < 1 tests the
- * assumption that matters most for the compliance sweep, because the reassignment overrides a non-complying worker).
+ * assumption that matters most for the compliance sweep, because the reassignment overrides a non-complying worker);
+ * every drink logged on the device at its true volume (drinkLogging 1 / 1 — the behaviour before worldsim 1.3.0; the
+ * back-test sweeps 50 % logged and ×1.5 over-reporting).
  */
 export const DEFAULT_SIM_BEHAVIOUR: Readonly<SimBehaviour> = Object.freeze({
   compliance: 0.7,
@@ -164,6 +178,7 @@ export const DEFAULT_SIM_BEHAVIOUR: Readonly<SimBehaviour> = Object.freeze({
   ackDelayMin: Object.freeze({ worker: 1, buddy: 2, supervisor: 3, first_aider: 2, occ_health: 10 }),
   firstAiderArrivalMin: 4,
   supervisorFollowThrough: 1,
+  drinkLogging: Object.freeze({ loggedFraction: 1, overReportFactor: 1 }),
 })
 
 /** No disruption (docs/SIMULATION.md §5 robustness baseline). */
@@ -193,11 +208,13 @@ export const WORLD_PARAMS = Object.freeze({
   breakResetMin: 15,
   /** The forecast on the device was fetched this long before the shift [ENG]; it refreshes hourly while online. */
   forecastFetchLeadMin: 60,
-  /** Drink reminders: 250 mL every 20 min (clinical.FLUID; ARCHITECTURE.md §5) … */
+  /**
+   * Drink reminders: 250 mL every 20 min (clinical.FLUID; ARCHITECTURE.md §5), followed whenever the device shows one
+   * ({@link drinkReminderShown}; since worldsim 1.3.0 the exposure rule is the engine's own, so the former
+   * reminderAfterHotWorkMin parameter is gone).
+   */
   reminderEveryMin: FLUID.REMINDER_EVERY_MIN,
   reminderMl: FLUID.REMINDER_L * 1000,
-  /** … sent while the worker is exposed: hot work within the last 30 min [ENG: reminders accompany heat exposure]. */
-  reminderAfterHotWorkMin: 30,
   /** truth.drinkDecision's "on a break" boost applies in the first 15 min of a rest bout, not to hours of rest [ENG]. */
   breakDrinkWindowMin: 15,
   /** Fasting hours from dawn (sun 18.2° below the horizon) to sunset (−0.833°) [ASSUMPTION: Fajr angle]. */
@@ -216,14 +233,18 @@ const ALERT_OPTS: Partial<AlertPolicy> = Object.freeze({ deescalationDwellMin: 0
 /** Input of {@link makeSimConfig}: site and date required, every other field optional (nested fields merged). */
 export type SimConfigInput = Partial<Omit<SimConfig, 'behaviour' | 'disruptions' | 'engine'>> &
   Pick<SimConfig, 'siteId' | 'date'> & {
-    behaviour?: Partial<Omit<SimBehaviour, 'ackDelayMin'>> & { ackDelayMin?: Partial<SimBehaviour['ackDelayMin']> }
+    behaviour?: Partial<Omit<SimBehaviour, 'ackDelayMin' | 'drinkLogging'>> & {
+      ackDelayMin?: Partial<SimBehaviour['ackDelayMin']>
+      drinkLogging?: Partial<DrinkLogging>
+    }
     disruptions?: Partial<SimDisruptions>
     engine?: Partial<SimConfig['engine']>
   }
 
 /**
  * A complete SimConfig from a partial one: seed 'zill-sim', policy zill_full, not shadow, {@link DEFAULT_SHIFT}, the
- * Abu Dhabi rule pack, {@link DEFAULT_SIM_BEHAVIOUR} (incl. supervisorFollowThrough 1), {@link DEFAULT_SIM_DISRUPTIONS},
+ * Abu Dhabi rule pack, {@link DEFAULT_SIM_BEHAVIOUR} (incl. supervisorFollowThrough 1 and drinkLogging 1 / 1; a partial
+ * drinkLogging is merged), {@link DEFAULT_SIM_DISRUPTIONS},
  * PHS projection every 5 min (risk.RISK_THRESHOLDS), trace 'none'. Basis: sim/types.ts SimConfig.
  */
 export function makeSimConfig(input: SimConfigInput): SimConfig {
@@ -243,6 +264,7 @@ export function makeSimConfig(input: SimConfigInput): SimConfig {
       ackDelayMin: { ...DEFAULT_SIM_BEHAVIOUR.ackDelayMin, ...(b.ackDelayMin ?? {}) },
       firstAiderArrivalMin: b.firstAiderArrivalMin ?? DEFAULT_SIM_BEHAVIOUR.firstAiderArrivalMin,
       supervisorFollowThrough: b.supervisorFollowThrough ?? DEFAULT_SIM_BEHAVIOUR.supervisorFollowThrough,
+      drinkLogging: { ...DEFAULT_SIM_BEHAVIOUR.drinkLogging, ...(b.drinkLogging ?? {}) },
     },
     disruptions: { ...DEFAULT_SIM_DISRUPTIONS, ...(input.disruptions ?? {}) },
     engine: { projectionEveryMin: input.engine?.projectionEveryMin ?? RISK_THRESHOLDS.projection.everyMin },
@@ -305,6 +327,27 @@ interface CrewSim {
   /** Day-plan schedules only, per shift minute: the minute index where its plan block-hour starts (−1 none) and its wall minutes. */
   planBhStart: Int16Array
   planBhWall: Uint8Array
+  /**
+   * Day-plan schedules only: the own layout of each member on an acclimatisation schedule (CrewPlan.memberCaps; the
+   * other members follow the crew layout above).
+   */
+  memberPlans: Map<string, PlanLayout>
+  /**
+   * The plan basis the crew's devices get (WorkerContext.planBasis): the crew plan's (CrewPlan.planBasis) under a day
+   * plan, else the policy's (shadow mode runs the device as the policy would); 'tables' without the engine.
+   */
+  planBasis: PlanBasis
+}
+
+/**
+ * One minute-by-minute work layout of a schedule — the crew's ({@link CrewSim} planWork / planReason / planRate) or a
+ * member's own under a day plan (CrewPlan.memberCaps): scheduled work (1/0), the reason a minute is not work (R_*), and
+ * the plan rate passed as WorkerContext.plannedWorkMinPerHour ({@link PLAN_RATE_NONE} outside day-plan task blocks).
+ */
+export interface PlanLayout {
+  work: Uint8Array
+  reason: Uint8Array
+  rate: Uint8Array
 }
 
 /** {@link CrewSim}.planRate outside a day-plan task block. */
@@ -362,8 +405,11 @@ export interface WorkerSim {
    */
   profile: WorkerProfile
   readonly crew: CrewSim
+  /** The schedule layout this worker follows: the member's own (CrewSim.memberPlans) or the crew's. */
+  readonly layout: PlanLayout
   readonly traits: HiddenTraits
-  readonly rng: { truth: Rng; drink: Rng; wear: Rng; checkin: Rng; behaviour: Rng; firstAid: Rng; supervisor: Rng }
+  /** `drinkLog`: whether and how a drink is logged on the device (behaviour.drinkLogging; drawn only when it matters). */
+  readonly rng: { truth: Rng; drink: Rng; wear: Rng; checkin: Rng; behaviour: Rng; firstAid: Rng; supervisor: Rng; drinkLog: Rng }
   readonly chain: WearableChainState
   /** Wearable minutes reach the engine (zill_full, a paired wearable and consent.wearable). */
   physioActive: boolean
@@ -410,9 +456,10 @@ export interface WorkerSim {
   evacuated: boolean
   lastHrBpm: number | null
   ectempC: number | null
-  /** Start of the current non-work bout (null while working) and the last minute of hot work. */
+  /** Start of the current non-work bout (null while working). */
   restBoutStartT: number | null
-  lastHotWorkT: number
+  /** When the worker last followed a drink reminder (−Infinity: never; truth.DrinkContext.minutesSinceFollowedReminder). */
+  lastFollowedReminderT: number
   acc: Accumulators
 }
 
@@ -593,6 +640,42 @@ function deviceFasting(w: World, ws: WorkerSim): boolean {
   return w.fastingNow && ws.profile.riskFlags.includes('fasting')
 }
 
+/** The config's drink-logging behaviour; a config written before worldsim 1.3.0 (no field) logs every drink exactly. */
+function drinkLoggingOf(config: SimConfig): DrinkLogging {
+  return config.behaviour.drinkLogging ?? DEFAULT_SIM_BEHAVIOUR.drinkLogging
+}
+
+/**
+ * What the worker logs on the device for a drink of `ml` mL (behaviour.drinkLogging), or null when it is not logged:
+ * logged with probability loggedFraction — one uniform from the worker's own drink-log stream, drawn only when
+ * 0 < loggedFraction < 1, so the default (1) draws nothing and a run is deterministic however it is stepped — and
+ * recorded as round(ml × overReportFactor) mL [ENG: whole mL]. The true intake is not changed. Basis: SimBehaviour
+ * drinkLogging [ASSUMPTION].
+ */
+export function loggedDrinkMl(ml: number, logging: DrinkLogging, rng: Rng): number | null {
+  if (!(ml > 0)) return null
+  const p = logging.loggedFraction
+  if (!(p > 0)) return null
+  if (p < 1 && !(rng.next() < p)) return null
+  return Math.round(ml * logging.overReportFactor)
+}
+
+/**
+ * The device shows a drink reminder this minute, so the worker may follow it (truth.drinkDecision responds to every
+ * reminder shown, at work, at rest or idle): the device's OWN reminder state from its latest step,
+ * risk.WorkerStepDetail.drink.reminder === 'drink' — clinical.fluidStatus on the device's intake log (250 mL when
+ * nothing was logged for 20 min; none over the hourly cap, with fluids restricted, or while the device knows of
+ * fasting, which shows rest-in-shade guidance instead) while the worker is heat-exposed by the engine's rule
+ * (clinical.drinkReminderExposure: hot work and the 30 min after it, or rest/idle outside a cooled area at WBGT_eff ≥
+ * 25.6 °C) — delivered only where the policy acts on Zill (zill_env / zill_full / zill_monitored, not shadow). Since worldsim 1.3.0 the
+ * simulator keeps no copy of the rule (up to 1.2.0 it re-derived it and sent reminders only within 30 min of hot work,
+ * so idle or resting workers under a hot canopy got none). Null detail (no engine step yet, no engine) → no reminder.
+ * Basis: clinical.FLUID; ARCHITECTURE.md §5; NIOSH 2016 (1 cup every 15–20 min in heat).
+ */
+export function drinkReminderShown(actsOnZill: boolean, detail: Pick<WorkerStepDetail, 'drink'> | null): boolean {
+  return actsOnZill && detail !== null && detail.drink?.reminder === 'drink'
+}
+
 const CONSENT_SCOPES = ['wearable', 'healthFlags', 'checkins', 'shareWithMedicOnEscalation', 'aggregateStatistics'] as const
 
 /**
@@ -610,7 +693,7 @@ function applyConsent(w: World, ws: WorkerSim, consent: ConsentState): void {
   for (const k of CONSENT_SCOPES) if (typeof consent[k] !== 'boolean') throw new RangeError(`stepWorld: consent.${k} must be a boolean`)
   const roster = ws.rosterProfile
   ws.profile = { ...roster, consent: { ...consent }, riskFlags: consent.healthFlags ? [...roster.riskFlags] : [] }
-  ws.physioActive = w.engineOn && w.config.policy === 'zill_full' && roster.hasWearable && consent.wearable
+  ws.physioActive = w.engineOn && policyUsesWearable(w.config.policy) && roster.hasWearable && consent.wearable
   if (!ws.physioActive) {
     ws.lastHrBpm = null
     ws.ectempC = null
@@ -636,6 +719,8 @@ function newCrewSim(crew: Crew, n: number): CrewSim {
     planRate: new Uint8Array(n).fill(PLAN_RATE_NONE),
     planBhStart: new Int16Array(n).fill(-1),
     planBhWall: new Uint8Array(n),
+    memberPlans: new Map(),
+    planBasis: 'tables',
   }
 }
 
@@ -652,19 +737,36 @@ function fillPlanNext(cs: CrewSim): void {
 const DOSE_EPS = 1e-9
 
 /**
- * Listed-order crew schedule (ban_only, shadow, site_index): tasks in roster order from the shift start, each needing
- * `durationMin` crew work minutes; sun tasks pause during the midday break (MoHRE MR 44/2022); site_index adds the TWL
- * zone cycle — work first, rest the rest of each clock hour [ENG layout] — as an hourly DOSE carried across task
- * changes: a minute of work on a task allowed W min/h adds 1/W, and work stops for the rest of the clock hour once the
- * next minute would take the dose above 1 (Σ minutes/allowance ≤ 1, the sum-of-fractions rule for mixed exposures that
- * sim/metrics.ts scores zone compliance with [ENG]); a single-task hour therefore keeps the W-minute work-first layout.
- * With W = 60 everywhere (ban_only, shadow) the dose never binds. A statutory break follows 5 h of consecutive work.
- * Mirrors planner.ts's naive comparison plan, plus the statutory break.
+ * A task's time window [from, to) in epoch ms on the shift's date, clipped to the shift: Task.earliestStart /
+ * latestEnd (local "HH:mm"; a missing or malformed value means the shift start / end, as in planner.ts planDay's
+ * TaskCtx window). An empty window (to ≤ from) is never open. Basis: engine/types.ts Task ("constraints for the
+ * planner"), applied to every policy since worldsim 1.3.0 (same constraints for every policy).
+ */
+export function taskWindowMs(task: Pick<Task, 'earliestStart' | 'latestEnd'>, date: string, shiftStartT: number, shiftEndT: number): readonly [number, number] {
+  const at = (hhmm: string | undefined, dflt: number): number => (hhmm !== undefined && HHMM_RE.test(hhmm) ? epochFromLocal(`${date}T${hhmm}`) : dflt)
+  return [Math.max(shiftStartT, at(task.earliestStart, shiftStartT)), Math.min(shiftEndT, at(task.latestEnd, shiftEndT))]
+}
+
+/**
+ * Listed-order crew schedule (ban_only, shadow, site_index): tasks in roster order, each needing `durationMin` crew
+ * work minutes, within their time windows ({@link taskWindowMs}: earliestStart / latestEnd are hard constraints for
+ * every policy, as for the planner — worldsim 1.3.0; before, the listed order ignored them and worked from the shift
+ * start). Each minute the crew works on the FIRST listed task that has work left and whose window is open (a crew
+ * waiting for a window does the next listed task that is open, and returns to the earlier task when its window opens
+ * [ENG: work-conserving listed order]); work left when a task's window closes is not done (deferred, as the planner
+ * defers it); no open task = no task (idle). Sun tasks pause during the midday break (MoHRE MR 44/2022) — the crew
+ * waits, it does not switch task; site_index adds the TWL zone cycle — work first, rest the rest of each clock hour
+ * [ENG layout] — as an hourly DOSE carried across task changes: a minute of work on a task allowed W min/h adds 1/W,
+ * and work stops for the rest of the clock hour once the next minute would take the dose above 1 (Σ minutes/allowance
+ * ≤ 1, the sum-of-fractions rule for mixed exposures that sim/metrics.ts scores zone compliance with [ENG]); a
+ * single-task hour therefore keeps the W-minute work-first layout. With W = 60 everywhere (ban_only, shadow) the dose
+ * never binds. A statutory break follows 5 h of consecutive work (idle minutes count toward it). Like planner.ts's naive
+ * comparison plan (listed order within the task windows), plus the statutory break.
  */
 function listedOrderSchedule(w: World, cs: CrewSim, cycleW: (hourT: number, task: Task) => number): void {
   const P = WORLD_PARAMS
-  let k = 0
-  let remaining = cs.tasks.length > 0 ? Math.max(0, Math.round(cs.tasks[0].durationMin)) : 0
+  const remaining = cs.tasks.map((task) => Math.max(0, Math.round(task.durationMin)))
+  const windows = cs.tasks.map((task) => taskWindowMs(task, w.config.date, w.t0, w.tEnd))
   let consec = 0
   let off = 0
   let statLeft = 0
@@ -677,13 +779,18 @@ function listedOrderSchedule(w: World, cs: CrewSim, cycleW: (hourT: number, task
       doseHour = h
       dose = 0
     }
-    while (k < cs.tasks.length && remaining <= 0) {
-      k += 1
-      remaining = k < cs.tasks.length ? Math.max(0, Math.round(cs.tasks[k].durationMin)) : 0
+    let k = -1
+    for (let j = 0; j < cs.tasks.length; j++) {
+      if (remaining[j] > 0 && t >= windows[j][0] && t < windows[j][1]) {
+        k = j
+        break
+      }
     }
-    if (k >= cs.tasks.length) {
+    if (k < 0) {
+      // No open task: the crew is idle, and idle minutes count toward a pending statutory break (rest is rest) — with
+      // task windows the crew can wait between windows and resume work, so the break must not be cancelled [ENG].
       cs.planReason[i] = R_NO_TASK
-      statLeft = 0
+      if (statLeft > 0) statLeft -= 1
       off += 1
       if (off >= P.breakResetMin) consec = 0
       continue
@@ -705,7 +812,7 @@ function listedOrderSchedule(w: World, cs: CrewSim, cycleW: (hourT: number, task
     if (reason === R_WORK) {
       dose += 1 / W
       cs.planWork[i] = 1
-      remaining -= 1
+      remaining[k] -= 1
       consec += 1
       off = 0
       if (consec >= P.statutoryMaxWorkMin) {
@@ -735,16 +842,42 @@ export function planWindowWorkMin(workMinPerHour: number, blockMin: number, minu
 }
 
 /**
- * Crew schedule from the planner's day plan (zill_env / zill_full): each block's task, location and work/rest layout.
- * The layout is the plan's own execution layout, per block-hour (planner.ts BlockHour: the block's part of one clock
- * hour): work during [startT, startT + boutMin), then rest in the rest area until startT + wallMin — the layout the
- * planner's ISO 7933 screen simulated, so following the plan keeps plan and monitor in agreement (engine-risk
- * integration note 2). A block without block-hours (none in practice) falls back to 60-min windows from the block start
- * with {@link planWindowWorkMin} [ENG]. No sun work in the midday break; then the statutory break (work lost, not
- * shifted, since plan blocks are time-bound). Also records, per minute, the block's work min/h (plannedWorkMinPerHour)
- * and its block-hour (device work/rest cycles are aligned with it).
+ * Crew schedule from the planner's day plan (zill_env / zill_full / zill_monitored): each block's task, location and
+ * work/rest layout. The layout is the plan's own execution layout, per block-hour (planner.ts BlockHour: the block's
+ * part of one clock hour): work during [startT, startT + boutMin), then rest in the rest area until startT + wallMin —
+ * the layout the planner's ISO 7933 screen simulated, so following the plan keeps plan and monitor in agreement
+ * (engine-risk integration note 2); boutMin is floored by the planner (wave 2d), so no block-hour gets more work than
+ * its allowance. A block without block-hours (none in practice) falls back to 60-min windows from the block start with
+ * {@link planWindowWorkMin} [ENG]. No sun work in the midday break; then the statutory break (work lost, not shifted,
+ * since plan blocks are time-bound). Also records, per minute, the block's work min/h (plannedWorkMinPerHour) and its
+ * block-hour (device work/rest cycles are aligned with it).
+ * Members on an acclimatisation schedule (CrewPlan.memberCaps, wave 2d) follow their own layout in the same blocks and
+ * block-hours ({@link CrewSim}.memberPlans): work during [startT, startT + cap.boutMin), rest for the rest of the
+ * block-hour, and plannedWorkMinPerHour = the cap's workMinPerHour — the layout the planner screened for them. A cap is
+ * matched to its crew block-hour by start and task; a crew block-hour without a matching cap, and a task-block minute
+ * outside every block-hour, get no work for such a member [ENG, protective: the plan gave them no allowance there].
+ * Their statutory break follows their own work minutes.
  */
 function planSchedule(w: World, cs: CrewSim, cp: CrewPlan | undefined): void {
+  layPlan(w, cs, cp, { work: cs.planWork, reason: cs.planReason, rate: cs.planRate }, null)
+  statutoryBreaks(cs.planWork, cs.planReason)
+  if (!cp) return
+  for (const id of cs.crew.workerIds) {
+    const caps = cp.memberCaps?.[id]
+    if (!caps) continue
+    const n = w.nMinutes
+    const layout: PlanLayout = { work: new Uint8Array(n), reason: new Uint8Array(n).fill(R_NO_TASK), rate: new Uint8Array(n).fill(PLAN_RATE_NONE) }
+    layPlan(w, cs, cp, layout, new Map(caps.map((c) => [c.startT, c])))
+    statutoryBreaks(layout.work, layout.reason)
+    cs.memberPlans.set(id, layout)
+  }
+}
+
+/**
+ * One layout of the day plan ({@link planSchedule}) into `out`: the crew's (`caps` null; it also writes the crew's
+ * task, location and block-hour arrays) or one member's (`caps`: that member's CrewPlan.memberCaps by block-hour start).
+ */
+function layPlan(w: World, cs: CrewSim, cp: CrewPlan | undefined, out: PlanLayout, caps: ReadonlyMap<number, MemberCapHour> | null): void {
   const idx = (t: number): number => Math.round((t - w.t0) / MINUTE_MS)
   for (const b of cp?.blocks ?? []) {
     const k = b.taskId === null ? -1 : (cs.taskIndex.get(b.taskId) ?? -1)
@@ -755,60 +888,84 @@ function planSchedule(w: World, cs: CrewSim, cp: CrewPlan | undefined): void {
       for (let t = from; t < to; t += MINUTE_MS) {
         const i = idx(t)
         if (i < 0 || i >= w.nMinutes) continue
-        cs.planTask[i] = -1
-        cs.planWork[i] = 0
-        cs.planReason[i] = isMiddayBreak(t, w.pack) ? R_MIDDAY : R_NO_TASK
+        if (caps === null) cs.planTask[i] = -1
+        out.work[i] = 0
+        out.reason[i] = isMiddayBreak(t, w.pack) ? R_MIDDAY : R_NO_TASK
       }
       continue
     }
     const blockMin = Math.round((b.endT - b.startT) / MINUTE_MS)
-    // Block-hours of this block (the planner's layout); a minute outside every block-hour uses the fallback windows.
-    const hours = b.hours.filter((h) => h.wallMin > 0).map((h) => ({ a: h.startT, z: h.startT + h.wallMin * MINUTE_MS, bout: Math.max(0, Math.min(h.wallMin, h.boutMin)), wall: h.wallMin }))
+    // Block-hours of this block (the planner's layout): the crew's bout and rate, or the member's own cap.
+    const hours = b.hours
+      .filter((h) => h.wallMin > 0)
+      .map((h) => {
+        const cap = caps === null ? null : (caps.get(h.startT) ?? null)
+        const own = cap !== null && cap.taskId === b.taskId
+        const bout = caps === null ? h.boutMin : own ? cap.boutMin : 0
+        const rate = caps === null ? W : own ? Math.max(0, Math.min(60, cap.workMinPerHour)) : 0
+        return { a: h.startT, z: h.startT + h.wallMin * MINUTE_MS, bout: Math.max(0, Math.min(h.wallMin, bout)), wall: h.wallMin, rate }
+      })
     let hi = 0
     for (let t = from; t < to; t += MINUTE_MS) {
       const i = idx(t)
       if (i < 0 || i >= w.nMinutes) continue
-      cs.planTask[i] = k
-      cs.planSun[i] = b.location === 'sun' ? 1 : 0
-      cs.planRate[i] = W
+      if (caps === null) {
+        cs.planTask[i] = k
+        cs.planSun[i] = b.location === 'sun' ? 1 : 0
+      }
       while (hi < hours.length && t >= hours[hi].z) hi += 1
       const bh = hi < hours.length && t >= hours[hi].a ? hours[hi] : null
       let isWork: boolean
       if (bh) {
-        cs.planBhStart[i] = idx(bh.a)
-        cs.planBhWall[i] = bh.wall
+        if (caps === null) {
+          cs.planBhStart[i] = idx(bh.a)
+          cs.planBhWall[i] = bh.wall
+        }
+        out.rate[i] = bh.rate
         isWork = (t - bh.a) / MINUTE_MS < bh.bout
-      } else {
+      } else if (caps === null) {
+        out.rate[i] = W
         const sinceStart = Math.floor((t - b.startT) / MINUTE_MS)
         isWork = sinceStart % 60 < planWindowWorkMin(W, blockMin, sinceStart)
+      } else {
+        out.rate[i] = 0
+        isWork = false
       }
       if (b.location === 'sun' && isMiddayBreak(t, w.pack)) {
-        cs.planWork[i] = 0
-        cs.planReason[i] = R_MIDDAY
+        out.work[i] = 0
+        out.reason[i] = R_MIDDAY
       } else if (isWork) {
-        cs.planWork[i] = 1
-        cs.planReason[i] = R_WORK
+        out.work[i] = 1
+        out.reason[i] = R_WORK
       } else {
-        cs.planWork[i] = 0
-        cs.planReason[i] = R_CYCLE
+        out.work[i] = 0
+        out.reason[i] = R_CYCLE
       }
     }
   }
+}
+
+/**
+ * The statutory break on a plan layout, in place: after {@link WORLD_PARAMS}.statutoryMaxWorkMin minutes of consecutive
+ * work (a pause of breakResetMin or more interrupts it), the next statutoryBreakMin minutes of work and cycle rest become
+ * the statutory break (work lost, not shifted, since plan blocks are time-bound).
+ */
+function statutoryBreaks(work: Uint8Array, reason: Uint8Array): void {
   const P = WORLD_PARAMS
   let consec = 0
   let off = 0
   let left = 0
-  for (let i = 0; i < w.nMinutes; i++) {
+  for (let i = 0; i < work.length; i++) {
     if (left > 0) {
-      if (cs.planWork[i] === 1 || cs.planReason[i] === R_CYCLE) {
-        cs.planWork[i] = 0
-        cs.planReason[i] = R_STATUTORY
+      if (work[i] === 1 || reason[i] === R_CYCLE) {
+        work[i] = 0
+        reason[i] = R_STATUTORY
       }
       left -= 1
       off += 1
       continue
     }
-    if (cs.planWork[i] === 1) {
+    if (work[i] === 1) {
       consec += 1
       off = 0
       if (consec >= P.statutoryMaxWorkMin) {
@@ -844,17 +1001,21 @@ export function createWorld(config: SimConfig, data: SimData, opts: CreateWorldO
   const t0 = epochFromLocal(`${config.date}T${config.shift.start}`)
   const tEnd = epochFromLocal(`${config.date}T${config.shift.end}`)
   if (!(tEnd > t0)) throw new RangeError('createWorld: the shift must end after it starts (same local day)')
+  const dl = drinkLoggingOf(config)
+  if (!(dl.loggedFraction >= 0 && dl.loggedFraction <= 1) || !(dl.overReportFactor > 0 && Number.isFinite(dl.overReportFactor))) {
+    throw new RangeError(`createWorld: behaviour.drinkLogging needs 0 ≤ loggedFraction ≤ 1 and a finite overReportFactor > 0 (got ${dl.loggedFraction}, ${dl.overReportFactor})`)
+  }
   const nMinutes = Math.round((tEnd - t0) / MINUTE_MS)
   const dayStart = epochFromLocal(`${config.date}T00:00`)
   const crews = config.crews ?? data.crews
   const profiles = config.workers ?? data.workers
   const byId = new Map(profiles.map((p) => [p.id, p]))
 
-  const zill = config.policy === 'zill_env' || config.policy === 'zill_full'
+  const zill = isZillPolicy(config.policy)
   const engineOn = config.shadow || zill
   const actsOnZill = zill && !config.shadow
   const schedule: World['schedule'] = config.shadow || config.policy === 'ban_only' ? 'listed' : config.policy === 'site_index' ? 'site_index' : 'plan'
-  const physioPolicy = engineOn && config.policy === 'zill_full'
+  const physioPolicy = engineOn && policyUsesWearable(config.policy)
 
   // Overrides first, then the config-driven leaves (the config is the single source for compliance and wearable loss).
   const truthParams = withTruthParams(
@@ -902,7 +1063,8 @@ export function createWorld(config: SimConfig, data: SimData, opts: CreateWorldO
     // The forecast hour's SiteHeat is also the climate of the planner's ISO 7933 screen (PlannerHour.climate), so the
     // plan never schedules more work than the device's projection allows for the reference worker (plan and monitor agree).
     const hourly: PlannerHour[] = [...heatByHour.entries()].map(([t, hh]) => ({ t, wbgtC: hh.wbgtC, wbgtShadeC: hh.wbgtShadeC, twlWm2: hh.twlWm2, twlShadeWm2: hh.twlShadeWm2, climate: hh }))
-    plan = planDay({ date: config.date, site, crews, workers: rosterWorkers, hourly, shift: { ...config.shift }, pack })
+    // zill_monitored is the site's opt-in to the monitored plan basis (planner.ts PlanBasis; occupational-health sign-off).
+    plan = planDay({ date: config.date, site, crews, workers: rosterWorkers, hourly, shift: { ...config.shift }, pack, planBasis: policyPlanBasis(config.policy) })
   }
 
   const forecastFixed = config.disruptions.forecastAgeH !== undefined
@@ -988,7 +1150,11 @@ export function createWorld(config: SimConfig, data: SimData, opts: CreateWorldO
   // Crews and their baseline schedules.
   for (const c of crews) {
     const cs = newCrewSim(c, nMinutes)
-    if (schedule === 'plan') planSchedule(w, cs, plan?.crews.find((p) => p.crewId === c.id))
+    const cp = plan?.crews.find((p) => p.crewId === c.id)
+    // The devices' plan basis: the crew plan's (it falls back to 'tables' where the planner cannot confirm monitoring);
+    // shadow mode runs the device as the policy would.
+    cs.planBasis = schedule === 'plan' ? (cp?.planBasis ?? 'tables') : engineOn ? policyPlanBasis(config.policy) : 'tables'
+    if (schedule === 'plan') planSchedule(w, cs, cp)
     else if (schedule === 'site_index') listedOrderSchedule(w, cs, (h, task) => w.floors.get(`${h}|${task.id}`)?.workMinPerHour ?? 60)
     else listedOrderSchedule(w, cs, () => 60)
     fillPlanNext(cs)
@@ -1020,6 +1186,7 @@ export function createWorld(config: SimConfig, data: SimData, opts: CreateWorldO
         rosterProfile: profile,
         profile,
         crew: cs,
+        layout: cs.memberPlans.get(id) ?? { work: cs.planWork, reason: cs.planReason, rate: cs.planRate },
         traits,
         rng: {
           truth: base.fork(`truth|${config.date}|${id}`),
@@ -1029,6 +1196,7 @@ export function createWorld(config: SimConfig, data: SimData, opts: CreateWorldO
           behaviour: base.fork(`behaviour|${config.date}|${id}`),
           firstAid: base.fork(`firstaid|${config.date}|${id}`),
           supervisor: base.fork(`supervisor|${config.date}|${id}`),
+          drinkLog: base.fork(`drinklog|${config.date}|${id}`),
         },
         chain: createWearableChain(),
         physioActive: physioPolicy && profile.hasWearable && profile.consent.wearable,
@@ -1071,7 +1239,7 @@ export function createWorld(config: SimConfig, data: SimData, opts: CreateWorldO
         lastHrBpm: null,
         ectempC: null,
         restBoutStartT: null,
-        lastHotWorkT: -Infinity,
+        lastFollowedReminderT: -Infinity,
         acc: emptyAcc(),
       }
       w.workers.push(ws)
@@ -1373,7 +1541,10 @@ interface Sched {
   reason: number
   /** The task to return to after rest (WorkerContext.resumeTask): this minute's task, else the next scheduled one. */
   resumeTask: Task | null
-  /** The day plan's work min/h for this minute's task block (WorkerContext.plannedWorkMinPerHour); null outside one. */
+  /**
+   * The day plan's work min/h for this minute's task block (WorkerContext.plannedWorkMinPerHour): the member's own cap
+   * where the plan has one (CrewPlan.memberCaps), else the block rate; null outside a plan task block.
+   */
   plannedRate: number | null
   /** Day-plan schedules: the minute index where this minute's plan block-hour starts and its wall minutes (null: none). */
   bhStart: number | null
@@ -1386,17 +1557,18 @@ function scheduled(w: World, ws: WorkerSim, i: number, t: number): Sched {
     return { task, work: task !== null, location: ws.manual.location, taskLocation: ws.manual.location, reason: task ? R_WORK : R_MANUAL, resumeTask: task, plannedRate: null, bhStart: null, bhWall: 0 }
   }
   const cs = ws.crew
+  const lay = ws.layout
   const k = cs.planTask[i]
   const task = k >= 0 ? cs.tasks[k] : null
-  let work = cs.planWork[i] === 1 && task !== null
-  let reason = cs.planReason[i]
+  let work = lay.work[i] === 1 && task !== null
+  let reason = lay.reason[i]
   if (work && task && w.schedule === 'site_index' && ws.adoshUnacc && w.floors.get(`${hourStart(w, t)}|${task.id}`)?.excludeUnacclimatized) {
     work = false
     reason = R_ZONE
   }
   const taskLocation: WorkerLocation = cs.planSun[i] === 1 ? 'sun' : 'shade'
   const next = cs.planNext[i]
-  const inPlan = w.schedule === 'plan' && task !== null && cs.planRate[i] !== PLAN_RATE_NONE
+  const inPlan = w.schedule === 'plan' && task !== null && lay.rate[i] !== PLAN_RATE_NONE
   return {
     task,
     work,
@@ -1404,7 +1576,7 @@ function scheduled(w: World, ws: WorkerSim, i: number, t: number): Sched {
     taskLocation,
     reason,
     resumeTask: task ?? (next >= 0 ? cs.tasks[next] : null),
-    plannedRate: inPlan ? cs.planRate[i] : null,
+    plannedRate: inPlan ? lay.rate[i] : null,
     bhStart: inPlan && cs.planBhStart[i] >= 0 ? cs.planBhStart[i] : null,
     bhWall: inPlan ? cs.planBhWall[i] : 0,
   }
@@ -1413,20 +1585,29 @@ function scheduled(w: World, ws: WorkerSim, i: number, t: number): Sched {
 /**
  * Instruction episodes (Zill policies, not shadow), from the worker's own device display:
  * - rest: the engine asks for a stop/rest ({@link needsRest}); the worker complies with probability
- *   compliance × traits.complianceFactor (one draw per episode). The engine owns the resume decision: the episode ends
- *   as soon as the device no longer asks for rest. A projection stop is held at stop by the engine until its resume
- *   check projects ≥ 25 min for WorkerContext.resumeTask (risk.ts ProjectionHold, RISK_THRESHOLDS.resume — the deadband
- *   that replaced the simulator's own 25-min resume margin of worldsim ≤ 1.1.0). The regulation and environment
- *   channels have no such hold yet, so the episode also waits until the device's own assessment of the resume task no
- *   longer stops it on those channels ({@link resumeTaskAllowed}; no margin).
+ *   compliance × traits.complianceFactor (one draw per episode). The engine owns every resume decision (wave 2d): the
+ *   episode ends as soon as the device neither asks for rest nor holds ({@link deviceHolds}: WorkerStepDetail.resume
+ *   .held). risk.ts holds a projection stop until its ISO 7933 resume check projects ≥ 25 min for
+ *   WorkerContext.resumeTask (ProjectionHold, RISK_THRESHOLDS.resume) and a regulation/environment stop of the task to
+ *   resume — ADOSH TWL-zone exclusion, WBGT stop band, midday break, used-up acclimatisation budget — until that task
+ *   is free of it and passes the same resume check (TaskHold, RISK_THRESHOLDS.taskHold). The simulator keeps no resume
+ *   rule of its own: worldsim ≤ 1.3.0 re-assessed the resume task itself (resumeTaskAllowed), which this engine hold
+ *   replaces. A rest episode asked only by a rest action below stop ends with that action (no simulator margin).
  *   [ASSUMPTION] When the device flags the resume task as not feasible now (detail.resume.infeasibleNow: even 60 min of
- *   rest would not pass the check), the worker keeps resting and the alert engine notifies the supervisor (stop with
- *   task_not_feasible_now + rotate_task); a reassignment to another task is not modelled unless the scenario has one (a
- *   later plan block with another task, a scripted or UI task change), which then becomes the resume task.
+ *   rest would not pass the check, or the day's acclimatisation budget is used up), the worker keeps resting and the
+ *   alert engine notifies the supervisor (stop with rotate_task); a reassignment to another task is not modelled unless
+ *   the scenario has one (a later plan block with another task, a scripted or UI task change), which then becomes the
+ *   resume task.
  * - work/rest cycle: the engine allows < 60 work min/h for the task (live value read while working); a complying worker
- *   works the first W minutes of each window and rests the remainder [ENG layout]. Under a day plan the window is the
- *   plan block-hour (W pro-rated to its wall minutes, rounded down), so the device's cycle and the plan's own layout
- *   (work first, then rest) coincide instead of stacking; otherwise 60-min windows from the episode start.
+ *   works the first W minutes of each window and rests the remainder [ENG layout]. W is the device's own number, which
+ *   includes the WBGT table cycle only while detail.environment.enforced (monitored mode makes the tables a screen; the
+ *   simulator keeps no copy of the table). W is read while the worker works, i.e. for the task: the device's resting
+ *   assessment is for the rest activity, whose monitoring state can differ from the task's (clothing outside the
+ *   ISO 7933 model, arm-motion data loss), so a cycle set at the task runs to the end of its window and is re-read
+ *   when work resumes [ENG: hysteresis, no flapping]. Under a day plan the window is the plan block-hour (W pro-rated to its wall
+ *   minutes, rounded down) and the plan rate is the worker's own (the member's cap where the plan has one), so the
+ *   device's cycle and the plan's own layout (work first, then rest) coincide instead of stacking; otherwise 60-min
+ *   windows from the episode start.
  */
 function updateEpisodes(w: World, ws: WorkerSim, ti: number, s: Sched): void {
   const a = ws.assessment
@@ -1435,10 +1616,9 @@ function updateEpisodes(w: World, ws: WorkerSim, ti: number, s: Sched): void {
   const p = clamp01(w.config.behaviour.compliance * ws.traits.complianceFactor)
   if (!need) ws.pendingEnforce = null
   if (ws.rest) {
-    // Engine-owned resume: the device no longer asks for rest (a held projection stop has passed its resume check) and
-    // its assessment of the resume task is not stopped by a regulation or environment rule. A declining worker's live
-    // assessment is for the task itself.
-    if (!need && (ws.working || resumeTaskAllowed(w, ws, s, ti))) ws.rest = null
+    // Engine-owned resume: the device neither asks for rest nor holds (a projection or task hold has passed its resume
+    // check). A declining worker's live assessment is for the task itself.
+    if (!need && !deviceHolds(ws)) ws.rest = null
   } else if (need) {
     const followed = ws.rng.behaviour.next() < p
     ws.rest = { since: ti, followed, enforced: false }
@@ -1469,37 +1649,12 @@ function updateEpisodes(w: World, ws: WorkerSim, ti: number, s: Sched): void {
 }
 
 /**
- * Whether the device's own assessment of the task to resume (risk.assessSnapshot from the worker's engine state, at the
- * task's location) is free of a regulation or environment stop. Integration fix, wave 2c [ENG, protective]: those
- * channels' task-dependent stops — the ADOSH TWL-zone exclusion of unacclimatised workers, the heat stop band (allowed
- * work fraction < 0.25), an exhausted acclimatisation budget, the midday break — have no resume hold in the engine (only
- * the projection channel has one, RISK_THRESHOLDS.resume), and the channel computed for rest drops as soon as the worker
- * rests. Without this check the worker resumed, was stopped again within a minute, and accumulated sun minutes in
- * excluded zones (medium cohort, first v0.2 run: 39 unacclimatised zone worker-hours against 7 in v0.1). The
- * projection channel is not checked (the engine's hold owns it; no margin). True when there is no task to resume.
+ * The device holds the worker at rest after its latest step: a projection or task hold is active (risk.ts
+ * WorkerStepDetail.resume.held). A held device also shows stop, so this only makes the engine's own hold flag explicit
+ * in the simulator's resume decision; it adds no rule of the simulator's.
  */
-function resumeTaskAllowed(w: World, ws: WorkerSim, s: Sched, ti: number): boolean {
-  const task = s.resumeTask
-  if (!task || !w.heat || !ws.engine) return true
-  const location: WorkerLocation = s.task !== null && s.task.id === task.id ? s.taskLocation : task.inSun ? 'sun' : 'shade'
-  const snap = assessSnapshot(
-    {
-      now: ti,
-      profile: ws.profile,
-      task,
-      location,
-      heat: w.heat,
-      env: w.env ?? undefined,
-      pack: w.pack,
-      network: w.networkDown ? 'offline' : 'online',
-      fastingNow: deviceFasting(w, ws),
-      buddyAssigned: true,
-      restArea: w.site.restArea,
-      resumeTask: task,
-    },
-    ws.engine,
-  )
-  return !snap.channels.some((c) => (c.channel === 'regulation' || c.channel === 'environment') && atLeast(c.level, 'stop'))
+function deviceHolds(ws: WorkerSim): boolean {
+  return ws.detail?.resume?.held === true
 }
 
 /**
@@ -1557,7 +1712,6 @@ function decideActivity(w: World, ws: WorkerSim, ti: number, i: number): void {
   ws.status = status
   if (work) {
     ws.restBoutStartT = null
-    if (location !== 'indoor_cool') ws.lastHotWorkT = ti
   } else if (ws.restBoutStartT === null) {
     ws.restBoutStartT = ti
   }
@@ -1646,22 +1800,28 @@ function stepWorkerTruthAndEngine(w: World, ws: WorkerSim, now: number, i: numbe
   // consented risk flag (reminders, engine context).
   const fasting = ws.fastingFlag && w.fastingNow
   const devFasting = deviceFasting(w, ws)
-  const a0 = ws.assessment
   const ti = now - MINUTE_MS
-  // The device's own rule (clinical.fluidStatus): 250 mL when nothing was logged for 20 min, none over the hourly cap or
-  // while fasting; sent while exposed (hot work in the last 30 min [ENG]) and while the engine recommends water.
-  let reminder = false
-  if (w.actsOnZill && ws.engine && !devFasting && a0 !== null && a0.waterMlPerHour > 0 && !a0.actions.includes('restrict_fluids') && ti - ws.lastHotWorkT < WORLD_PARAMS.reminderAfterHotWorkMin * MINUTE_MS) {
-    const fs = fluidStatus(ws.engine.intakes, ti, { fastingNow: devFasting, workerId: ws.id })
-    reminder = fs.nextReminderAtMs !== null && fs.nextReminderAtMs <= ti
-  }
+  // The reminder the device showed at its last step (drinkReminderShown: working, resting or idle while heat-exposed);
+  // the worker responds to every reminder shown, at most once per reminder interval (truth.drinkDecisionDetail).
+  const reminder = ws.engine !== null && drinkReminderShown(w.actsOnZill, ws.detail)
   const onBreak = !ws.working && ws.status === 'rest' && ws.restBoutStartT !== null && ti - ws.restBoutStartT < WORLD_PARAMS.breakDrinkWindowMin * MINUTE_MS
-  const ml = drinkDecision(ws.truth, ws.traits, { reminder, canDrink: !fasting, onBreak, reminderMl: WORLD_PARAMS.reminderMl }, ws.rng.drink)
+  const drink = drinkDecisionDetail(
+    ws.truth,
+    ws.traits,
+    { reminder, canDrink: !fasting, onBreak, reminderMl: WORLD_PARAMS.reminderMl, minutesSinceFollowedReminder: (ti - ws.lastFollowedReminderT) / MINUTE_MS },
+    ws.rng.drink,
+  )
+  if (drink.followedReminder) ws.lastFollowedReminderT = now
+  const ml = drink.ml
   if (ml > 0) {
+    // The truth always gets the drink; the device's log gets what the worker logs (behaviour.drinkLogging).
     ws.pendingDrinkMl += ml
-    const intake: FluidIntake = { t: now, workerId: ws.id, ml }
-    log(w, { kind: 'intake', t: now, intake })
-    if (w.engineOn) ws.intakeQueue.push(intake)
+    const loggedMl = loggedDrinkMl(ml, drinkLoggingOf(w.config), ws.rng.drinkLog)
+    if (loggedMl !== null) {
+      const intake: FluidIntake = { t: now, workerId: ws.id, ml: loggedMl }
+      log(w, { kind: 'intake', t: now, intake })
+      if (w.engineOn) ws.intakeQueue.push(intake)
+    }
   }
 
   if (!ws.engine) return null
@@ -1682,6 +1842,9 @@ function stepWorkerTruthAndEngine(w: World, ws: WorkerSim, now: number, i: numbe
   // work min/h for this task block (the device never allows more than the plan).
   if (ws.resumeTask) ctx.resumeTask = ws.resumeTask
   if (ws.plannedRate !== null) ctx.plannedWorkMinPerHour = ws.plannedRate
+  // The plan basis of the worker's crew plan (zill_monitored: 'monitored' unless the planner fell back to the tables);
+  // absent = 'tables', bit-identical to the engine before monitored mode.
+  if (ws.crew.planBasis === 'monitored') ctx.planBasis = 'monitored'
   const inputs: WorkerInputs = {}
   if (physioMinute) inputs.physioMinute = physioMinute
   const c = ws.checkinQueue.shift()

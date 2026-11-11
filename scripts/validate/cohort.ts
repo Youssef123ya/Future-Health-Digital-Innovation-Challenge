@@ -110,8 +110,10 @@ const ARM_LABEL: Record<ArmId, string> = {
   site_index: 'Site TWL index',
   zill_env: 'Zill (no wearable)',
   zill_full: 'Zill (with wearable)',
+  zill_monitored: 'Zill (monitored mode)',
   shadow_zill_env: 'Shadow: Zill (no wearable)',
   shadow_zill_full: 'Shadow: Zill (with wearable)',
+  shadow_zill_monitored: 'Shadow: Zill (monitored mode)',
 }
 const SITE_LABEL: Record<string, string> = { musaffah: 'Musaffah', kezad: 'KEZAD', ruwais: 'Ruwais', alain: 'Al Ain', saadiyat: 'Saadiyat' }
 const TARGET_LABEL: Record<string, string> = {
@@ -197,13 +199,15 @@ export function renderCohortBlocks(r: CohortFile): Record<string, string> {
   )
 
   const challengeTable = mdTable(
-    ['Arm', 'Individual alarms per shift: ≥ high; ≥ stop', 'Exposure advisories ≥ high: per worker-shift; per crew-shift', 'Adherence', 'Check-in response', 'Acks (share, median min)', 'Symptom reports /1,000', 'Escalations /1,000', 'Midday break compliant (violation min)', 'ADOSH zone compliant (worker-h)', 'Unacclimatised zone hours', 'Event lead time, min (individual alarms)', 'Lost to evacuations, min/1,000 worker-h'],
+    ['Arm', 'Individual alarms per shift: ≥ high; ≥ stop', 'Exposure advisories ≥ high: per worker-shift; per crew-shift', 'Suppressed advisories ≥ high per worker-shift (logged, not notified)', 'Supervisor acks per worker-shift', 'Adherence', 'Check-in response', 'Acks (share, median min)', 'Symptom reports /1,000', 'Escalations /1,000', 'Midday break compliant (violation min)', 'ADOSH zone compliant (worker-h)', 'Unacclimatised zone hours', 'Event lead time, min (individual alarms)', 'Lost to evacuations, min/1,000 worker-h'],
     base.map((a) => {
       const c = a.challenge
       return [
         ARM_LABEL[a.arm],
         `${est(c.individualAlarmsPerShift.high, 2)}; ${est(c.individualAlarmsPerShift.stop, 2)}`,
         `${est(c.exposureAdvisoriesPerWorkerShift, 2)}; ${num(c.exposureAdvisoriesPerCrewShift, 2)}`,
+        est(c.suppressedAdvisoriesPerWorkerShift, 2),
+        num(c.burdenPerWorkerShift?.total?.supervisor?.requiringAck ?? 0, 2),
         pctE(c.adherence),
         pctE(c.checkinResponse),
         c.ack.requiringAck ? `${num(c.ack.acknowledgedShare === null ? null : 100 * c.ack.acknowledgedShare, 0)} %, ${num(c.ack.medianDelayMin, 1)}` : '—',
@@ -230,7 +234,7 @@ export function renderCohortBlocks(r: CohortFile): Record<string, string> {
   blocks['cohort-challenge'] = [
     challengeTable,
     '',
-    'Alert burden per worker-shift by alert basis and recipient: notifications that require an acknowledgement (all notifications in brackets). Individual = the alert is about this worker; exposure = a site or crew condition (engine/alerts.ts Alert.basis).',
+    'Alert burden per worker-shift by alert basis and recipient: notifications that require an acknowledgement (all notifications in brackets). Individual = the alert is about this worker; exposure = a site or crew condition (engine/alerts.ts Alert.basis). Exposure alerts whose action the plan already enforces are logged under designed suppression and notified to nobody (ANSI/ISA-18.2; metrics 1.2.0): they count as suppressed advisories above, not as alarms or notifications.',
     '',
     burdenTable,
   ].join('\n')
@@ -279,13 +283,26 @@ export function renderCohortBlocks(r: CohortFile): Record<string, string> {
   const variantRows = (vs: readonly VariantSummary[]): (string | number)[][] =>
     vs.flatMap((v) => {
       if (!v.supported) return [[v.label, '—', '—', '—', '—', '—', '—', '—', '—', v.note ?? 'not run']]
-      return v.arms.map((a) => variantRow(v, a.arm, a.headline, a.vsBanOnly, a.vsBase))
+      return v.arms.map((a) => variantRow(v, a.arm, a.headline, a.vsBanOnly, a.vsBase, a.baseVsBanOnly ?? null))
     })
-  const variantHead = ['Variant', 'Arm', 'Worker-shifts', 'Excessive /1,000', 'Severe /1,000', 'Work min/shift', 'Δ excessive vs ban only', 'Work vs ban only', 'Δ vs base case (excessive; work min)', 'Shadow detection, individual alarms ≥ high (excessive: sensitivity, false alarms/shift)']
+  const variantHead = [
+    'Variant',
+    'Arm',
+    'Worker-shifts',
+    'Excessive /1,000',
+    'Severe /1,000',
+    'Work min/shift',
+    'Δ excessive vs ban only',
+    'Work vs ban only',
+    'Δ dehydration vs ban only (base case on the same days)',
+    'Δ heat-symptom episodes vs ban only (base case on the same days)',
+    'Δ vs base case (excessive; work min)',
+    'Shadow detection, individual alarms ≥ high (excessive: sensitivity, false alarms/shift)',
+  ]
   blocks['cohort-sensitivity'] = mdTable(variantHead, variantRows(r.sensitivity))
   blocks['cohort-robustness'] = mdTable(variantHead, variantRows(r.robustness))
 
-  const fairArms: ArmId[] = ['ban_only', 'zill_full', 'shadow_zill_full']
+  const fairArms: ArmId[] = ['ban_only', 'zill_full', 'zill_monitored', 'shadow_zill_full']
   blocks['cohort-fairness'] = r.main.fairness
     .filter((f) => fairArms.includes(f.arm))
     .map((f) =>
@@ -315,8 +332,10 @@ export function renderCohortBlocks(r: CohortFile): Record<string, string> {
   return blocks
 }
 
-function variantRow(v: VariantSummary, arm: ArmId, h: Headline, vsBan: PairedHeadline | null, vsBase: PairedHeadline | null): (string | number)[] {
+function variantRow(v: VariantSummary, arm: ArmId, h: Headline, vsBan: PairedHeadline | null, vsBase: PairedHeadline | null, baseVsBan: PairedHeadline | null): (string | number)[] {
   const det = h.detection ? `${pctE(h.detection.excessive.sensitivityBeforeOnset)}; ${est(h.detection.excessive.falseAlarmsPerShift, 2)}` : '—'
+  // The variant's delta next to the base case's delta on exactly the same worker-shifts (backtest ≥ 1.2.0).
+  const withBase = (x: Estimate | undefined, b: Estimate | undefined): string => (vsBan ? `${signed(x)}${baseVsBan ? ` (base ${signed(b)})` : ''}` : '—')
   return [
     v.label,
     ARM_LABEL[arm],
@@ -326,6 +345,8 @@ function variantRow(v: VariantSummary, arm: ArmId, h: Headline, vsBan: PairedHea
     est(h.workMinPerShift, 0),
     signed(vsBan?.excessivePer1000),
     signedPct(vsBan?.workRelative),
+    withBase(vsBan?.dehydrationPer1000, baseVsBan?.dehydrationPer1000),
+    withBase(vsBan?.symptomaticEpisodesPer1000, baseVsBan?.symptomaticEpisodesPer1000),
     vsBase ? `${signed(vsBase.excessivePer1000)}; ${signed(vsBase.workMinPerShift, 0)}` : '—',
     det,
   ]

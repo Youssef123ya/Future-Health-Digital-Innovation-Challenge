@@ -1024,19 +1024,20 @@ Fusion:
 - env 0, physio 1 gives 1.
 - env 1, symptom 3 gives 3.
 
-### 10.12 Reference code and fixtures (scratchpad; reproducible, standard library only)
+### 10.12 Reference code and fixtures (reproducible, standard library only)
 
-- `C:\Users\YOUSSE~1\AppData\Local\Temp\claude\94c33843c6bbffd0\4c48883e-0c5a-4849-ab05-a67886282395\scratchpad\physio_clinical\ectemp_reference.py`
-  is the ECTemp (quadratic and sigmoid), PSI/aPSI, SQI and steady-state oracle. It writes `out\physio_fixtures.json`
-  and `out\js_crosscheck_input.json`.
-- `...\physio_clinical\crosscheck_js.mjs` runs the official USARIEM `estimateTcore.js` in Node on the same HR series.
-  `...\physio_clinical\compare_js.py` compares the two: 581 minutes, worst |dCT| = 0.0 and worst |dV| = 0.0, PASS.
-- `...\physio_clinical\clinical_rules.py` is the triage, urine, fluid-cap, physio-floor and fusion oracle. It writes
-  `out\clinical_rules_fixtures.json`.
-- `...\physio_clinical\spec_pseudocode_check.mjs` is a plain-JS transcription of the Section 10 pseudo-code. Run
+- `scripts/research/physio_clinical/ectemp_reference.py`
+  is the ECTemp (quadratic and sigmoid), PSI/aPSI, SQI and steady-state oracle. It writes `out/physio_fixtures.json`
+  and `out/js_crosscheck_input.json`.
+- `scripts/research/physio_clinical/crosscheck_js.mjs` runs the official USARIEM `estimateTcore.js` (not bundled) in Node on the same HR series.
+  `scripts/research/physio_clinical/compare_js.py` compares the two: 581 minutes, worst |dCT| = 0.0 and worst |dV| = 0.0, PASS.
+- `scripts/research/physio_clinical/clinical_rules.py` is the triage, urine, fluid-cap, physio-floor and fusion oracle. It writes
+  `out/clinical_rules_fixtures.json`.
+- `scripts/research/physio_clinical/spec_pseudocode_check.mjs` is a plain-JS transcription of the Section 10 pseudo-code. Run
   against the fixtures, it gives: ECTemp 1,642 minute-steps (quadratic and sigmoid) with worst |dCT| = 0; PSI, aPSI,
   SQI and fusion PASS.
-- Re-run sequence (venv Python, Node 24):
+- The committed outputs are in `fixtures/physio/` (copy `out/*.json` there after a re-run).
+- Re-run sequence, from `scripts/research/physio_clinical/` (venv Python, Node 24):
   1. `python -I ectemp_reference.py`
   2. `node crosscheck_js.mjs <estimateTcore.js> out/js_crosscheck_input.json out/js_crosscheck_output.json`
   3. `python -I compare_js.py`
