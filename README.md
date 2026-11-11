@@ -39,11 +39,12 @@ graded warning level (safe, caution, high, stop) with a concrete action ("rest 1
 | App state, privacy projection, audit, cross-tab sync (`src/state`) | Implemented and tested |
 | Product screens (`src/ui/views`): supervisor console, worker phone, first aid, HSE/regulator, governance centre, lab, evidence | In progress |
 
-The current simulated cohort (v0.2, 45 Abu Dhabi site-days, 333 worker-shifts per arm) projects no excessive heat-strain
-events under Zill, against 87 per 1,000 worker-shifts with the midday ban alone and 57 per 1,000 under the ADOSH zone
-policy. It also shows a large work cost (about two-thirds less work than the midday-ban baseline), driven by the day
-planner. The next revision addresses that cost on stated principles (per-person limits, an opt-in monitored mode
-following the ISO 7243 → ISO 7933 decision flow). Full tables and caveats: [docs/VALIDATION-COHORT.md](docs/VALIDATION-COHORT.md).
+The current simulated cohort (v0.3, 45 Abu Dhabi site-days, 333 worker-shifts per arm) projects no excessive heat-strain
+events under Zill, against 114 per 1,000 worker-shifts with the midday ban alone and 39 per 1,000 under the ADOSH zone
+policy. It also shows a large work cost: about two-thirds less work than the midday-ban baseline. v0.3 added per-person
+acclimatisation limits and an opt-in monitored mode (ISO 7243 → ISO 7933 decision flow); neither reduced the cost, which
+comes from the day planner. Where that cost comes from, and what a faithful reading of the standards allows, is under
+review now. Full tables and caveats: [docs/VALIDATION-COHORT.md](docs/VALIDATION-COHORT.md).
 
 ## Run it
 
