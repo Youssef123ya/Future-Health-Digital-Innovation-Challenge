@@ -1522,10 +1522,10 @@ describe('monitored mode in the environment channel (RISK_THRESHOLDS.monitoring)
   })
 })
 
-describe('planBasis tables or absent: bit-identical to the engine before wave 2d (recorded fixture)', () => {
-  it('reproduces fixtures/risk-tables-baseline.json: sha256 of every step assessment, demo crew, two days', () => {
+describe('planBasis tables or absent: bit-identical to the recorded tables-mode baseline (fixture)', () => {
+  it('reproduces fixtures/risk-tables-baseline.json: the level of every minute and sha256 of every step assessment, demo crew, two days', () => {
     const fix = JSON.parse(readFileSync(new URL('../../fixtures/risk-tables-baseline.json', import.meta.url), 'utf8')) as {
-      runs: Array<{ dayId: string; from: string; to: string; workerId: string; taskId: string; steps: number; sha256: string }>
+      runs: Array<{ dayId: string; from: string; to: string; workerId: string; taskId: string; steps: number; sha256: string; levels: string }>
     }
     expect(fix.runs.length).toBe(14)
     for (const basis of [undefined, 'tables'] as const) {
@@ -1538,16 +1538,21 @@ describe('planBasis tables or absent: bit-identical to the engine before wave 2d
         let st = createWorkerEngine(w, start)
         const h = createHash('sha256')
         let n = 0
+        let levels = ''
         for (let now = start; now <= end; now += MIN) {
           const { env, heat } = siteAt(day, now)
           const c: WorkerContext = { now, profile: w, task, location: task.inSun ? 'sun' : 'shade', heat, env, network: 'online', fastingNow: false, restArea: SITE.restArea, ...(basis ? { planBasis: basis } : {}) }
           const res = stepWorkerEngine(st, c, w.hasWearable ? { physioMinute: CLEAN_HR } : {})
           st = res.state
           h.update(JSON.stringify(res.assessment))
+          levels += RISK_ORDER[res.assessment.level]
           n++
         }
+        const label = `${basis ?? 'absent'} ${r.dayId} ${r.workerId}`
         expect(n).toBe(r.steps)
-        expect(h.digest('hex'), `${basis ?? 'absent'} ${r.dayId} ${r.workerId}`).toBe(r.sha256)
+        // What the worker sees is checked first, so a failure says whether a level changed or only the detail.
+        expect(levels, label).toBe(r.levels)
+        expect(h.digest('hex'), label).toBe(r.sha256)
       }
     }
   })
