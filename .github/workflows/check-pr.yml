@@ -32,12 +32,11 @@ jobs:
       - name: Production build
         run: npx vite build
 
-      # The simulator speed test times 30 workers × a full shift against a 3 s target with 1.5× tolerance. Shared
-      # runners vary by about 1.5× between runs on the same code (best 3.5 s on one run, 4.9 s on the next), so here
-      # it runs in its own step that reports the time without failing the check. `npm test` still enforces it locally.
+      # The simulator speed test times 30 workers × a full shift against a 3 s target with 1.5× tolerance. Run beside
+      # the other test files, it competes with them for the runner's cores (best 3.5 s and 4.9 s on two runs of the
+      # same code); run alone it took 2.0 s. So it runs in its own step, after the rest of the suite.
       - name: Unit and integration tests
         run: npx vitest run --testNamePattern '^(?!.*within the 3 s target)'
 
-      - name: Simulator speed (reported, not enforced on shared runners)
-        continue-on-error: true
+      - name: Simulator speed (run alone)
         run: npx vitest run src/sim/worldsim.test.ts --testNamePattern 'within the 3 s target'
