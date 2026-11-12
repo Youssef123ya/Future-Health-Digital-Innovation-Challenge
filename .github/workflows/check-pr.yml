@@ -1,4 +1,6 @@
-# Checks every pull request with the steps the Pages deploy runs on main: type-check, tests, production build.
+# Checks every pull request before it reaches main: the type-check and production build the Pages deploy runs
+# (npm run build), then the test suite, which the deploy does not run. Build before tests, so a failing test
+# never hides whether the app still builds.
 name: Check pull request
 
 on:
@@ -27,8 +29,8 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
-      - name: Unit and integration tests
-        run: npm test
-
       - name: Production build
         run: npx vite build
+
+      - name: Unit and integration tests
+        run: npm test
