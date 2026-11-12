@@ -5,9 +5,10 @@ laws and standards the design answers to. It is written for the Challenge judges
 and data governance"), for reviewers at the Department of Health – Abu Dhabi (DoH) and the Abu Dhabi Public Health Centre
 (ADPHC), and for employers considering a deployment.
 
-**Status:** working prototype, 10 November 2026. Sections 2–7 describe controls that run in code today
-(`src/engine/privacy.ts`, 38 passing tests). Contract clauses, processes and open decisions are marked as such. This
-document is not legal advice. The legal mapping in §8 needs confirmation by UAE counsel before a pilot.
+**Status:** working prototype, 11 November 2026. Sections 2–7 describe controls that run in code today
+(`src/engine/privacy.ts` with 61 passing tests, `src/engine/alerts.ts` with 94, `src/state/selectors.ts` with 23).
+Contract clauses, processes and open decisions are marked as such. This document is not legal advice. The legal mapping
+in §8 needs confirmation by UAE counsel before a pilot.
 
 **How to read the tags**
 
@@ -34,10 +35,14 @@ Source keys (S24, S61, S73 …) refer to the reference list in `docs/research/co
   "occupational or preventive medicine" exception [S, S61]. Every use of health data is opt-in, scope by scope, and the
   worker can revoke it at any time.
 - **Health data stays on the worker's phone.** Routinely, only a 10-key "level + action" record leaves the device. It
-  carries a pseudonym, not a name, and no clinical field (224 bytes in the example in §2.4).
+  carries a pseudonym, not a name, no clinical field and no individual water figure (207 bytes in the example in §2.4).
 - **Access follows a role × purpose matrix.** 8 roles × 9 purposes = 72 cells. Each cell has a written reason and a
-  basis, and `project()` enforces it. Supervisors never see clinical detail. Occupational health (OH) sees clinical
-  detail only for an escalated case, and only if the worker agreed to share it.
+  basis, and `project()` enforces it. Supervisors never see clinical detail or individual numbers: driver texts reach
+  them as generic phrases or one of two pooled phrases, so fasting, health factors, consent state and monitored mode
+  cannot be read from their screens (§3.4). Occupational health (OH) sees clinical detail only for an escalated case,
+  and only if the worker agreed to share it.
+- **Declining the wearable costs the worker nothing.** It never affects pay, assignment or evaluation, and rest that a
+  device directs is never a performance measure (§5).
 - **Four purposes are refused for every role, whatever the consent:** performance management, disciplinary action,
   insurance underwriting, and immigration or visa decisions. Each refusal is logged. The employer contract repeats these
   bans and attaches penalties and a right to terminate.
@@ -59,24 +64,30 @@ Source keys (S24, S61, S73 …) refer to the reference list in `docs/research/co
   - k for HSE managers;
   - who anchors the audit head;
   - which law applies: the PDPL, the ICT Health Law, or both;
-  - two open privacy gaps on supervisor screens: minute counts in projection texts, and a fasting worker's 0 mL/h water
-    figure (items 16 and 18).
+  - the record of the occupational-health sign-off that monitored mode needs (designed, not built; item 19);
+  - two residual inference paths: per-worker confidence on consoles and the first aider's action list (items 20, 21).
+
+  The two supervisor-screen gaps of the previous version, minute counts in projection texts and a fasting worker's
+  0 mL/h water figure, are closed (items 16 and 18).
 
 ---
 
 ## 1. Principles
 
 1. **Protection only.** Zill data exists to keep the worker safe. It is never used to rank, pay, discipline, insure,
-   recruit or deport a worker (§5). *Code + Contract.*
+   recruit or deport a worker (§5). Declining the wearable or monitoring consent never affects pay, assignment or
+   evaluation, and rest that a worker's device directs is never a performance measure (§5.3, C13). *Code + Contract.*
 2. **Privacy by architecture, not by policy.** Individual physiological and health data is processed on the worker's own
    device. The network sees "level + action" (ARCHITECTURE §1 principle 5). *Code.*
 3. **Purpose limitation in code.** Every request names a role and one of nine purposes, and the matrix decides what is
    released (§3). This is how the PDPL rule that data be collected "only for specific and clearly defined purposes"
    [S, S61] becomes a software rule. *Code.*
 4. **Minimisation.**
-   - The supervisor sees what to do, never the medical reason.
-   - The sync payload rounds water to 10 mL and floors work minutes [ENG].
-   - Raw physiology is purged after 24 h [ENG].
+   - The supervisor sees what to do, never the medical reason and never an individual number (§3.4).
+   - Private factors (health flags, fasting, consent state, monitored mode) are enforced on the worker's device, never
+     planned, and reach supervisors only through two pooled phrases.
+   - The sync payload sends no individual water figure and floors work minutes [ENG].
+   - Raw physiology is purged after 24 h, check-in answers and logged drinks after 30 days [ENG].
 
    This follows the ILO code: the employer "must minimize the intrusion" (§6.14(1)) [P, S73]. *Code.*
 5. **Consent where consent is real; legal duty where consent is not needed.** Core safety alerting needs no consent.
@@ -127,7 +138,7 @@ These are the 18 fields that any role can ever request (`DataField` in `src/engi
 | `workMinPerHour` | Work minutes per hour | operational | — | yes | Worker (self) · Crew supervisor (own crew); safety alerting, operational planning · Occupational health nurse (escalated case + sharing consent); clinical care |
 | `ackStatus` | Acknowledgement | operational | — | yes (as `ack`) | Worker (self) · Buddy (paired buddy); safety alerting · Crew supervisor (own crew); safety alerting, operational planning · Occupational health nurse (escalated case); safety alerting, clinical care |
 | `minutesToLimit` | Minutes to strain limit | clinical | — | no | Worker (self) · Occupational health nurse (escalated case + sharing consent); clinical care |
-| `waterMlPerHour` | Water (mL/h) | operational | — | yes | Worker (self) · Crew supervisor (own crew); safety alerting, operational planning · Occupational health nurse (escalated case + sharing consent); clinical care |
+| `waterMlPerHour` | Water (mL/h) | operational | — | yes | Worker (self) · Occupational health nurse (escalated case + sharing consent); clinical care |
 | `drivers_nonclinical` | Reasons (non-clinical) | operational | — | no | Worker (self) · Crew supervisor (own crew); safety alerting, operational planning · Occupational health nurse (escalated case + sharing consent); clinical care |
 | `drivers_clinical` | Reasons (clinical) | clinical | — | no | Worker (self) · Occupational health nurse (escalated case + sharing consent); clinical care |
 | `hrBpm` | Heart rate | clinical | `wearable` | no | Worker (self) · Occupational health nurse (escalated case + sharing consent); clinical care |
@@ -155,6 +166,26 @@ The worker profile (`WorkerProfile` in `types.ts`) holds further inputs that the
 None of these is a projectable field, so no role can obtain one through `project()`. `inspectSyncPayload()` lists them
 as kept on the device.
 
+**What the supervisor does learn about acclimatisation, and why.** The day plan (`src/engine/planner.ts`) shows the
+supervisor which crew members are on an acclimatisation schedule and their work caps per block-hour
+(`CrewPlan.memberCaps`, `memberWorkMin`; plan texts and warnings name the members on a schedule). Running that schedule
+is an employer duty: ADOSH-SF CoP 11.0 v4.0 §3.2(b)(i) asks for 5–7 days of acclimatisation before hard work in a hot
+environment, and ADOSH TG v4.0 Table 1 note b bars unacclimatised workers from the Medium and High TWL zones, so the
+supervisor must know whom to keep out of which hours [P]. The disclosure is limited to that operational constraint
+[D, Code]:
+- the plan shows the schedule and the cap (minutes of work per hour, the bout and `limitedBy`: `crew`,
+  `acclimatization` or `phs`), never the history behind it: no days on site, no new-versus-returning, no ramp day, no
+  exposure percentage (the `acclimatization_ramp` warning no longer shows them);
+- the acclimatisation-status driver reaches the supervisor as its generic phrase, never with its minutes
+  (`SUPERVISOR_DRIVER_RULES`);
+- health factors, conservative mode, fasting and consent are not planner inputs (a declared flag changes neither the
+  plan nor its texts, `planner.test.ts`). A stricter personal limit shows only as the pooled "Device-directed rest"
+  phrase, and the plan carries one neutral note for every crew: "Workers' devices may direct extra rest for some
+  members; the reasons stay on the device."
+
+What stays on the device: the acclimatisation history itself, the reason for any stricter limit, the ramp day and the
+exposure budget left, the monitored-mode state and its fallback reason, and every individual number.
+
 Unknown values fall back to protective defaults (ARCHITECTURE §5):
 - body size 75 kg and 1.75 m;
 - acclimatisation unacclimatised;
@@ -169,7 +200,7 @@ Unknown values fall back to protective defaults (ARCHITECTURE §5):
 |---|---|---|---|
 | Raw heart-rate samples, ECTemp and PSI traces | Worker's device only | Purged after 24 h (`RAW_PHYSIOLOGY_RETENTION_MS`). A sample exactly 24 h old is purged. | ARCHITECTURE §7 [ENG]; ILO code §6.14(1) [P, S73] |
 | Health factors (yes/no risk flags) | Worker's device | Until the worker changes or deletes them | `CONSENT_NOTICES.healthFlags` |
-| Check-in answers (symptoms, urine colour, logged drinks) | Worker's device. Symptoms reach the first aider for an escalated case. | **Not yet set in code** (§13, item 5) | `CONSENT_NOTICES.checkins` |
+| Check-in answers (symptoms, urine colour, logged drinks) | Worker's device. Symptoms reach the first aider for an escalated case. | 30 days after they were recorded, unless OH holds them for an escalated case (`CHECKIN_RETENTION_MS`, `purgeCheckins`; exactly 30 days is purged) | `CONSENT_NOTICES.checkins`; [ENG] data minimisation (§13, item 5) |
 | Level history (level, actions, work/rest, water, acknowledgement) | Device and site console, under a pseudonym | 30 days (`LEVEL_HISTORY_RETENTION_MS`; exactly 30 days is purged) | ARCHITECTURE §7 [ENG] |
 | Crew roster (pseudonym → name, crew, site) | Employer's supervisor console | Employer's HR record rules (outside Zill) | `WorkerProfile.displayName`, kept for operational necessity |
 | Consent state and consent receipts | State on the device; receipts in a consent ledger (production location open) | As long as the processing they prove, plus a dispute period. **Period not yet set** (§13). | PDPL: the controller "must be able to prove that the data subject gave consent" [S, S62] |
@@ -199,30 +230,34 @@ never worker data.
   "crewId": "musaffah-c2",
   "level": "high",
   "actions": [
-    "shade_breaks",
-    "drink_water",
-    "rotate_task"
+    "rotate_task",
+    "shade_breaks"
   ],
   "workMinPerHour": 45,
-  "waterMlPerHour": 1180,
+  "waterMlPerHour": 0,
   "ack": "acknowledged",
   "t": 1752559200000,
   "confidence": "medium"
 }
 ```
 
-What happened to the input (224 bytes in UTF-8):
-- The confidential `occ_health_review` action was dropped. It would reveal that OH has asked for a confidential review.
+What happened to the input (207 bytes in UTF-8):
+- The actions are the console actions (`supervisorActions`), in the engine's priority order. The confidential
+  `occ_health_review` action was dropped: it would reveal that OH has asked for a confidential review. `drink_water` was
+  dropped too: drink, electrolyte, check-in and buddy prompts are acted on only by the worker's device, and a missing
+  drink prompt would reveal fasting.
 - Work minutes were floored to 45, so the payload never allows more work than the engine did.
-- Water was rounded to the nearest 10 mL.
-- The drivers, minutes-to-limit, data quality, name, site, language, age, acclimatisation history, clothing, health
-  factors, consent state and wearable status all stayed on the device.
+- The individual water figure was not sent. `waterMlPerHour` is a legacy v1 key that always carries
+  `SYNC_WATER_NOT_SENT_ML` = 0 for every worker, so it tells a receiver nothing about anyone; the supervisor console
+  takes the water schedule from the crew plan (§13 item 18, closed in wave 2d).
+- The drivers, minutes-to-limit, water figure, data quality, name, site, language, age, acclimatisation history,
+  clothing, health factors, consent state and wearable status all stayed on the device.
 - The supervisor console maps the pseudonym to the crew roster, so the name never travels in the payload.
 
 **Alerts and notifications** go to the roles the alert policy routes them to (ARCHITECTURE §6). They carry the level,
-the actions, a non-clinical reason, the alert basis (exposure or individual, §3.4) and the escalation and
-acknowledgement times by role, and no clinical field. One gap is open: a projection reason can contain the projected
-minutes (§13 item 16).
+the console actions, a non-clinical reason built from the supervisor views of the drivers (§3.4), the alert basis
+(exposure or individual) and the escalation and acknowledgement times by role, and no clinical field and no individual
+number. The gap of a projection reason containing the projected minutes is closed (§13 item 16).
 
 **Other flows**, each passing the matrix in §3 and logged in §6:
 - the first aider's case view for an active STOP or EMERGENCY;
@@ -260,10 +295,13 @@ minutes (§13 item 16).
 4. **Consent gating.** `hrBpm`, `ctEstC` and `psi` need `wearable`; `riskFlags` needs `healthFlags`; `urineColor` needs
    `checkins`. This applies to every role, including the worker's own view, so a revocation takes effect on the next call.
 5. **Leak filters.**
-   - The confidential `occ_health_review` action is removed for anyone not cleared for clinical drivers.
-   - Projection-channel drivers lose their number (`value`, `unit`) unless `minutesToLimit` is also released, because
-     that number is the individual minutes-to-limit. Their text is copied as it is, and some projection texts contain
-     the number; this is open (§13 item 16).
+   - Actions: recipients cleared for clinical drivers (the worker, consented OH) get every action; the first aider gets
+     all but the confidential ones (`occ_health_review`); a buddy and every other recipient get the console actions
+     (`supervisorActions`: no confidential or device-only prompt, `rotate_task` added for a worker not cleared; the buddy
+     keeps its buddy-check prompt).
+   - Non-clinical drivers keep their texts, values and units only when `minutesToLimit` itself is released (the worker,
+     consented OH). Every other recipient gets `supervisorDrivers`: site texts on the allow-list, generic phrases or the
+     two pooled phrases, with no individual number (§3.4; §13 item 16, closed).
 6. **Result and log.** The result lists the released fields, the withheld fields and why, and an audit entry.
    `projectAndLog()` appends that entry whether the request was allowed or refused.
 
@@ -283,7 +321,7 @@ How to read the cells:
 |---|---|---|---|---|---|---|
 | **Worker** | G1: all 18 fields, self | G1: all 18 fields, self | G1: all 18 fields, self | G1: all 18 fields, self | G1: all 18 fields, self | refused |
 | **Buddy** | G2: 4 non-clinical fields, paired buddy | — | — | — | — | refused |
-| **Crew supervisor** | G3: 8 non-clinical fields, own crew | — | G3: 8 non-clinical fields, own crew | — | — | refused |
+| **Crew supervisor** | G3: 7 non-clinical fields, own crew | — | G3: 7 non-clinical fields, own crew | — | — | refused |
 | **First aider** | G4: 4 non-clinical fields, active STOP/EMERGENCY case; G5: `symptoms`, active STOP/EMERGENCY case + escalated case | — | — | — | — | refused |
 | **Occupational health nurse** | G6: 6 non-clinical fields, escalated case | G6: 6 non-clinical fields, escalated case; G7: 12 fields (8 clinical), escalated case + sharing consent | — | — | — | refused |
 | **HSE manager** | aggregates only, k = 5 | — | aggregates only, k = 5 | aggregates only, k = 5 | — | refused |
@@ -297,9 +335,9 @@ How to read the cells:
 |---|---|---|---|---|---|
 | G1 | all 18 fields | the requester is the worker the data is about | `hrBpm` → `wearable`, `ctEstC` → `wearable`, `psi` → `wearable`, `riskFlags` → `healthFlags`, `urineColor` → `checkins` | Worker: safety alerting, clinical care, operational planning, compliance reporting, public-health statistics | A worker sees everything Zill holds about them. |
 | G2 | `displayName`, `level`, `actions`, `ackStatus` | the requester is the worker's paired buddy | — | Buddy: safety alerting | The partner's level and what to do, to run a buddy check. |
-| G3 | `displayName`, `crewId`, `level`, `actions`, `workMinPerHour`, `ackStatus`, `drivers_nonclinical`, `waterMlPerHour` | the worker is in the requester's crew | — | Crew supervisor: safety alerting, operational planning | What to do, for the workers in the crew the supervisor runs. |
+| G3 | `displayName`, `crewId`, `level`, `actions`, `workMinPerHour`, `ackStatus`, `drivers_nonclinical` | the worker is in the requester's crew | — | Crew supervisor: safety alerting, operational planning | What to do, for the workers in the crew the supervisor runs. |
 | G4 | `displayName`, `level`, `actions`, `location` | the worker is at STOP or EMERGENCY | — | First aider: safety alerting | Who needs help, how urgently, what to do and where they are. |
-| G5 | `symptoms` | the worker is at STOP or EMERGENCY; the case has been escalated | — | First aider: safety alerting | Reported symptoms guide first aid once the case is escalated (vital-interest exception). |
+| G5 | `symptoms` | the worker is at STOP or EMERGENCY; the case has been escalated | — | First aider: safety alerting | Reported symptoms guide first aid once the case is escalated (vital-interest exception). A symptom- or physiology-driven stop and every emergency page the first aider when raised, so they are escalated from that minute. |
 | G6 | `displayName`, `crewId`, `level`, `actions`, `ackStatus`, `location` | the case has been escalated | — | Occupational health nurse: safety alerting, clinical care | Occupational health is alerted to escalated cases. |
 | G7 | `workMinPerHour`, `minutesToLimit`, `waterMlPerHour`, `drivers_nonclinical`, `drivers_clinical`, `hrBpm`, `ctEstC`, `psi`, `riskFlags`, `symptoms`, `urineColor`, `ageYears` | the case has been escalated; the worker has consented to share clinical detail with occupational health on escalation | `hrBpm` → `wearable`, `ctEstC` → `wearable`, `psi` → `wearable`, `riskFlags` → `healthFlags`, `urineColor` → `checkins` | Occupational health nurse: clinical care | Clinical detail, because the worker agreed to share it with occupational health on escalation. |
 
@@ -308,33 +346,72 @@ returns them in plain language, and the governance view specified in ARCHITECTUR
 
 ### 3.4 Design decisions worth knowing
 
-- **Supervisors** never receive the individual model projection (`minutesToLimit`) or age as a field; some projection
-  driver texts still contain the minutes (open, §13 item 16). They do receive the work/rest and water schedule, because
-  those are the actions they must organise.
+- **Supervisors** never receive the individual model projection (`minutesToLimit`), the individual water figure or age
+  as a field, and no driver text carries an individual number (§13 items 16 and 18, closed). They do receive the
+  work/rest schedule and the crew's water schedule from the plan, because those are the actions they must organise.
+- **Supervisor texts: generic phrases, two pooled phrases, a site allow-list** (`privacy.ts SUPERVISOR_DRIVER_RULES`,
+  `supervisorDriver`). Every driver a supervisor could see goes through one rule:
+  - `site`: drivers on an explicit allow-list keep their text and numbers, because the numbers describe the site (the
+    rule pack's zones and midday-break times, site WBGT and TWL, weather data, the cooled rest area, the meter check);
+  - `phrase`: the generic, translated `driver.<id>` phrase, with no value, unit or individual detail;
+  - `not_cleared_for_heat_work`: every reason that keeps a worker off heat work now (an ISO 7933 limit reached or not
+    yet restored, a resume hold, a task not feasible at the worker's own limit, a used-up acclimatisation allowance, a
+    clinical latch) becomes "Not cleared for heat work now: assign cooler work; the device will say when to return.";
+  - `device_directed_rest`: the stricter personal limit or tier (a health factor, fasting, a new or returning worker,
+    heat rash today) and both monitored-mode drivers become "Device-directed rest: follow the work and rest times on the
+    worker's device.";
+  - `withhold`: drivers that reveal fasting, logged drinking or extra-care mode, and any unknown id (default deny).
+
+  The pooled drivers have fixed text, channel, direction and basis, so no field tells their causes apart; the work/rest
+  cycle is always shown to supervisors as raising, because its direction changes in monitored mode. Prompts acted on
+  only by the worker's device (drink water, electrolytes, check-in, buddy check) are removed from supervisor actions,
+  the payload and crew alerts, and `rotate_task` is added for every worker who is not cleared. A second text filter,
+  `PRIVATE_FACTOR_TEXT_PATTERN` (fasting, consent, wearable), runs beside `CLINICAL_TEXT_PATTERN` on alert reasons and
+  console texts. Tested in `privacy.test.ts`: no digit in any supervisor driver text outside the site allow-list (every
+  driver id × channel × direction); fasting and non-fasting workers give identical projections, payloads, buddy cards
+  and console notifications; a declined wearable gives the same supervisor output as a consented one apart from the
+  level and work-minute fields the policy releases.
 - **First aiders** never receive health factors or physiology. They get who, where, the level and what to do for an
   active case, plus the reported symptoms once the case is escalated (ILO code §8.2 and §10.1) [P, S73].
 - **OH** is alerted to escalated cases so it can coordinate care. It sees clinical detail only under the
   `clinical_care` purpose, and only with the worker's sharing consent.
 - **Employer HR** receives compliance aggregates at k = 10. Every other HR request is refused and logged.
 - **Inference risk (residual).** A supervisor can see that one worker's level or work/rest schedule differs from the
-  rest of the crew. Conservative mode, triggered by any health factor, produces stricter limits, so a stricter schedule
-  could hint at a health factor. Three mitigations apply:
+  rest of the crew. Conservative mode, triggered by any health factor, produces stricter limits on the device, so a
+  stricter schedule could hint at a health factor. Four mitigations apply:
   - Conservative mode also applies to every worker in their first 14 days, after a return from 7 or more days away, and
     after heat rash reported that day. A stricter schedule therefore does not single out a health factor.
-  - Reason texts shown to supervisors are non-clinical by contract (`RiskDriver.text` in `types.ts`).
+  - The planner never uses conservative mode, fasting or consent, so the day plan cannot reveal them (§2.2).
+  - Every private cause reaches supervisors as one of the two pooled phrases above, never by name.
   - The employer contract bars adverse action based on inferred health status (§5.3).
 
-  The DPIA lists this risk (§11, R3). Two further inference paths are open (§13 item 18): while a worker who declared
-  fasting is fasting, the engine sets their water figure to 0 mL/h, and the sync payload carries it; and the recovery
-  text after a reached water-loss limit differs when drinking is restricted ("no more heat work this shift") from when it
-  is allowed ("drink and rest").
+  The DPIA lists this risk (§11, R3). The two fasting paths of the previous version are closed (§13 item 18): the
+  payload's water key is a constant 0 for every worker, and fasting and non-fasting workers at a reached water-loss
+  limit give the same supervisor output (the pooled "Not cleared" phrase, the same actions). Two residual paths are open:
+  per-worker confidence on consoles (§13 item 20) and the first aider's action list (§13 item 21).
+- **Monitored mode does not reveal consent.** Under the monitored plan basis, a worker's device uses the tables as a
+  screen only while the worker is acclimatised, not in the stricter personal mode, wearing a consented band with valid
+  data, and inside the ISO 7933 model's scope (ARCHITECTURE §5). Whether that holds, and why it lapsed, stays on the
+  device: `detail.environment` is never sent, the monitored-mode drivers are pooled as "Device-directed rest", the
+  published reason of a suppressed alert is the same for both causes (below), and the planner never learns who wears a
+  band or has consented. A monitored worker's level can still differ from a crewmate's (caution against stop at the same
+  task); the alert reason does not say why.
+- **Designed suppression, and what is never suppressed** (ANSI/ISA-18.2-2016; `alerts.ts`). An exposure alert at
+  caution or high whose only console actions are ones the active plan already puts in force (shade breaks, rotation,
+  pace) is recorded, notified to nobody and runs no acknowledgement timer, when the plan already sets that worker's
+  work/rest or when it is only the WBGT screen of monitored mode. The worker's own device still shows the guidance. It
+  is notified at once if the alert gains an individual basis or its condition ends, and an escalation to stop raises a
+  new, notified alert. Stop and emergency alerts, individual alerts, symptom, physiology, hydration and first-aid cases,
+  and any alert asking for a new action are never suppressed. The published alert carries one reason for both causes
+  (`action_in_force`, shown as "Action already in force: logged, not notified"), because naming monitored mode would
+  reveal wearable consent; consoles list suppressed alerts apart, without their cause.
 - **Alert basis** (ARCHITECTURE §6). Every alert says whether it describes a shared condition (`exposure`: site heat or a
   site rule, from the environment and regulation channels only) or this worker (`individual`). The basis is safe to
   show to supervisors:
   - the basis label is the same for every personal cause. Alerts driven by the physiology, symptoms or hydration
     channels also share one reason ("Personal check flagged on the worker's device", or "First-aid check needed" at
-    STOP), so neither the reason nor the basis says which of them is involved. A projection-driven alert names the
-    heat-strain model (see item 16 of §13 for the minute counts in some of those texts);
+    STOP), so neither the reason nor the basis says which of them is involved. Other individual alerts take the
+    supervisor view of their main driver (a generic or pooled phrase, never an individual number);
   - an exposure alert's reason names only the shared condition and the work/rest schedule in effect ("Site heat:
     work/rest 30/30 in effect", "Site rule: …"), the same words for every crew member;
   - routing never depends on the basis, so a label can never withhold a notification.
@@ -342,7 +419,10 @@ returns them in plain language, and the governance view specified in ARCHITECTUR
   escalation record (`escalatedAt`) marks it as escalated from the moment it is raised. The first aider then sees the
   reported symptoms at once, under the vital-interest exception (§4.6), and OH sees the case, with clinical detail only
   under the sharing consent. Before this record existed, that happened only after the 2-minute acknowledgement timeout
-  or a first-aider hand-over. The privacy owner is asked to confirm it (§13 item 17).
+  or a first-aider hand-over. Accepted in wave 2d: the first aider is the responder for these cases (§13 item 17). The
+  timing is documented on `ProjectionContext.escalated` in `privacy.ts` and pinned by `state/selectors.test.ts` ›
+  "escalatedAt disclosure timing (vital interest, wave 2d)": symptoms reach the first aider at raise for a
+  symptom-driven stop, and only after the 2-minute timeout for an exposure-driven stop.
 
 ---
 
@@ -375,7 +455,7 @@ returns them in plain language, and the governance view specified in ARCHITECTUR
 |---|---|---|---|---|
 | `wearable` | **Heart rate from my band.** Zill may read heart rate from my band on this phone to estimate my heat strain. It is an estimate to help keep me safe, not a medical measurement or a diagnosis. My supervisor never sees it. | Heart-rate samples; estimated strain indicators (ECTemp, PSI) calculated on this phone. | Only me — and occupational health only if my case is escalated and I also agreed to share with them. | Raw heart-rate and strain traces are deleted from this phone after 24 hours. |
 | `healthFlags` | **Health factors that make heat more dangerous for me.** Zill may use my yes/no answers (for example a recent illness, or a medicine that affects heat tolerance) to make my alerts stricter. My answers stay on this phone and are never shown to my supervisor or employer. | Self-declared yes/no risk factors; never added up into a score. | Only me — and occupational health only if my case is escalated and I also agreed to share with them. | Kept on this phone until I change or delete them. |
-| `checkins` | **Symptom and hydration check-ins.** Zill may ask how I feel and the colour of my urine. My answers stay on this phone. If my case is escalated, the first aider sees the symptoms I reported so they can help me. | Check-in answers (symptoms, urine colour) and the drinks I log. | Me; the first aider for an escalated STOP or EMERGENCY case. A buddy or first aider can always report danger signs for me. | Kept on this phone; my level history is kept under a pseudonym for 30 days. |
+| `checkins` | **Symptom and hydration check-ins.** Zill may ask how I feel and the colour of my urine. My answers stay on this phone. If my case is escalated, the first aider sees the symptoms I reported so they can help me. | Check-in answers (symptoms, urine colour) and the drinks I log. | Me; the first aider for an escalated STOP or EMERGENCY case. A buddy or first aider can always report danger signs for me. | Deleted from this phone after 30 days, unless my case is escalated and occupational health still holds it open. My level history is kept under a pseudonym for 30 days. |
 | `shareWithMedicOnEscalation` | **Share with occupational health if my case is escalated.** If my case is escalated, the occupational health nurse may see my heart-rate estimates, health factors and check-in answers to look after me. Nobody else sees them, and they are never used against me. | The clinical fields held on this phone, released only for an escalated case. | The occupational health nurse, bound by medical confidentiality. | Kept by occupational health under medical confidentiality, apart from all other personal data. |
 | `aggregateStatistics` | **Count me in anonymous statistics.** My data may be counted in public-health statistics about heat at work. Groups of fewer than 10 people are hidden so that I cannot be picked out. | Counts by site, crew and level; never an individual record. | The regulator (ADPHC / ADOSH), as aggregates only. | Aggregates are kept; they contain no individual record. |
 
@@ -503,6 +583,16 @@ record the language and a hash of the exact text shown.
 **Sale or marketing use** is also excluded (research §6.2; ILO code §10.2) [P, S73]. No purpose value exists for it, so
 it cannot be requested through Zill at all. The contract prohibits it (§5.3, C2).
 
+**Device-directed rest and the wearable choice** [D, Contract C13]. A worker's device can direct more rest than the
+crew plan: a stricter personal limit, a resume hold, an acclimatisation schedule, or, on a monitored site, the table
+limits for a worker whose band is off or not consented. Rest directed this way is protection, never a performance
+measure: work minutes lost to it are paid working time (C4) and are never used in pay, ranking, overtime allocation,
+task assignment or evaluation. Declining the wearable, or withdrawing monitoring consent, must never affect pay,
+assignment or evaluation either. The code supports this: the planner never learns who wears a band or has consented,
+supervisors see the pooled "Device-directed rest" phrase without its cause (§3.4), and the performance-management
+purpose is refused for every role. In the simulated cohort the work cost falls unevenly between crews and language
+groups (VALIDATION-COHORT §6), which is why this rule is a contract term and not only a code property.
+
 ### 5.2 Enforcement in code
 
 - **A closed list.** `Purpose` is a closed union and `PROHIBITED_PURPOSES` is a constant (`types.ts`).
@@ -534,6 +624,7 @@ elsewhere. The contract and processes below cover that gap.
 | C10 | **Data residency.** Hosting in the UAE. No offshore copy without a Ministerial Decision 51/2021 basis. | ICT Health Law Art. 13 [S, S65, S66] |
 | C11 | **Breach notification.** The UAE Data Office and the affected workers are notified. The PDPL sets no materiality threshold for notifying data subjects. | PDPL [S, S62] |
 | C12 | **Scope integrity.** Supervisor and buddy assignments are kept current, so need-to-know scoping is enforced (§3.1). | ARCHITECTURE §2 |
+| C13 | **No penalty for device-directed rest or for declining the wearable.** Rest directed by a worker's device, and a worker's choice not to wear a band or not to consent to monitoring, never affect pay, task assignment, overtime allocation or evaluation. Work minutes lost to device-directed rest are never a performance measure. | ILO code §5.4, §5.6 [P, S73]; ILO C161 Art. 12 [S, S75]; [D] |
 
 ### 5.4 Why the prohibitions matter for safety
 
@@ -852,16 +943,34 @@ settings [D].
   work that day.
 - **The worker can always stop.** The worker view is specified with an SOS and a self-declared stop (ARCHITECTURE §9;
   research §4.3; C155 Art. 13). No sensor reading overrides it.
+- **Monitored mode needs an occupational-health sign-off, and the sign-off is logged** [D]. Under the monitored plan
+  basis the WBGT tables become a screen for workers whose own ISO 7933 projection and physiological monitoring are valid
+  (ARCHITECTURE §5 "Plan basis"; ISO 7243:2017, ACGIH TLV decision flow, NIOSH 2016-106). That moves a protective
+  decision from a table to a model and a sensor, so it is a site opt-in, never a default:
+  - the site's occupational physician signs the opt-in, stating the site, the period, the tasks and clothing it covers,
+    and the review date;
+  - the sign-off is written to the hash-chained audit log (§6) and to the release record of §10.6, and the worker
+    committee is told before it takes effect;
+  - every plan made on that basis carries the note "Monitored plan: WBGT tables are used as a screen. A worker whose
+    device cannot confirm monitoring follows the table limits on the device.";
+  - withdrawal of the sign-off returns the site to the default basis `tables` from the next plan.
+
+  Built today: the plan basis is a planner and device input (`PlanBasis`, `WorkerContext.planBasis`), the planner
+  records the note and its standards basis, and every device falls back to the tables in the same step when a condition
+  lapses. Not built: the sign-off record and its audit entry. In the prototype the opt-in is the simulator policy
+  `zill_monitored` (§13 item 19). The simulated cohort shows that monitored mode lowers the alarm burden but delivers
+  less work, not more (VALIDATION-COHORT §3.7), which the physician should weigh.
 
 ### 10.3 Transparency
 
 - **Drivers with a basis.** Every level carries its drivers, and every driver carries a `basis` string, for example
   "ADOSH-SF CoP 11.0 v4.0 Table 1" or "ISO 7933:2023". The UI shows these through an info tip.
-- **Non-clinical text for supervisors.** Driver text shown to supervisors must be non-clinical (`RiskDriver.text` in
-  `types.ts`).
+- **Non-clinical text for supervisors.** Driver text shown to supervisors is a site text from the allow-list, a generic
+  phrase or a pooled phrase, with no individual number (§3.4; `privacy.supervisorDriver`).
 - **Site condition or personal alert.** Each alert carries its basis, exposure or individual (§3.4), so a supervisor can
-  tell a site-wide heat condition from an alert about one worker without learning why that worker was alerted. The role
-  views do not show the basis yet (LIMITATIONS E-04).
+  tell a site-wide heat condition from an alert about one worker without learning why that worker was alerted. The
+  console view model carries the basis, its frame (site heat or site rule), a localised label and the suppressed flag
+  (`state/selectors.ts AlertItem`); whether each role view shows them is tracked in LIMITATIONS E-04.
 - **Reasons for access decisions.** Every access decision states its reason (`explain()`).
 - **Data-flow inspector.** It shows exactly what leaves the device (`inspectSyncPayload()`).
 - **Evidence view.** It states the data source of every metric: reference implementation, real weather, archived
@@ -891,7 +1000,11 @@ settings [D].
 - acclimatisation status.
 
 **Simulation** (ARCHITECTURE §8; `docs/SIMULATION.md` §5). Every metric is broken down by acclimatisation status, age
-band, clothing and PPE, body size, and language support.
+band, clothing and PPE, body size, and language support. In the simulated cohort v0.3 no subgroup has an excessive or
+severe strain event under Zill, but the work cost falls unevenly: from 0 work minutes per shift for one language group
+(two workers, both in the one crew whose shade-only rest area leaves no plannable work on 8 of 9 days) to over 200 for
+another, and members on an acclimatisation schedule work less by design (VALIDATION-COHORT §6; simulated). This is the
+reason for contract clause C13.
 
 **Pilot** (research §4.3 and §6.5; `docs/PILOT.md` §5):
 - weekly active share by language group;
@@ -915,7 +1028,8 @@ The results go to the worker committee and feed the change process in §10.6.
 **Change procedure:**
 1. **Proposal.** State the source and why the change moves in the protective direction.
 2. **Reference tests.** The change must keep agreement with the oracle fixtures (pythermalcomfort, thermofeel and the
-   published tables). The wave-1 engine has 869 tests.
+   published tables). The wave-1 engine had 869 tests; the full suite had 1,418 in 31 files at the wave 2d integration
+   (11 November 2026).
 3. **Evidence regeneration.** Run `npm run validate` and review the changes in the evidence numbers.
 4. **Safety review.**
    - No change may take protection below the regulatory floor; `regulatoryFloor` enforces this in code.
@@ -954,13 +1068,13 @@ follows:
 | # | Risk | Mitigation (Code / Contract / Process) | Residual |
 |---|---|---|---|
 | R1 | Function creep: heat data used for discipline, pay or ranking | Prohibited purposes refused in code and logged; contract C2 and C9; committee report | Medium (misuse outside the system remains possible) |
-| R2 | Clinical data reaches supervisors or HR | Matrix (§3); 0 leaks in 3,000 random snapshots; non-clinical reason text; filtering of confidential actions. Open: projection texts can carry the minutes-to-limit, a clinical field (§13 item 16) | Low (Medium until item 16 is fixed) |
-| R3 | Health status inferred from a stricter schedule, an individual level or a water figure | Conservative mode also covers new and returning workers; generic reason texts; contract C3 bars action on inferred health. Open: a fasting worker's 0 mL/h water figure and the restricted-drinking recovery text (§13 item 18) | Medium |
+| R2 | Clinical data reaches supervisors or HR | Matrix (§3); 0 leaks in 3,000 random snapshots; supervisor driver views with no individual number (generic and pooled phrases, site allow-list; tested over every driver id); two text filters on alert reasons; filtering of confidential and device-only actions (§3.4) | Low |
+| R3 | Health status, fasting or consent inferred from a stricter schedule, an individual level, a water figure or a text | Conservative mode also covers new and returning workers; the planner never uses private factors; pooled phrases; constant water key in the payload; fasting and non-fasting identical on supervisor screens (tested); contract C3 bars action on inferred health. Open: per-worker confidence on consoles and the first aider's action list (§13 items 20, 21) | Medium |
 | R4 | Re-identification from aggregates | k = 5 / 10; complementary suppression; no clinical dimensions; fixed reporting periods | Low–Medium (homogeneity, differencing, §7.4) |
 | R5 | Coerced or uninformed consent | Collector rule in code; research staff or OH collect consent; witnessed mark; eight languages; the core works without consent; no penalty for refusal | Medium (the power imbalance remains) |
 | R6 | Symptoms under-reported for fear of consequences | Non-retaliation clause C3; data controlled by the worker; buddy reporting | Medium |
 | R7 | A missed danger (false reassurance) | Fail-safe defaults; physiology can only raise a level; symptoms override models; regulatory floor; people in the loop | Medium (model limits; the pilot measures this) |
-| R8 | Alert fatigue leading to ignored alerts | Crew bundling, dwell time and hysteresis, repeat suppression, the exposure/individual alert basis (ARCHITECTURE §6); false-alarm endpoint in the pilot. The simulated cohort still shows a high burden (VALIDATION-COHORT §3.7) | Medium |
+| R8 | Alert fatigue leading to ignored alerts | Crew bundling, dwell time and hysteresis, repeat suppression, designed suppression of advisories the plan already enforces, the exposure/individual alert basis (ARCHITECTURE §6); false-alarm endpoint in the pilot. The simulated cohort still shows a high burden: 3.4 supervisor acknowledgements per worker-shift (VALIDATION-COHORT §3.7) | Medium |
 | R9 | A lost or compromised phone | Minimal data on the device; physiology purged after 24 h; secure context; for employer-issued devices, device encryption and device management [D] | Low–Medium |
 | R10 | A breach of the gateway or server | The server holds pseudonymous level history and aggregates only; UAE hosting; encryption; ADHICS-aligned controls; PDPL breach notification (C11) | Low |
 | R11 | Unlawful cross-border transfer | UAE hosting; no offshore copies without an MD 51/2021 basis (C10) | Low |
@@ -995,7 +1109,7 @@ follows:
 | 2 | **k for HSE managers** | k = 5 (ARCHITECTURE §7 [ENG]). The research proposes 10 for employers [D]. | Keep 5 for on-site operational views, which contain no individual record. Use 10 for any report that leaves the site. | Product, DPO, committee |
 | 3 | **Anchoring the audit head with the worker committee** | `head()` and `verify(anchor)` exist; nothing is published yet. | Weekly printed anchor on the site board during the season, plus every anchor in the annual report. Treat a mismatch as a suspected breach. | DPO, committee |
 | 4 | **Which law applies** (PDPL, ICT Health Law, or both); RAI Standard and ADHICS clause mapping | Designed to satisfy both [D]. Clause texts not retrieved. | Written opinion from UAE counsel. Clause-by-clause gap analysis once DoH texts are obtained. | Counsel |
-| 5 | **Retention periods** for check-in answers (no purge in code), the audit log and consent receipts | Only raw physiology (24 h) and level history (30 days) are implemented. | Check-ins: align with level history (30 days) unless OH needs them for an escalated case. Audit log and receipts: keep for the processing period plus a dispute window set by counsel. | Privacy owner, DPO |
+| 5 | **Retention periods** for the audit log and consent receipts | Check-ins: closed in code. Check-in answers and logged drinks are deleted 30 days after they were recorded, unless OH holds them for an escalated case (`CHECKIN_RETENTION_MS`, `purgeCheckins`; the consent notice says so). Raw physiology (24 h) and level history (30 days) were already implemented. The audit log and consent receipts have no period. | Audit log and receipts: keep for the processing period plus a dispute window set by counsel. | Privacy owner, DPO |
 | 6 | **Need-to-know scoping** | Buddy and crew checks run only when `buddyIds` / `actorCrewIds` are passed (`src/engine/privacy.ts:775`, `:780`). | Make them mandatory in production builds. | Integrators |
 | 7 | **Consent ordering when offline** | `ConsentState` has one `updatedAt` (`src/engine/types.ts:139`). | The per-scope receipt ledger is authoritative; resolve conflicts by receipt time and sequence. | Privacy owner |
 | 8 | **Fairness by nationality vs. not storing nationality** | Zill stores the preferred language only. | Use language as the proxy. Collect nationality only through an optional, consented research survey reported with k-suppression. | Research lead, committee |
@@ -1006,9 +1120,12 @@ follows:
 | 13 | **Controller identity in the pilot**, and processor terms | Not set. | Decide with the research ethics committee and counsel before the protocol is submitted. | Sponsor, employer |
 | 14 | **Transparency of legal-duty aggregates** | Closed in code: `GENERAL_PRIVACY_NOTICE` (`src/engine/privacy.ts`) states that operational and compliance aggregates count everyone, suppressed below k, in all eight languages (`i18n.test.ts` › "the general privacy notice exists in all 8 languages; English equals GENERAL_PRIVACY_NOTICE exactly"). The translations are machine-assisted drafts. | Native-speaker review with the other texts (LIMITATIONS T-01). | Privacy owner, i18n |
 | 15 | **One consent text of record** | The English on-screen consent strings equal `CONSENT_NOTICES` exactly, versioned by `CONSENT_TEXT_VERSION` (`i18n.test.ts` › "every CONSENT_NOTICES id has a title and statement in all 8 languages; English equals the notice text exactly"). A receipt records the notice version, the English title and statement, and the language shown. | Add a hash of the exact translated text shown to each receipt, and review the translations (LIMITATIONS T-01). | Privacy owner, i18n |
-| 16 | **Minute counts in projection texts** | `minutesToLimit` is a clinical field (§2.1). `drivers_nonclinical` strips a projection driver's `value` and `unit` when `minutesToLimit` is withheld, but copies its text, and some texts contain the number ("about N min to the … limit", the rest estimate, the work-bout countdown). An individual projection alert can use the same text as its reason (LIMITATIONS G-05). | Replace a projection text with its generic `driver.<id>` phrase whenever `minutesToLimit` is withheld, both in `privacy.ts` and in the alert reason. | Privacy owner, alerts owner |
-| 17 | **Escalated from raise** | A symptom- or physiology-driven stop is marked escalated when it is raised, so the first aider sees reported symptoms at once and OH sees the case (§3.4; LIMITATIONS G-06). | Confirm under the vital-interest basis (§4.6), or limit the release to the first aider until the stop is acknowledged or times out. | Privacy owner, OH lead |
-| 18 | **Fasting inferable by supervisors** | While a worker who declared fasting is fasting, the sync payload carries a water figure of 0 mL/h, and the recovery text after a reached water-loss limit differs when drinking is restricted. Fasting is a declared risk flag, which supervisors must not see (§3.4; LIMITATIONS G-07). | Send the crew's water schedule (or no figure) instead of 0 for that worker, and use one recovery wording for both cases on supervisor screens. | Privacy owner, engine owner |
+| 16 | **Minute counts in projection texts** | Closed in code (wave 2d). Supervisor projections, alert reasons and console phrases show drivers only through `supervisorDriver`: a site text on the allow-list, the generic `driver.<id>` phrase, or a pooled phrase, never an individual number (`privacy.test.ts` › "matrix: no digit in any supervisor driver text, no value or unit, a generic basis (site allow-list excepted)"). The numbers stay in the worker's own device texts. | Keep the site allow-list pinned by its test, so that any addition is deliberate. | Privacy owner, alerts owner |
+| 17 | **Escalated from raise** | Closed (wave 2d): accepted under the vital-interest basis (§4.6). The first aider is the responder of a symptom- or physiology-driven stop and of every emergency, and sees the reported symptoms from raise; an exposure-driven stop is escalated only by its acknowledgement timeout (`ProjectionContext.escalated`; `state/selectors.test.ts` › "escalatedAt disclosure timing (vital interest, wave 2d)"). | Review with the OH lead before the pilot, together with item 21. | Privacy owner, OH lead |
+| 18 | **Fasting inferable by supervisors** | Closed in code (wave 2d). The payload's `waterMlPerHour` is a constant 0 for every worker (`SYNC_WATER_NOT_SENT_ML`, a legacy v1 key), supervisors get no individual water figure and no drink prompts, and fasting and non-fasting workers at a reached water-loss limit give identical supervisor output (`privacy.test.ts` › "supervisor output — fasting and consent are not inferable (wave 2d)"). | Drop the legacy key in payload v2. | Privacy owner, engine owner |
+| 19 | **Record of the monitored-mode sign-off** | The plan basis `monitored` is a planner and device input with a same-step fallback to the tables (ARCHITECTURE §5), but no code records the occupational-health sign-off it needs; the prototype's opt-in is the simulator policy `zill_monitored` (§10.2). | A signed, scoped opt-in (site, period, tasks, clothing, review date) written to the audit log before the first monitored plan; plans refuse the monitored basis without a current record. | Product, OH lead, DPO |
+| 20 | **Per-worker confidence as a consent side channel** | `RiskAssessment.confidence` includes the penalty for a lost wearable signal, which only a consented band can produce, and `payloadForSync` carries `confidence` to the console. | An engine confidence for consoles without the physiology penalty, used by the payload; until then consoles do not show per-worker confidence (docs/dev/engine-api-wave2d.md §7). | Engine owner, privacy owner |
+| 21 | **The first aider's action list can hint at fasting** | The first aider's projected actions are the worker's actions minus the confidential ones, so a missing `drink_water` at a stop can hint that the worker is fasting. The first aider already sees symptoms under vital interest. | Decide explicitly: accept for the responder role, or give the first aider the console actions plus the first-aid protocol. | Privacy owner, OH lead |
 
 ---
 
@@ -1016,7 +1133,7 @@ follows:
 
 The tables marked *generated* come from the live code (`ACCESS_MATRIX`, `FIELD_INFO`, `CONSENT_NOTICES`,
 `activeProcessing()`, `PROHIBITION_BASIS`, `inspectSyncPayload()`, `aggregate()`), not from hand-typing. They were last
-generated on 10 November 2026. Regenerate them whenever `src/engine/privacy.ts` changes:
+generated on 11 November 2026, after wave 2d. Regenerate them whenever `src/engine/privacy.ts` changes:
 1. Save the script below as `governance-tables.ts` in the project root.
 2. Run `npx tsx governance-tables.ts`.
 3. Paste each block over the table with the same marker.

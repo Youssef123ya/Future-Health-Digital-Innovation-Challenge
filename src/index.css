@@ -125,3 +125,21 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/*
+ * Worker-language script fonts (loaded in index.html with display=swap). The system stack in --font-sans already falls
+ * back to the Noto families for any script the device lacks; inside a phone screen (.zill-phone, set by the shell and the
+ * live demo) Urdu is set in Nastaliq, the script Urdu readers expect, with the taller line box Nastaliq needs.
+ */
+@layer base {
+  .zill-phone:lang(ur),
+  .zill-phone :lang(ur) {
+    font-family: "Noto Nastaliq Urdu", "Noto Sans Arabic", var(--font-sans);
+    line-height: 1.9;
+  }
+
+  .zill-phone:lang(ar),
+  .zill-phone :lang(ar) {
+    font-family: "Noto Sans Arabic", var(--font-sans);
+  }
+}

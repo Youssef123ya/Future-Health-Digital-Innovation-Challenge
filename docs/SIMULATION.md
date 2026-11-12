@@ -42,7 +42,7 @@ citation is given in code; the implementing engineer must cite or mark each one.
 | Resting HR | profile value, else normal(≈68, 8) | HR baseline |
 | True acclimatisation | from days on site / days away, with individual variation | sweat-gain increase and core set-point decrease |
 | Latent illness | small daily probability (febrile/GI) | raises set point, lowers tolerance; invisible to the engine unless declared |
-| Drinking behaviour | individual baseline (log-normal, median 450 mL/h, the hot-shift intake of Bates & Schneider 2008) and sweat-replacement fraction (normal 0.6 ± 0.15, clamped 0.2–1); spontaneous drinking tracks recent sweat loss, and reminders are followed with the compliance parameter (§3.3) | hydration balance |
+| Drinking behaviour | individual baseline (log-normal, median 450 mL/h, the hot-shift intake of Bates & Schneider 2008) and sweat-replacement fraction (normal 0.6 ± 0.15, clamped 0.2–1); spontaneous drinking tracks recent sweat loss above a habitual floor calibrated to the observed intake, and reminders are followed with the compliance parameter (§3.3) | hydration balance |
 | Microclimate | site radiant boost ± individual position offset | radiant load |
 | Self-pacing | probability of slowing down when strain is high (Miller & Bates 2007 self-pacing) | applies equally under every policy |
 
@@ -77,7 +77,17 @@ Ground-truth event definitions (per worker-shift):
 | Critical | T_core ≥ 40.0 °C or CNS dysfunction | TB MED 507 / ACSM heat-stroke threshold |
 | Dehydration | body-mass loss > 3 % | Armstrong; ACSM fluid guidance |
 
-## 3. World simulation (`sim/worldsim.ts`, version 1.2.0)
+## 3. World simulation (`sim/worldsim.ts`, version 1.4.0)
+
+What changed in wave 2d, in one place (details in the subsections; `docs/dev/wave2d-sim.md`,
+`docs/dev/wave2d-integration.md`):
+
+| Version | Change | Affects |
+|---|---|---|
+| worldsim 1.3.0 | The listed-order schedule honours each task's time window, like the planner (§3.1). This changes the baseline definition. Idle minutes count toward a pending statutory break. | baseline and shadow arms |
+| worldsim 1.3.0 | The worker responds to the reminder the device shows, at work, at rest and idle; the simulator keeps no copy of the reminder rule (§3.3). Drink-logging fidelity is a setting (`behaviour.drinkLogging`). | Zill arms |
+| ground truth 1.2.0 | The habitual drinking floor is calibrated to an observed intake anchor (0.4 → 0.87); a reminder left on screen is followed at most once per 20 min (§3.3). | every arm |
+| worldsim 1.4.0 | Members on an acclimatisation schedule follow their own plan caps (§3.1); the `zill_monitored` policy (§4); the engine owns every resume decision, and the simulator's own resume check is gone (§3.2). | Zill arms |
 
 - **Site-day.** One site-day at 1-minute resolution. The default shift is 05:00–17:00 local (`DEFAULT_SHIFT` [ENG]: the
   early start used by UAE summer sites). It is configurable; the scenarios and the cohort use the default.
@@ -100,40 +110,43 @@ Ground-truth event definitions (per worker-shift):
   draws exactly `TRUTH_UNIFORMS_PER_MINUTE` = 12 uniforms per minute), and stepping in chunks gives the same result as
   one call. A shadow run
   therefore reproduces `ban_only` bit for bit on every ground-truth and behaviour field.
-- **Performance.** Target: a 30-worker site-day in under 3 s. The in-suite performance test (11 November 2026, best of
-  3) runs 30 workers × 720 min under `zill_full` in about 1.0 s on the development machine. The cohort back-test runs
-  in Node via `tsx`; the medium cohort (1,260 site-day runs) took about 225 s (`docs/dev/wave2c-integration.md`).
+- **Performance.** Target: a 30-worker site-day in under 3 s. The in-suite performance test (11 November 2026, after
+  wave 2d, best of 3) runs 30 workers × 720 min under `zill_full` in about 1.1–1.2 s on the development machine. The
+  cohort back-test runs in Node via `tsx`; the medium cohort v0.3 (1,860 site-day runs) took about 1,037 s
+  (`docs/dev/wave2d-integration.md`), against about 225 s for the 1,260 runs of v0.2.
 
 ### 3.1 Schedules
 
 | Policy | How the day is scheduled |
 |---|---|
-| `ban_only`, `site_index` and the shadow arms | Each crew works its task list in listed order from the shift start (05:00), ignoring the tasks' time windows, like the naive comparison plan of `planner.ts`. |
+| `ban_only`, `site_index` and the shadow arms | Each crew works its task list in listed order within the tasks' time windows (`earliestStart` / `latestEnd`, `taskWindowMs`), the same hard constraints the planner uses (worldsim 1.3.0; before, the listed order ignored them and worked from 05:00). Each minute the crew works on the first listed task that has work left and whose window is open; a crew waiting for a window does the next open task and returns to the earlier one when its window opens [ENG: work-conserving listed order]. Work left when a window closes is not done (deferred, as the planner defers it). No open task means idle time. The naive comparison plan of `planner.ts` uses the same order. |
 | `site_index`, in addition | The ADOSH zone work/rest cycle of the hourly forecast is applied crew-wide (work first, then rest for the rest of each clock hour), and ADOSH-unacclimatised workers are kept out of the zones that exclude them. Tasks that share a clock hour share its budget as a dose Σ minutes/allowance ≤ 1 [ENG], the rule the zone-compliance metric scores. This deliberately makes the comparator strong. |
-| `zill_env`, `zill_full` | The planner plans each crew from the forecast, including the forecast climate, so its ISO 7933 screen runs (ARCHITECTURE §5). Task windows are hard constraints, and most tasks open at 06:00. Each plan block-hour is executed as the planner simulated it: work for `boutMin` minutes from `startT`, then rest in the rest area until the end of the block-hour. A block without block-hours falls back to 60-min windows, with floor(W·r/60) work minutes in a last partial window of r minutes (`planWindowWorkMin` [ENG, rounded down]). Work the planner defers or cannot fit becomes idle time. |
-| every policy | Midday break: no sun work 12:30–15:00 from 15 June to 15 September. Statutory break: 60 min of rest after 300 consecutive work minutes, where a pause of at least 15 min resets the count [ENG] (UAE Federal Decree-Law 33/2021 Art. 17, clause UNVERIFIED). In listed-order schedules the task waits; in plan schedules the planned work is lost. |
+| `zill_env`, `zill_full`, `zill_monitored` | The planner plans each crew from the forecast, including the forecast climate, so its ISO 7933 screen runs (ARCHITECTURE §5); `zill_monitored` plans on the monitored basis. Task windows are hard constraints, and most tasks open at 06:00. Each plan block-hour is executed as the planner simulated it: work for `boutMin` minutes from `startT` (floored by the planner, so no bout exceeds its allowance), then rest in the rest area until the end of the block-hour. Members on an acclimatisation schedule (`CrewPlan.memberCaps`, worldsim 1.4.0) follow their own layout in the same blocks: work for the cap's `boutMin` from the block-hour start, rest for the rest of it; a crew block-hour without a matching cap (same start and task), and any task-block minute outside every block-hour, gives that member no work [ENG, protective]. Every other member follows the crew layout. A block without block-hours falls back to 60-min windows, with floor(W·r/60) work minutes in a last partial window of r minutes (`planWindowWorkMin` [ENG, rounded down]). Work the planner defers or cannot fit becomes idle time. |
+| every policy | Midday break: no sun work 12:30–15:00 from 15 June to 15 September. Statutory break: 60 min of rest after 300 consecutive work minutes, where a pause of at least 15 min resets the count [ENG] (UAE Federal Decree-Law 33/2021 Art. 17, clause UNVERIFIED). In listed-order schedules the task waits, and idle minutes count toward a pending break (worldsim 1.3.0: before, a crew waiting between windows lost its pending break). In plan schedules the planned work is lost, and the break is computed per worker on their own layout. |
 
 Two properties of the schedules matter when arms are compared:
 - **Crew-job slack.** Each generated crew has a fixed day's job of 300–480 crew-minutes on a 720-min shift
   (`data/workforce.ts`). Once the job is done the crew is idle in the rest area. Shares of the shift are diluted by this
   slack; work minutes and idle minutes separate it from protective rest.
-- **The 05:00–06:00 hour.** The listed-order arms work in the coolest hour of the shift, while the plan arms respect the
-  06:00 task windows and cannot use it. The asymmetry is kept so the baselines keep their documented definition, and it
-  is reported (VALIDATION-COHORT §8).
+- **The same task windows for every arm (since worldsim 1.3.0).** Up to v0.2 the listed-order arms worked in the
+  coolest hour (05:00–06:00) while the plan arms waited for the 06:00 windows. Now every arm waits. This is a change of
+  the baseline definition, not of Zill: baseline crews start at 06:00 and work later into hotter hours. Between v0.2 and
+  v0.3 the midday-ban arm's work fell from 398 to 367 minutes per worker-shift and its excessive strain rose from 87 to
+  114 per 1,000; these are simulated-world changes, flagged as such by `compare-cohorts.ts` (VALIDATION-COHORT §3.9).
 
 ### 3.2 How workers respond to the device
 
 Engine-driven behaviour comes only from what the worker's device shows. These rules apply where the engine runs and
-someone acts on it (`zill_env`, `zill_full`).
+someone acts on it (`zill_env`, `zill_full`, `zill_monitored`).
 
 | Behaviour | Rule | Tag |
 |---|---|---|
 | A rest episode starts | The displayed level is stop or above, or a stop, rest or midday action is shown. | engine output |
 | Compliance | One draw per rest episode: `behaviour.compliance` × the worker's compliance factor. Default 0.7, swept at 0.5 and 0.9. | [ASSUMPTION] |
-| A rest episode ends | When the device no longer asks for rest (the engine holds a projection stop until its own resume check passes, ARCHITECTURE §5) **and** the device's own assessment of the task to resume (`risk.assessSnapshot`, regulation and environment channels only, no margin) shows no stop. The second condition was added after the first v0.2 cohort run, in the protective direction: without it ADOSH-unacclimatised workers cycled stop → rest → resume → stop in zones that exclude them (VALIDATION-COHORT §3.8). | [ENG, protective] |
+| A rest episode ends | When the device neither asks for rest nor holds (`detail.resume.held`). The engine owns every resume decision (worldsim 1.4.0): it holds a projection stop until its resume check passes, and a regulation or environment stop of the task to resume (ADOSH zone exclusion, WBGT stop band, midday break, used-up acclimatisation allowance) until that task is free of it and passes the same check (task hold, ARCHITECTURE §5). The simulator keeps no resume rule of its own. Up to worldsim 1.3.0 it re-assessed the task to resume itself (`resumeTaskAllowed`), a check added after the first v0.2 run because ADOSH-unacclimatised workers cycled stop → rest → resume → stop in zones that exclude them (VALIDATION-COHORT §3.8). In the v0.3 scenario runs, rest minutes held by neither a device request nor a hold are 0 in every run. A rest episode asked only by a rest action below stop ends with that action. | engine output |
 | Task to resume | The device knows the assignment: `resumeTask` is the task scheduled this minute, else the next scheduled task (the manual task under a manual assignment). It is passed in every policy where the engine runs, shadow included. | engine input |
-| Plan rate | Inside a plan task block, during its work and rest minutes, the device gets the block's rate as `plannedWorkMinPerHour`. | engine input |
-| Work/rest cycles | Start when `shade_breaks` is shown, with W floored to 5 min like the planner. Inside a plan block-hour the cycle follows the block-hour: no cut when the device allows at least the plan's rate, else floor(W × wall / 60) work minutes (`deviceCycleWorkMin`). Outside a plan: 60-min windows from the episode start. | [ENG] |
+| Plan rate and basis | Inside a plan task block, during its work and rest minutes, the device gets the rate of the worker's own layout as `plannedWorkMinPerHour`: the member's cap where the plan has one, else the block's rate. Under `zill_monitored` every device gets `planBasis` 'monitored' from its crew plan. | engine input |
+| Work/rest cycles | Start when `shade_breaks` is shown, with W floored to 5 min like the planner. W is the device's own number, which includes the WBGT table cycle only while `detail.environment.enforced` (monitored mode makes the tables a screen; the simulator keeps no copy of the table). W is read while the worker works, i.e. for the task; a cycle set at the task runs to the end of its window and is re-read when work resumes [ENG: hysteresis, because the resting assessment is for the rest activity, whose monitoring state can differ]. Inside a plan block-hour the cycle follows the block-hour: no cut when the device allows at least the plan's rate, else floor(W × wall / 60) work minutes (`deviceCycleWorkMin`). Outside a plan: 60-min windows from the episode start. | [ENG] |
 | Task not feasible now | The worker keeps resting, and the open stop alert asks for another task (`rotate_task`). A supervisor's reassignment to another task is not modelled; a different task is resumed only when the scenario has one (a later plan block with another task, or a scripted or UI task change). | [ASSUMPTION] |
 | Supervisor reassignment on STOP | Carried out with probability `supervisorFollowThrough`: default 1 (the v0.1 behaviour), swept at 0.5. One draw from the worker's own supervisor stream, made only when it matters (the worker is not already resting). If it is not carried out, the log records an instruction `stop_work` with followed = false. A first aider's in-person reassignment is always carried out. | [ASSUMPTION] |
 | Acknowledgement delays | Log-normal around the role median: worker 1 min, buddy 2, supervisor 3, first aider 2, occupational health 10 (σ_ln 0.6). | [ASSUMPTION] |
@@ -143,24 +156,49 @@ someone acts on it (`zill_env`, `zill_full`).
 
 - **Spontaneous drinking** (`truth.ts spontaneousDrinkRateMlPerH`, `DRINK_MODEL_BASIS`) [ASSUMPTION]: target =
   max(habitual floor, replacement fraction × recent sweat rate) × thirst gain × break factor.
-  - Habitual floor: 0.4 × the individual baseline (`habitualDrinkFraction`), about 180 mL/h at the median. That is the
-    IOM (2004) adequate beverage intake for men (about 3.0 L/day) spread over about 16 waking hours. It applies when the
-    worker is not sweating, for example in a cooled cabin.
+  - Habitual floor: `habitualDrinkFraction` × the individual baseline, **calibrated** to 0.87 in ground truth 1.2.0
+    (`truth.ts DRINK_CALIBRATION`; reproduced by `scripts/validate/drink-calibration.ts`). The anchor is the observed
+    mean intake of UAE construction workers over 12-h summer shifts, 5.44 L (Bates & Schneider 2008). The statistic is
+    the mean true intake per worker-shift in the midday-ban-only arm, never a Zill arm, on all 200 hot-tercile
+    site-days of June–September 2025 at the five sites (3 crews per site, 4,760 worker-shifts). Regula falsi on this one
+    parameter (0.4 → 4.01 L, 1.0 → 5.93 L, 0.846 → 5.36 L, 0.8675 → 5.44 L) gave 0.87, which achieves 5.45 L; every
+    other parameter is unchanged. Why the floor: the observed intake exceeds the model's own ban-only hot-shift water
+    loss (4.40 L), so sweat replacement within its literature range cannot reach it (80 % replacement gives 4.47 L,
+    100 % gives 5.02 L). The earlier floor of 0.4, an IOM daily adequate intake spread over waking hours, was not a
+    worksite observation. Caveat recorded in the code: simulated ban-only workers work about 6 h of the 12-h shift,
+    probably less than the observed workers, so matching the total intake likely over-states drinking. That lowers
+    dehydration in every arm and narrows the simulated dehydration benefit of Zill.
   - Replacement fraction, per worker, normal(0.6, 0.15): voluntary intake in the heat replaces only about 50–80 % of
     sweat loss (involuntary dehydration; Greenleaf 1992, Sawka et al. 2007; citations UNVERIFIED).
   - Thirst gain: +50 % per % of body mass above the thirst threshold. Break factor: × 2, in the first 15 min of a rest
     bout only [ENG].
-- **Reminders** (Zill policies only) follow the engine's own catch-up rule (`clinical.fluidStatus`: 250 mL when nothing
-  has been logged for 20 min; none above the hourly cap or while fasting). They are sent while the engine recommends
-  water and after hot work within the last 30 min [ENG]. A followed reminder *is* that minute's drink: it replaces the
-  spontaneous drink and never adds to it (v0.1 added it; VALIDATION-COHORT §3.8).
-- **Logging** [ASSUMPTION]: where the engine runs, every drink is logged as an intake. The engine credits the logs only
-  with the worker's check-in consent (ARCHITECTURE §5).
-- **Result.** Mean water drunk per worker-shift in the medium cohort: 3.9 L under the midday ban only and 5.5 L under
-  Zill with the wearable (VALIDATION-COHORT §3.1). Zill workers drink more because they follow reminders during
-  exposure, which is the intended effect.
-- **Known gap.** Reminders are tied to hot work. A worker who is idle or resting under a hot shade canopy gets none and
-  dehydrates slowly (LIMITATIONS S-08).
+- **Reminders** (Zill policies only, never shadow). The worker responds to the reminder the device shows
+  (`drinkReminderShown`: `detail.drink.reminder === 'drink'`), at work, at rest and idle; since worldsim 1.3.0 the
+  simulator keeps no copy of the rule. The device's rule (ARCHITECTURE §5): 250 mL when nothing has been logged for
+  20 min, none above the hourly cap or while the device knows of fasting, sent while the worker is heat-exposed (hot
+  work and the 30 min after it, or rest or idle outside a cooled area at an effective WBGT of 25.6 °C or more). A
+  followed reminder *is* that minute's drink: it replaces the spontaneous drink and never adds to it (v0.1 added it;
+  VALIDATION-COHORT §3.8). A reminder still on screen is followed at most once per 20 min
+  (`TRUTH_PARAMS.behaviour.reminderRefollowMin` [ASSUMPTION]). Without that rule, workers whose device does not clear
+  the reminder after a drink (no check-in consent, or an unlogged drink) drank 250 mL every minute during development
+  (27.7 L per shift in the Zill arms). The rule never binds for fully logged, consented workers, because their device
+  itself spaces reminders 20 min after the last logged drink.
+- **Logging fidelity** (`behaviour.drinkLogging = { loggedFraction, overReportFactor }`, worldsim 1.3.0)
+  [ASSUMPTION]. By default every drink is logged at its true volume (1 / 1). A drink is logged with probability
+  `loggedFraction`, drawn from the worker's own drink-log stream only when 0 < loggedFraction < 1 (so the default draws
+  nothing and chunked stepping gives the same result), and recorded as round(mL × `overReportFactor`). The true intake
+  never changes. The engine credits the logs only with the worker's check-in consent (ARCHITECTURE §5). The back-test
+  sweeps 50 % logged and × 1.5 over-reporting (§5).
+- **Result.** Mean water drunk per worker-shift in the medium cohort v0.3: 5.55 L under the midday ban only, 5.52 L under
+  the site TWL index, 7.95 L under Zill (with or without the wearable) and 7.63 L in monitored mode (VALIDATION-COHORT
+  §3.1). Zill workers drink more because they follow reminders whenever they are heat-exposed, including while idle in
+  hot shade.
+- **Open: over-drinking.** Zill workers drink 2.4 L more per shift than under the midday ban only while working about a
+  third as much. Reminders at rest or idle use the work rate (250 mL per 20 min, 0.75 L/h) while a worker resting in hot
+  shade sweats about 0.2–0.3 L/h, and without check-in consent the device never applies its hourly cap
+  (`clinical.hydrationChannel` computes the fluid status on no intakes). The ground truth does not penalise
+  over-drinking (no hyponatraemia model), so Zill's simulated dehydration benefit is likely overstated (LIMITATIONS
+  S-08, C-10).
 - **Check-ins.** Prompts come from the engine's `symptom_checkin` action, at least 15 min apart; an unanswered prompt
   closes after 15 min [ENG]. In-person checks report every active ground-truth symptom [ASSUMPTION]: the buddy 5 min
   after an unanswered prompt (`clinical.promptTimeout`), the first aider on arrival, and supervisor or first-aider
@@ -187,9 +225,10 @@ someone acts on it (`zill_env`, `zill_full`).
 - **Environment-feed failure.** At a site without a meter the device keeps its cached forecast, which ages; at a meter
   site the meter reading is dropped. A stale forecast (`disruptions.forecastAgeH`) ages the day-1 forecast (stale-data
   and +1 °C rules) without substituting day-2 or day-3 content.
-- **Shadow mode** feeds the engine only passively observed data: wearable minutes (`zill_full`), self-reports, buddy
-  reports and logged drinks. It issues no prompts, reminders, acknowledgements, reassignments or alert-driven
-  dispatches. In every mode that runs the engine, an evacuated worker's open alert is closed at the hand-over.
+- **Shadow mode** feeds the engine only passively observed data: wearable minutes (`zill_full`, `zill_monitored`),
+  self-reports, buddy reports and logged drinks. It issues no prompts, reminders, acknowledgements, reassignments or
+  alert-driven dispatches. A shadow device gets the plan basis of its policy. In every mode that runs the engine, an
+  evacuated worker's open alert is closed at the hand-over.
 
 ## 4. Policies compared (closed loop)
 
@@ -197,11 +236,15 @@ someone acts on it (`zill_env`, `zill_full`).
 |---|---|
 | `ban_only` | MoHRE midday break (outdoors in sun) + statutory breaks + self-pacing |
 | `site_index` | `ban_only` + the ADOSH TWL zone work/rest cycles applied crew-wide from the hourly site forecast, with the hourly dose rule and the exclusion of ADOSH-unacclimatised workers (good current practice; §3.1) |
-| `zill_env` | Zill without wearables: personal environment, projection and regulation channels, check-ins, the day plan with its ISO 7933 screen, buddy escalation |
+| `zill_env` | Zill without wearables: personal environment, projection and regulation channels, check-ins, the day plan with its ISO 7933 screen and per-member caps, buddy escalation |
 | `zill_full` | `zill_env` + the physiology channel for workers who consented and wear a band |
+| `zill_monitored` | `zill_full` on a site that opted in to the monitored plan basis (occupational-health sign-off; ARCHITECTURE §5 "Plan basis"): the day plan is made on the monitored basis and every device gets `WorkerContext.planBasis` from its crew plan. For an acclimatised worker with valid wearable monitoring and an applicable ISO 7933 model, the WBGT tables are a screen and the worker's own projection and physiological limits enforce; any lost condition falls back to the tables in the same step. Basis: ISO 7243:2017, ACGIH TLV decision flow, NIOSH 2016-106 |
 
 Shadow mode runs the engine on `ban_only` behaviour without acting on its alerts, to measure detection: sensitivity,
-positive predictive value, lead time, false alarms per worker-shift, and calibration of minutes-to-limit.
+positive predictive value, lead time, false alarms per worker-shift, and calibration of minutes-to-limit. There is a
+shadow arm for each Zill policy with an engine (`shadow_zill_env`, `shadow_zill_full`, `shadow_zill_monitored`; the
+monitored one runs in the base case only). Acting on alarms hides the events they predict, so only a run where nobody
+acts can test whether monitored mode still warns in time.
 - **Lead time** = event onset − first alarm, in minutes. A positive value means the alarm came first. Onsets are the
   ground-truth onsets (`onsetT`); an excessive-strain event is confirmed 10 min after its onset.
 - **Alarms are individual alarms**: alerts about this worker (`Alert.basis` individual, ARCHITECTURE §6), at high or
@@ -210,10 +253,14 @@ positive predictive value, lead time, false alarms per worker-shift, and calibra
 - **Exposure advisories** (site or crew conditions) are not alarms. They are counted separately: per worker-shift
   (worker-scope alerts only, so a crew alert is not counted twice) and per crew-shift (distinct exposure alerts at high
   or above notified to a supervisor).
+- **Designed suppression** (metrics 1.2.0). An alert version recorded under designed suppression (ARCHITECTURE §6) was
+  notified to nobody, so it is neither an alarm nor an exposure advisory, in every count including the all-alarm count.
+  Such alerts are counted as suppressed advisories per worker-shift. A lifted alert counts from the moment it is lifted.
+  Reports made before metrics 1.2.0 had no suppression, so their numbers read the same.
 - An alarm is confirmed when the worker's event onset lies within ±120 min of it [ENG]. The all-alarm count of metrics
   1.0.0 (every distinct alert at high or above covering the worker) is kept for comparison with v0.1.
 
-## 5. Outputs and sensitivity analysis (`sim/backtest.ts` 1.1.0, `sim/metrics.ts` 1.1.0)
+## 5. Outputs and sensitivity analysis (`sim/backtest.ts` 1.3.0, `sim/metrics.ts` 1.2.0)
 
 - **Per 1,000 worker-shifts**, per policy: worker-shifts with at least one excessive, severe or critical event, a
   dehydration event or a first-aid evacuation (raw event counts are kept too); heat-symptom episodes per 1,000 (the heat
@@ -221,15 +268,21 @@ positive predictive value, lead time, false alarms per worker-shift, and calibra
 - **Means per worker-shift**, not per 1,000: work minutes delivered, protective rest minutes, idle minutes (no task
   assigned; work + rest + idle = shift) and water drunk.
 - **Challenge measures**, computed by the same pure functions that a pilot would run on real logs: event lead time
-  (PILOT.md §5.4 (a), on individual alarms), individual alarms and exposure advisories per shift, alert burden by basis
-  and recipient, adherence (instructions followed ÷ instructions shown), check-in response, acknowledgements, symptom
-  reports, escalations, regulatory compliance (midday break, ADOSH zone controls), and lost work time against
-  `ban_only`.
+  (PILOT.md §5.4 (a), on individual alarms), individual alarms and exposure advisories per shift, suppressed
+  advisories per shift, alert burden by basis and recipient, supervisor acknowledgements per worker-shift, adherence
+  (instructions followed ÷ instructions shown), check-in response, acknowledgements, symptom reports, escalations
+  (alerts escalated by an acknowledgement timer), regulatory compliance (midday break, ADOSH zone controls), and lost
+  work time (shift minutes lost after first-aid evacuations per 1,000 worker-hours, protective rest minutes, and work
+  minutes against `ban_only`).
 - **Sensitivity sweeps**, with values fixed in `cohortVariants()` before any run: compliance 0.5 / 0.9 (base 0.7);
   self-report probability × 0.5 / × 1.5; metabolic multiplier spread σ_ln 0.10 / 0.25 (base 0.15); symptom hazard
   × 0.5 / × 2; PPG noise × 2; supervisor follow-through 0.5 (base 1; added in back-test 1.1.0, before it was run).
   Since world simulation 1.1.0 forwards ground-truth parameter overrides, the metabolic-spread and symptom-hazard sweeps
-  run; in v0.1 they were reported as not run.
+  run; in v0.1 they were reported as not run. Back-test 1.2.0 added two brackets of the calibrated drinking floor
+  (`habitualDrinkFraction` 1.0, the v0.1 floor, and 0.4, the v0.2 floor; closed-loop arms) and two drink-logging
+  fidelity variants (50 % of drinks logged, and volumes over-reported × 1.5; the midday ban only and the Zill arms).
+  Every variant also reports the base case's difference against the midday ban only on its own site-days
+  (`baseVsBanOnly`), so a variant's dehydration and heat-symptom deltas can be read next to the base case.
 - **Robustness**: wearable dropout 20 / 50 / 100 %, environment sensor or feed failure for the whole shift, stale
   forecast (30 h old), network outage 10:00–16:00 (worker devices continue locally; supervisor-mediated actions are
   delayed).
@@ -248,10 +301,11 @@ positive predictive value, lead time, false alarms per worker-shift, and calibra
 - Behavioural parameters (compliance, self-report, supervisor follow-through) are assumptions; the sensitivity sweeps
   show how much the conclusions depend on them.
 - Some behaviour that matters is simplified: supervisors do not reassign a worker whose task is not feasible now
-  (§3.2), and drink reminders are tied to hot work (§3.3).
-- The schedule model shapes the comparison: generated crews have a fixed job shorter than the shift, and the baselines
-  can work the coolest hour (05:00–06:00) while the plan respects the 06:00 task windows (§3.1).
+  (§3.2), and nothing in the ground truth penalises drinking too much (§3.3).
+- The schedule model shapes the comparison: generated crews have a fixed job shorter than the shift, and every arm
+  works only inside the task windows (§3.1). The windows changed the baseline definition in v0.3.
 - The ground truth's drinking model drives the comparator's dehydration. The corrected model of v0.2 raised dehydration
-  under the midday ban alone from 51 to 282 per 1,000 worker-shifts, so Zill's difference against the ban on
-  dehydration and heat-symptom measures cannot be compared with v0.1 (VALIDATION-COHORT §3.8).
+  under the midday ban alone from 51 to 282 per 1,000 worker-shifts; the floor calibrated to the observed intake in v0.3
+  lowered it to 96. Zill's difference against the ban on dehydration and heat-symptom measures therefore cannot be
+  compared across versions (VALIDATION-COHORT §3.8, §3.9), and the drinking-floor variants bracket it (§5).
 - Gagge's two-node model is itself a simplification; agreement between two models is not validation against people.
