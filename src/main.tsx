@@ -4,6 +4,8 @@ import './index.css'
 import { App } from './ui/App'
 import { VIEW_COMPONENTS } from './ui/views'
 import { bootstrap } from './ui/bootstrap'
+import { SimClockBar } from './ui/shell/SimClockBar'
+import { UpdatePrompt } from './ui/shell/UpdatePrompt'
 
 const root = document.getElementById('root')
 if (!root) throw new Error('Root element #root not found')
@@ -15,6 +17,7 @@ bootstrap().catch((err: unknown) => {
 
 createRoot(root).render(
   <StrictMode>
-    <App views={VIEW_COMPONENTS} />
+    <App views={VIEW_COMPONENTS} status={(route) => <SimClockBar route={route} />} />
+    <UpdatePrompt />
   </StrictMode>,
 )

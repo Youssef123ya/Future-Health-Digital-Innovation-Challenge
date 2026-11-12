@@ -62,6 +62,15 @@ function onDeviceRoute(): boolean {
 }
 
 let started = false
+let clockFollows: boolean | null = null
+
+/**
+ * True when this tab follows another tab's simulated clock (a phone tab by default, or `clock=follow`), so the shell
+ * can say so next to its clock controls; false when it leads; null before start-up.
+ */
+export function clockFollowsOtherTab(): boolean | null {
+  return clockFollows
+}
 
 /**
  * Wires the stores and loads the scenario named in the URL. Idempotent (a second call is a no-op, e.g. under React
@@ -82,6 +91,7 @@ export async function bootstrap(): Promise<void> {
   if (opts.lang && isLangCode(opts.lang)) uiStore.getState().setLanguage(opts.lang)
 
   const follow = opts.clock ? opts.clock === 'follow' : onDeviceRoute()
+  clockFollows = follow
   connectAppState({ isDevice: onDeviceRoute, shareClock: !follow, followClock: follow })
 
   if (import.meta.env.DEV) {

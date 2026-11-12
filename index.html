@@ -5,11 +5,34 @@
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0b1220" />
-    <meta name="description" content="Zill — worker-first heat-strain early warning for outdoor and industrial workers in Abu Dhabi." />
+    <meta
+      name="description"
+      content="Zill (ظل, 'shade') — worker-first heat-strain early warning for outdoor and industrial workers in Abu Dhabi. Personal heat limits on the worker's own phone, crew planning for supervisors, aggregates only for HSE and regulators. Prototype for the Future Health Digital Innovation Challenge; not a medical device."
+    />
+    <meta property="og:title" content="Zill · Heat-strain early warning" />
+    <meta
+      property="og:description"
+      content="Worker-first heat-strain early warning for Abu Dhabi worksites: one level and one action on the worker's phone, privacy by architecture, every number traced to a standard."
+    />
+    <meta property="og:type" content="website" />
+    <!-- Script fonts for the worker languages (Arabic, Urdu, Hindi and Nepali, Bengali, Malayalam). The Latin UI uses the
+         system font stack; unicode-range subsets mean only the scripts on screen are downloaded. Cached CacheFirst by the
+         service worker (vite.config.ts) so the phone UI keeps its fonts offline. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;600&family=Noto+Sans+Arabic:wght@400;500;600;700&family=Noto+Sans+Bengali:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&family=Noto+Sans+Malayalam:wght@400;500;600;700&display=swap"
+    />
     <title>Zill · Heat-strain early warning</title>
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <p style="font-family: system-ui, sans-serif; padding: 1rem">
+        Zill needs JavaScript: the heat-strain engine runs on this device. Emergency: call 998 — cool first, transport second.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

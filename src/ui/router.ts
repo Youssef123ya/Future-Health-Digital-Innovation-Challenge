@@ -15,8 +15,17 @@ import {
   type Ref,
 } from 'react'
 
-/** Identifier of each application view (ARCHITECTURE.md §9). */
-export type ViewId = 'overview' | 'supervisor' | 'worker' | 'medic' | 'regulator' | 'governance' | 'lab' | 'evidence'
+/** Identifier of each application view (ARCHITECTURE.md §9, plus the presenter's split-screen demo). */
+export type ViewId =
+  | 'demo'
+  | 'overview'
+  | 'supervisor'
+  | 'worker'
+  | 'medic'
+  | 'regulator'
+  | 'governance'
+  | 'lab'
+  | 'evidence'
 
 /** A resolved route: one of the views, or `not_found` for a path that matches no view. */
 export type RouteId = ViewId | 'not_found'
@@ -32,10 +41,13 @@ export interface ViewMeta {
   title: string
   /** One-sentence purpose, transcribed from ARCHITECTURE.md §9. */
   purpose: string
+  /** Who the view is for (ARCHITECTURE.md §2 actor table), shown by the role-aware view switcher. */
+  audience: string
 }
 
 /** Path parameters required by each view; `undefined` for views without parameters. */
 export interface RouteParamsMap {
+  demo: undefined
   overview: undefined
   supervisor: undefined
   worker: { id: string }
@@ -67,12 +79,22 @@ export interface Route {
  * {@link ViewId} is described exactly once.
  */
 export const VIEW_META: Readonly<Record<ViewId, ViewMeta>> = {
+  demo: {
+    id: 'demo',
+    pattern: '/demo',
+    label: 'Live demo',
+    title: 'Live demo',
+    purpose:
+      'A crew supervisor console and a worker phone side by side on one simulated clock, with the scenario script and what to watch for.',
+    audience: 'Presenters and reviewers',
+  },
   overview: {
     id: 'overview',
     pattern: '/',
     label: 'Overview',
     title: 'Overview',
     purpose: 'The problem, how Zill works, and the live or replay status of the five Abu Dhabi sites.',
+    audience: 'Everyone',
   },
   supervisor: {
     id: 'supervisor',
@@ -81,6 +103,7 @@ export const VIEW_META: Readonly<Record<ViewId, ViewMeta>> = {
     title: 'Supervisor console',
     purpose:
       'Crew board, site forecast strip, alert feed with acknowledgements, break and rotation planner, water logistics, and sensor and network health.',
+    audience: 'Crew supervisors · tablet or phone',
   },
   worker: {
     id: 'worker',
@@ -89,6 +112,7 @@ export const VIEW_META: Readonly<Record<ViewId, ViewMeta>> = {
     title: 'Worker phone',
     purpose:
       'Language, level card (pictogram, colour, text and voice), countdown, hydration, check-in, SOS, buddy and privacy.',
+    audience: 'Workers · their own phone',
   },
   medic: {
     id: 'medic',
@@ -96,6 +120,7 @@ export const VIEW_META: Readonly<Record<ViewId, ViewMeta>> = {
     label: 'Medic',
     title: 'First aid and occupational health',
     purpose: 'Escalations, consented clinical trends, first-aid protocol and incident log.',
+    audience: 'First aiders and occupational health',
   },
   regulator: {
     id: 'regulator',
@@ -103,6 +128,7 @@ export const VIEW_META: Readonly<Record<ViewId, ViewMeta>> = {
     label: 'Regulator',
     title: 'Regulator console',
     purpose: 'Multi-site aggregates with k-suppression, hours in each heat zone, and compliance.',
+    audience: 'HSE managers and regulators · aggregates only',
   },
   governance: {
     id: 'governance',
@@ -111,6 +137,7 @@ export const VIEW_META: Readonly<Record<ViewId, ViewMeta>> = {
     title: 'Governance centre',
     purpose:
       'Consent ledger, role × purpose matrix, audit-chain verifier, data-flow inspector and prohibited-purpose demo.',
+    audience: 'Workers, data protection and auditors',
   },
   lab: {
     id: 'lab',
@@ -118,6 +145,7 @@ export const VIEW_META: Readonly<Record<ViewId, ViewMeta>> = {
     label: 'Lab',
     title: 'Simulation lab',
     purpose: 'Scenario controls and live truth-versus-estimate charts.',
+    audience: 'Engineers and reviewers · simulated ground truth',
   },
   evidence: {
     id: 'evidence',
@@ -125,11 +153,13 @@ export const VIEW_META: Readonly<Record<ViewId, ViewMeta>> = {
     label: 'Evidence',
     title: 'Evidence',
     purpose: 'Validation results with data provenance.',
+    audience: 'Reviewers · validation with provenance',
   },
 }
 
-/** Views in navigation order (ARCHITECTURE.md §9 order). */
+/** Views in navigation order: the live demo first, then ARCHITECTURE.md §9 order. */
 export const VIEW_ORDER: readonly ViewId[] = [
+  'demo',
   'overview',
   'supervisor',
   'worker',

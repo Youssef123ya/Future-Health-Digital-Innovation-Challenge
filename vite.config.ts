@@ -10,7 +10,10 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt': src/ui/shell/UpdatePrompt.tsx (virtual:pwa-register/react) applies a new build at once on a fresh page
+      // load and otherwise offers a reload toast, so a stale cached build is never left on screen. 'auto' injects no
+      // register script because the virtual module is imported.
+      registerType: 'prompt',
       injectRegister: 'auto',
       includeAssets: ['favicon.svg', 'icons/*.png'],
       manifest: {
@@ -34,7 +37,28 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}', 'data/weather/demo-days.json', 'data/validation/*.json'],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         navigateFallback: 'index.html',
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
         runtimeCaching: [
+          // Script fonts for the worker languages (index.html): the stylesheet and the font files are immutable per URL.
+          {
+            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'zill-google-fonts-css',
+              expiration: { maxEntries: 10, maxAgeSeconds: 365 * 24 * 3600 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'zill-google-fonts-files',
+              expiration: { maxEntries: 60, maxAgeSeconds: 365 * 24 * 3600 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
           {
             urlPattern: /\/data\/weather\/.*\.json$/,
             handler: 'CacheFirst',
