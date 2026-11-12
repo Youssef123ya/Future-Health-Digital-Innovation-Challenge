@@ -8,7 +8,7 @@
  * One DOM for every width: a horizontal strip (scrolls sideways) above the panes, a vertical rail from 2xl.
  */
 import { useMemo } from 'react'
-import { CircleCheck, Clock, Eye, Megaphone, RotateCcw, ScrollText, ShieldCheck, Smartphone } from 'lucide-react'
+import { CircleCheck, Clock, Eye, Megaphone, MonitorPlay, RotateCcw, ScrollText, ShieldCheck, Smartphone } from 'lucide-react'
 import { simStore, uiStore } from '../../../state'
 import { useSim, useUi } from '../../../state/hooks'
 import { getScenario, hasDemoCrew, type Scenario } from '../../../sim/scenarios'
@@ -17,6 +17,7 @@ import { formatLocalHhmm } from '../../../engine/time'
 import { Badge, cx } from '../../components'
 import { currentPolicy, isPlanBasisPolicy, loadScenarioAt } from '../../shell/scenario'
 import { formatScenarioDate } from '../../shell/time'
+import { startTour } from '../../tour/tourStore'
 import { DEMO_START_TIMES, jumpTargetFor, narrationItems, narrationStates, type NarrationItem, type NarrationState } from './narration'
 
 /** The demo crew's personas (static, hand-written in data/workforce.ts). */
@@ -188,10 +189,20 @@ export function NarrationRail({ className }: { className?: string }) {
               Replay of real weather · {formatScenarioDate(scenario.date)} · simulated workforce
             </p>
           </div>
-          <button type="button" onClick={restart} disabled={busy} className={SMALL_BUTTON}>
-            <RotateCcw aria-hidden size={13} />
-            Restart at {start}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => startTour(0)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-shade px-3 text-xs font-semibold text-white shadow-xs hover:bg-shade-dark"
+            >
+              <MonitorPlay aria-hidden size={14} />
+              Guided 2-minute tour
+            </button>
+            <button type="button" onClick={restart} disabled={busy} className={SMALL_BUTTON}>
+              <RotateCcw aria-hidden size={13} />
+              Restart at {start}
+            </button>
+          </div>
         </div>
         <p className="mt-2 text-sm leading-relaxed text-muted">{scenario.description}</p>
         {items.length === 0 ? null : (

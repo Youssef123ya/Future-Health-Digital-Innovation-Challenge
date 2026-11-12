@@ -11,6 +11,7 @@
  * rail; from 2xl the rail becomes a third column.
  */
 import { useMemo } from 'react'
+import { useStore } from 'zustand'
 import { ExternalLink, HardHat, Smartphone } from 'lucide-react'
 import { uiStore } from '../../../state'
 import { useSim, useUi } from '../../../state/hooks'
@@ -22,6 +23,7 @@ import { SupervisorView } from '../supervisor/SupervisorView'
 import { WorkerView } from '../worker/WorkerView'
 import { NarrationRail } from './NarrationRail'
 import { buildDemoCrew } from '../../../data/workforce'
+import { tourStore } from '../../tour/tourStore'
 
 const PERSONA_TITLES: ReadonlyMap<string, string> = new Map(buildDemoCrew().personas.map((p) => [p.workerId, p.title]))
 
@@ -80,12 +82,14 @@ export function DemoView({ route }: ViewProps) {
   const supervisorRoute = useMemo(() => embeddedRoute('supervisor', route.query), [route.query])
   const workerRoute = useMemo(() => embeddedRoute('worker', route.query, deviceWorkerId ?? undefined), [route.query, deviceWorkerId])
   const shareQuery = scenarioId ? { scenario: scenarioId } : undefined
+  // During the guided tour the script rail steps aside so the console and the phone are both on screen.
+  const touring = useStore(tourStore, (s) => s.active)
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] 2xl:grid-cols-[20rem_minmax(0,1fr)_auto]">
+    <div className={cx('grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto]', !touring && '2xl:grid-cols-[20rem_minmax(0,1fr)_auto]')}>
       <h1 className="sr-only">Live demo: supervisor console and worker phone</h1>
 
-      <NarrationRail className="xl:col-span-2 2xl:col-span-1 2xl:max-h-[calc(100dvh-9rem)] 2xl:overflow-y-auto 2xl:pe-1" />
+      {!touring && <NarrationRail className="xl:col-span-2 2xl:col-span-1 2xl:max-h-[calc(100dvh-9rem)] 2xl:overflow-y-auto 2xl:pe-1" />}
 
       <section
         aria-labelledby="demo-console-title"
@@ -107,7 +111,7 @@ export function DemoView({ route }: ViewProps) {
         </div>
       </section>
 
-      <section aria-labelledby="demo-phone-title" className="order-2 flex min-w-0 flex-col items-center gap-3 xl:order-none">
+      <section aria-labelledby="demo-phone-title" data-tour="demo-phone" className="order-2 flex min-w-0 flex-col items-center gap-3 xl:order-none">
         <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-line bg-surface px-3 py-2 xl:w-[414px]">
           <Smartphone aria-hidden size={18} className="text-shade" />
           <h2 id="demo-phone-title" className="text-sm font-semibold text-ink">

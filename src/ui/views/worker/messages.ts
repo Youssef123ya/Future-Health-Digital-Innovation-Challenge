@@ -133,6 +133,7 @@ const EN = {
   battery_note: 'Fewer screen updates. Warnings still sound and vibrate.',
   no_voice: 'This phone has no voice for this language.',
   settings: 'Settings',
+  phone_menu: 'Phone menu',
 } as const
 
 /** A worker-app message key. */
@@ -257,6 +258,7 @@ const AR: WorkerCatalog = {
   battery_note: 'تحديثات أقل للشاشة. تبقى التحذيرات بالصوت والاهتزاز.',
   no_voice: 'لا يوجد صوت لهذه اللغة على هذا الهاتف.',
   settings: 'الإعدادات',
+  phone_menu: 'قائمة الهاتف',
 }
 
 const UR: WorkerCatalog = {
@@ -377,6 +379,7 @@ const UR: WorkerCatalog = {
   battery_note: 'اسکرین کم اپ ڈیٹ ہوگی۔ انتباہ پھر بھی آواز اور تھرتھراہٹ کے ساتھ آئیں گے۔',
   no_voice: 'اس فون پر اس زبان کی آواز نہیں ہے۔',
   settings: 'ترتیبات',
+  phone_menu: 'فون مینو',
 }
 
 const HI: WorkerCatalog = {
@@ -497,6 +500,7 @@ const HI: WorkerCatalog = {
   battery_note: 'स्क्रीन कम अपडेट होगी। चेतावनियाँ फिर भी आवाज़ और कंपन के साथ आएँगी।',
   no_voice: 'इस फ़ोन पर इस भाषा की आवाज़ नहीं है।',
   settings: 'सेटिंग्स',
+  phone_menu: 'फ़ोन मेनू',
 }
 
 const NE: WorkerCatalog = {
@@ -617,6 +621,7 @@ const NE: WorkerCatalog = {
   battery_note: 'स्क्रिन कम अपडेट हुन्छ। चेतावनी अझै आवाज र कम्पनसहित आउँछन्।',
   no_voice: 'यो फोनमा यो भाषाको आवाज छैन।',
   settings: 'सेटिङ',
+  phone_menu: 'फोन मेनु',
 }
 
 const BN: WorkerCatalog = {
@@ -737,6 +742,7 @@ const BN: WorkerCatalog = {
   battery_note: 'স্ক্রিন কম আপডেট হবে। সতর্কবার্তা তবুও শব্দ ও কম্পনসহ আসবে।',
   no_voice: 'এই ফোনে এই ভাষার কণ্ঠ নেই।',
   settings: 'সেটিংস',
+  phone_menu: 'ফোন মেনু',
 }
 
 const ML: WorkerCatalog = {
@@ -857,6 +863,7 @@ const ML: WorkerCatalog = {
   battery_note: 'സ്ക്രീൻ കുറച്ച് മാത്രം പുതുക്കും. മുന്നറിയിപ്പുകൾ ശബ്ദത്തോടെയും വിറയലോടെയും വരും.',
   no_voice: 'ഈ ഫോണിൽ ഈ ഭാഷയ്ക്കുള്ള ശബ്ദമില്ല.',
   settings: 'ക്രമീകരണങ്ങൾ',
+  phone_menu: 'ഫോൺ മെനു',
 }
 
 const TL: WorkerCatalog = {
@@ -977,6 +984,7 @@ const TL: WorkerCatalog = {
   battery_note: 'Mas kaunting update sa screen. May tunog at vibration pa rin ang mga babala.',
   no_voice: 'Walang boses para sa wikang ito sa teleponong ito.',
   settings: 'Settings',
+  phone_menu: 'Menu ng telepono',
 }
 
 /** Worker-app catalogs by language (English is the source; every other language is a draft translation). */

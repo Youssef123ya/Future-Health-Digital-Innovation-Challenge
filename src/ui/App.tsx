@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { Fragment, Suspense, useEffect, useId, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import {
   BookOpenCheck,
   FlaskConical,
@@ -18,6 +18,7 @@ import { DEFAULT_WORKER_ID, VIEWS, VIEW_META, pathFor, toHref, useRoute, type Ro
 import { EmptyState, PhoneFrame, Tooltip, ZillMark, buttonClasses, cx } from './components'
 import { Placeholder } from './views/Placeholder'
 import { SiteFooter } from './shell/SiteFooter'
+import { ViewBoundary, ViewSkeleton } from './shell/ViewBoundary'
 
 /** Props every routed view receives. */
 export interface ViewProps {
@@ -35,6 +36,10 @@ export interface AppProps {
   status?: ReactNode | ((route: Route) => ReactNode)
   /** Worker opened by the "Worker" navigation item when no worker route is active. */
   defaultWorkerId?: string
+  /** Rendered beside the worker phone frame from lg up (the presenter's list of demo phones). */
+  workerAside?: (route: Route) => ReactNode
+  /** Called when a navigation entry is hovered or focused, so the screen's code can start downloading. */
+  prefetch?: (id: ViewId) => void
 }
 
 const VIEW_ICONS: Readonly<Record<ViewId, LucideIcon>> = {
@@ -87,7 +92,7 @@ function NotFound({ path }: { path: string }) {
  * menu). Below the lg breakpoint the switcher collapses into a menu with 48 px rows. The worker route renders full-bleed
  * on phones and inside a PhoneFrame from md up; the demo route uses presentation width.
  */
-export function App({ views = {}, status, defaultWorkerId = DEFAULT_WORKER_ID }: AppProps) {
+export function App({ views = {}, status, defaultWorkerId = DEFAULT_WORKER_ID, workerAside, prefetch }: AppProps) {
   const route = useRoute()
   const menuId = useId()
   const mainRef = useRef<HTMLElement>(null)
@@ -137,7 +142,15 @@ export function App({ views = {}, status, defaultWorkerId = DEFAULT_WORKER_ID }:
 
   let content: ReactNode
   if (route.id === 'not_found' || !meta) content = <NotFound path={route.path} />
-  else if (View) content = <View route={route} />
+  else if (View)
+    content = (
+      // One boundary per screen, reset on navigation: a crash in one screen never blanks the app.
+      <ViewBoundary key={route.id} title={meta.title}>
+        <Suspense fallback={<ViewSkeleton title={meta.title} variant={route.id === 'worker' ? 'phone' : 'page'} />}>
+          <View route={route} />
+        </Suspense>
+      </ViewBoundary>
+    )
   else
     content = (
       <Placeholder
@@ -202,6 +215,8 @@ export function App({ views = {}, status, defaultWorkerId = DEFAULT_WORKER_ID }:
                         <a
                           href={hrefFor(v.id, workerId)}
                           aria-current={current ? 'page' : undefined}
+                          onPointerEnter={() => prefetch?.(v.id)}
+                          onFocus={() => prefetch?.(v.id)}
                           className={cx(
                             'inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-medium whitespace-nowrap transition-colors focus-visible:outline-shade-light xl:px-2.5',
                             current
@@ -248,6 +263,7 @@ export function App({ views = {}, status, defaultWorkerId = DEFAULT_WORKER_ID }:
                       href={hrefFor(v.id, workerId)}
                       aria-current={current ? 'page' : undefined}
                       onClick={() => setMenuOpenAt(null)}
+                      onFocus={() => prefetch?.(v.id)}
                       className={cx(
                         'flex min-h-12 items-center gap-3 rounded-lg px-3 py-1.5 text-base font-medium focus-visible:outline-shade-light',
                         current ? 'bg-white/10 text-white' : 'text-white/80 hover:bg-white/5 hover:text-white',
@@ -288,9 +304,12 @@ export function App({ views = {}, status, defaultWorkerId = DEFAULT_WORKER_ID }:
         )}
       >
         {isWorker ? (
-          <PhoneFrame label="Worker phone screen" caption={`Worker phone view · ${workerId} · simulated device`}>
-            <div className="zill-phone contents">{content}</div>
-          </PhoneFrame>
+          <div className="md:flex md:items-start md:justify-center md:gap-8">
+            <PhoneFrame label="Worker phone screen" caption={`Worker phone view · ${workerId} · simulated device`}>
+              <div className="zill-phone contents">{content}</div>
+            </PhoneFrame>
+            {workerAside?.(route)}
+          </div>
         ) : (
           content
         )}

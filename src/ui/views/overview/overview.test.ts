@@ -56,7 +56,7 @@ const series = (firstT: number, obtainedAt?: number): WeatherSeries => ({
   model: 'ecmwf_ifs',
   grid: null,
   obtainedAt,
-  samples: [{ t: firstT, taC: 30, tdC: 20, pHpa: 1005, wind10Ms: 3, ghiWm2: 0, source: 'forecast' }],
+  samples: [{ t: firstT, taC: 30, rhPct: 55, tdC: 20, pHpa: 1005, wind10Ms: 3, ghiWm2: 0, source: 'forecast' }],
   droppedHours: 0,
 })
 

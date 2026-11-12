@@ -12,6 +12,7 @@ import type { EctempBand } from '../../../engine/physio'
 import { FLUID, SYMPTOM_RULES } from '../../../engine/clinical'
 import { MINUTE_MS, startOfLocalDay } from '../../../engine/time'
 import type { ActionParams } from '../../../i18n'
+import type { WorkerDeviceModel } from '../../../state'
 import type { WorkerMessageKey } from './messages'
 
 /** A channel holding the worker at rest until its resume check passes. */
@@ -433,4 +434,32 @@ export function purposeKey(p: Purpose): WorkerMessageKey {
 /** Display order of the levels that make a level card urgent (saturated card, assertive announcement). */
 export function isUrgent(level: RiskLevel): boolean {
   return level === 'stop' || level === 'emergency'
+}
+
+// ─────────────────────────────── Battery saver ───────────────────────────────
+
+const CONSENT_KEYS = ['wearable', 'healthFlags', 'checkins', 'shareWithMedicOnEscalation', 'aggregateStatistics'] as const
+
+/** Battery saver redraw interval in simulated minutes; a level, alert or logged-record change redraws at once. [ENG] */
+export const BATTERY_SAVER_REDRAW_MIN = 15
+
+/**
+ * Battery saver: keep showing the last drawn model until something the worker must see changes (level, alert,
+ * acknowledgement, a logged drink or check-in) or the redraw interval passes. Warnings are never delayed.
+ */
+export function saverKeepsPrevious(prev: WorkerDeviceModel | null, next: WorkerDeviceModel | null): boolean {
+  if (!prev || !next || prev.workerId !== next.workerId) return false
+  return (
+    prev.assessment?.level === next.assessment?.level &&
+    prev.alert?.id === next.alert?.id &&
+    prev.alert?.status === next.alert?.status &&
+    prev.ackStatus === next.ackStatus &&
+    prev.device.checkins.length === next.device.checkins.length &&
+    prev.device.intakes.length === next.device.intakes.length &&
+    CONSENT_KEYS.every((k) => prev.profile.consent[k] === next.profile.consent[k]) &&
+    prev.checkinDue === next.checkinDue &&
+    prev.site.network === next.site.network &&
+    next.t >= prev.t &&
+    next.t - prev.t < BATTERY_SAVER_REDRAW_MIN * MINUTE_MS
+  )
 }

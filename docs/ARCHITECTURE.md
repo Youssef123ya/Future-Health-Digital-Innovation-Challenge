@@ -522,6 +522,25 @@ renders.
 | `#/governance` | Consent ledger, role × purpose matrix, audit chain verifier, data-flow inspector, prohibited-purpose demo |
 | `#/lab` | Scenario controls and live truth-vs-estimate charts |
 | `#/evidence` | Validation results with data provenance |
+| `#/demo` | Presenter's split view: the supervisor console and one worker's phone on one clock, with the scenario script |
+
+**Worker phone composition** (`ui/views/worker/`). `WorkerView` reads only `useWorkerDevice` (the worker's own device
+model) and the buddy projection inside it; every user action is an injection on the simulated clock (drink, check-in,
+acknowledgement, SOS). Tabs: Home (level card, timer, water, check-in and buddy entry points), Buddy (partners through
+`privacy.ts` BUDDY_VIEW only) and Privacy (the exact outbound payload from `inspectSyncPayload`, consent toggles with
+receipts, "who saw my data" from the audit chain, the general notice). The check-in shows the device's own
+`clinical.ts triage` result at once and hands the check-in to the device, which raises the level and alerts in the same
+minute. The phone keeps its own language and battery-saver choice (`phonePrefs.ts`, never synced): the worker's choice,
+else `?lang=`, else the profile language.
+
+**Guided demo** (`ui/tour/`). A 9-step, about-two-minute script over the peak-day replay (`tourSteps.ts`), one step per
+Challenge 07 criterion: it opens the screen, sets the clock and the demo phone, spotlights one element and auto-advances
+(pause, back, next; Esc closes). It is mounted outside the routed views so it survives navigation, borrows the phone and
+the clock, and gives them back when it stops. `#/demo?tour=1` starts it.
+
+**Resilience.** Every screen except the Overview is a lazily loaded chunk (`ui/views/index.ts`, prefetched on navigation
+hover or focus) behind its own error boundary (`ui/shell/ViewBoundary.tsx`): a crash shows a card with "Reload this
+view", and a failed chunk download (offline first visit, stale build) offers a full reload.
 
 ## 10. Sync between devices and consoles (`state/syncBus.ts`)
 

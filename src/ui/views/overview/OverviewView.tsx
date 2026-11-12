@@ -4,7 +4,7 @@
  * each demo scenario in the live demo. Plain English (console copy); every figure names its source.
  */
 import { useRef } from 'react'
-import { ArrowRight, BookOpenCheck, CirclePlay, Play, Smartphone } from 'lucide-react'
+import { ArrowRight, BookOpenCheck, CirclePlay, MonitorPlay, Play, Smartphone } from 'lucide-react'
 import { useSim } from '../../../state/hooks'
 import { SCENARIOS, type Scenario } from '../../../sim/scenarios'
 import { getSite } from '../../../data/sites'
@@ -14,6 +14,8 @@ import { pathFor, toHref } from '../../router'
 import { startScenarioDemo } from '../../shell/scenario'
 import { formatScenarioDate } from '../../shell/time'
 import { DEMO_START_TIMES } from '../demo/narration'
+import { startTour } from '../../tour/tourStore'
+import { tourSeconds } from '../../tour/tourSteps'
 import { EvidenceSection } from './EvidenceSection'
 import { HowItWorks } from './HowItWorks'
 import { LiveConditions } from './LiveConditions'
@@ -56,18 +58,26 @@ function Hero({ onEvidence }: { onEvidence: () => void }) {
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={() => startScenarioDemo('peak-day', { t: DEMO_START_TIMES['peak-day'] })}
+              onClick={() => startTour(0)}
               className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-white px-5 text-base font-semibold text-ink shadow-sm hover:bg-white/90 focus-visible:outline-shade-light"
             >
-              <CirclePlay aria-hidden size={20} className="text-shade" />
-              Watch the live demo
+              <MonitorPlay aria-hidden size={20} className="text-shade" />
+              Take the {Math.round(tourSeconds() / 60)}-minute guided demo
+            </button>
+            <button
+              type="button"
+              onClick={() => startScenarioDemo('peak-day', { t: DEMO_START_TIMES['peak-day'] })}
+              className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-white/10 px-4 text-base font-medium text-white hover:bg-white/15 focus-visible:outline-shade-light"
+            >
+              <CirclePlay aria-hidden size={18} />
+              Explore the live demo
             </button>
             <a
               href={toHref(pathFor('worker', { id: 'demo' }))}
-              className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-white/10 px-4 text-base font-medium text-white hover:bg-white/15 focus-visible:outline-shade-light"
+              className="inline-flex min-h-12 items-center gap-1.5 rounded-xl px-2 text-base font-medium text-white/85 underline decoration-white/30 underline-offset-4 hover:text-white focus-visible:outline-shade-light"
             >
-              <Smartphone aria-hidden size={18} />
-              Open a worker’s phone
+              <Smartphone aria-hidden size={16} />
+              A worker’s phone
             </a>
             <button
               type="button"
